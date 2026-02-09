@@ -1,4 +1,4 @@
-![Showcase video](examples/showcase.gif)
+![Showcase video](examples/shpwcase.gif)
 
 # Unofficial Control Library for FANUC Robots
 
