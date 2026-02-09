@@ -7,6 +7,7 @@ authors = ["Bowan Foryt <bowan@valstad.com>"]
 description = "Unofficial Control Library for FANUC Robots"
 repository = "https://github.com/valstad-shipworks/fanuc_ucl"
 keywords = ["python", "robotics", "fanuc"]
+exclude = ["examples/showcase.gif", "examples/showcase.mp4"]
 
 
 [lib]
