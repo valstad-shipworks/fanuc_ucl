@@ -2,8 +2,11 @@
 name = "fanuc_ucl"
 version = "1.0.0"
 edition = "2024"
+license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
 description = "Unofficial Control Library for FANUC Robots"
+repository = "https://github.com/valstad-shipworks/fanuc_ucl"
+keywords = ["python", "robotics", "fanuc"]
 
 
 [lib]
