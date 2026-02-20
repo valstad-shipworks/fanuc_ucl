@@ -11,6 +11,22 @@ A library implementing a variety of FANUC robot proprietary protocols such as:
 The library is implemented in rust with the ability to be used as a crate in rust or a python module via pyo3.
 Has been tested with Linux(x86_64 and arm64), Windows(x86_64) and MacOS(arm64) although it likely works on all architectures that windows and macos support.
 
+## Installation
+
+### Rust
+Add the following to your Cargo.toml:
+```toml
+[dependencies]
+fanuc_ucl = "0.1"
+```
+or run `cargo add fanuc_ucl` in your project directory.
+
+### Python
+The library is available on PyPI as `fanuc_ucl`, so you can install it using pip:
+```bash
+pip install fanuc_ucl
+```
+
 ## Usage
 
 Python and rust have nearly identical APIs.

@@ -1,0 +1,36 @@
+{
+    "name": "robot_assets",
+    "runArgs": [
+        "--platform=linux/amd64"
+    ],
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.debugpy",
+                "ms-python.python",
+                "ms-python.black-formatter",
+                "mhutchie.git-graph",
+                "fill-labs.dependi",
+                "tamasfe.even-better-toml",
+                "rust-lang.rust-analyzer"
+            ]
+        }
+    },
+    "postStartCommand": "sudo usermod -aG sudo vscode",
+    "postCreateCommand": "sudo chown -R vscode:vscode /workspace/fanuc_ucl",
+    "containerUser": "vscode",
+    "remoteUser": "vscode",
+    "privileged": true,
+    "updateRemoteUserUID": true,
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "username": "vscode"
+        },
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/rust:1.5.0": {}
+    }
+}

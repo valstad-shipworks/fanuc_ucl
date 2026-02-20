@@ -159,7 +159,7 @@ impl MotionCommandPacket {
     pub fn try_from_joints(
         format: JointFormat,
         template: JointTemplate,
-        joints: impl JointRepr
+        joints: impl JointRepr,
     ) -> Result<Self, StreamMotionError> {
         let joints = JointFormat::FanucDeg.convert_from(format, template, joints);
         let mut full_joints = [0.0; 9];
@@ -175,7 +175,6 @@ impl MotionCommandPacket {
                 return Err(StreamMotionError::InvalidJointCount(axis_cnt as u8));
             }
         };
-        
 
         Ok(Self {
             seq: 0,

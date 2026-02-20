@@ -56,7 +56,7 @@ fn kwargs_dict<'py>(py: Python<'py>, kwargs: Option<&Bound<'py, PyDict>>) -> Bou
 fn require_kwarg<'py, T>(kwargs: &Bound<'py, PyDict>, name: &str) -> PyResult<T>
 where
     for<'a> T: pyo3::FromPyObject<'a, 'py>,
-    for<'a> <T as pyo3::FromPyObject<'a, 'py>>::Error: Into<PyErr>
+    for<'a> <T as pyo3::FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
     kwargs
         .get_item(name)?
@@ -80,8 +80,12 @@ fn extract_range_kwarg<'py>(kwargs: &Bound<'py, PyDict>) -> PyResult<Option<(u16
     optional_kwarg::<(u16, u16)>(kwargs, "range")
 }
 
-
-fn make_asg_interface<T: AsgArgument>(driver: &mut HmiDriver, arg: T, count: usize, timeout: Duration) -> DriverResult<PyAsgVarInterface> {
+fn make_asg_interface<T: AsgArgument>(
+    driver: &mut HmiDriver,
+    arg: T,
+    count: usize,
+    timeout: Duration,
+) -> DriverResult<PyAsgVarInterface> {
     let mut entry = arg.to_asg_entry();
     tracing::trace!("Making ASG interface for entry: {}", entry);
     entry.size *= count as u16;
@@ -89,7 +93,8 @@ fn make_asg_interface<T: AsgArgument>(driver: &mut HmiDriver, arg: T, count: usi
         entry.address = 1;
         let entry_arc = Arc::new(entry);
         driver.send_asg_cmd(entry_arc.clone(), timeout)?;
-        driver.asg_entries
+        driver
+            .asg_entries
             .insert(entry_arc.var_name.clone(), entry_arc.clone());
         return Ok(PyAsgVarInterface::new(entry_arc, count, T::WRITABLE));
     }
@@ -106,7 +111,8 @@ fn make_asg_interface<T: AsgArgument>(driver: &mut HmiDriver, arg: T, count: usi
     entry.address = max_address;
     let entry_arc = Arc::new(entry);
     driver.send_asg_cmd(entry_arc.clone(), timeout)?;
-    driver.asg_entries
+    driver
+        .asg_entries
         .insert(entry_arc.var_name.clone(), entry_arc.clone());
     Ok(PyAsgVarInterface::new(entry_arc, count, T::WRITABLE))
 }
@@ -164,7 +170,6 @@ fn checked_extract_single<T: DataPort>(
 }
 
 const DEFAULT_ASG_TIMEOUT_SECS: f64 = 0.016; // 16ms
-
 
 #[pymethods]
 impl HmiDriver {
@@ -228,8 +233,8 @@ impl HmiDriver {
         }
         let tag = args.get_item(0)?;
         let kwargs = kwargs_dict(py, kwargs);
-        let timeout_secs = optional_kwarg::<f64>(&kwargs, "timeout_secs")?
-            .unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
+        let timeout_secs =
+            optional_kwarg::<f64>(&kwargs, "timeout_secs")?.unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
         let timeout = Duration::from_secs_f64(timeout_secs);
         if tag.is(py.get_type::<position_struct::PositionData>()) {
             let current = args.get_item(1)
@@ -330,8 +335,8 @@ impl HmiDriver {
         let kwargs = kwargs_dict(py, kwargs);
         let var_name = require_kwarg::<String>(&kwargs, "name")?;
         let range = extract_range_kwarg(&kwargs)?;
-        let timeout_secs = optional_kwarg::<f64>(&kwargs, "timeout_secs")?
-            .unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
+        let timeout_secs =
+            optional_kwarg::<f64>(&kwargs, "timeout_secs")?.unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
         let timeout = Duration::from_secs_f64(timeout_secs);
         if tag.is(py.get_type::<PyBool>()) {
             let arg = SysVarArgs::<bool> {
@@ -374,7 +379,6 @@ impl HmiDriver {
         ))
     }
 
-
     #[pyo3(name = "register_asg_array", signature = (*args, **kwargs))]
     pub fn register_asg_array_py<'py>(
         &mut self,
@@ -390,8 +394,8 @@ impl HmiDriver {
         let tag = args.get_item(0)?;
         let count = args.get_item(1)?.extract::<usize>()?;
         let kwargs = kwargs_dict(py, kwargs);
-        let timeout_secs = optional_kwarg::<f64>(&kwargs, "timeout_secs")?
-            .unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
+        let timeout_secs =
+            optional_kwarg::<f64>(&kwargs, "timeout_secs")?.unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
         let timeout = Duration::from_secs_f64(timeout_secs);
         if tag.is(py.get_type::<position_struct::PositionData>()) {
             let index = require_kwarg::<u16>(&kwargs, "index")?;
@@ -478,8 +482,8 @@ impl HmiDriver {
         let kwargs = kwargs_dict(py, kwargs);
         let var_name = require_kwarg::<String>(&kwargs, "name")?;
         let range = extract_range_kwarg(&kwargs)?;
-        let timeout_secs = optional_kwarg::<f64>(&kwargs, "timeout_secs")?
-            .unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
+        let timeout_secs =
+            optional_kwarg::<f64>(&kwargs, "timeout_secs")?.unwrap_or(DEFAULT_ASG_TIMEOUT_SECS);
         let timeout = Duration::from_secs_f64(timeout_secs);
         if tag.is(py.get_type::<PyBool>()) {
             let arg = SysVarArgs::<bool> {

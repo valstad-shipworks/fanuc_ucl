@@ -9,7 +9,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{joints::{JointFormat, JointTemplate}, thread_util::ThreadConfig};
+use crate::{
+    joints::{JointFormat, JointTemplate},
+    thread_util::ThreadConfig,
+};
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
@@ -25,7 +28,10 @@ static HSPO_SERVER: LazyLock<Mutex<Option<HspoBroker>>> = LazyLock::new(|| Mutex
 pub struct HspoBrokerNotInitializedError;
 impl std::fmt::Display for HspoBrokerNotInitializedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HSPO server not initialized. Please initialize the server before creating a driver.")
+        write!(
+            f,
+            "HSPO server not initialized. Please initialize the server before creating a driver."
+        )
     }
 }
 impl std::error::Error for HspoBrokerNotInitializedError {}
@@ -329,9 +335,7 @@ impl HspoReceiver {
 
     #[cfg(off)]
     pub fn wait_for_tcp_packet(&self, timeout: Duration) -> Option<TcpCartesianPositionPacket> {
-        self.tcp_rx
-            .recv_timeout(timeout)
-            .ok()
+        self.tcp_rx.recv_timeout(timeout).ok()
     }
 
     #[cfg(on)]
@@ -343,9 +347,7 @@ impl HspoReceiver {
 
     #[cfg(off)]
     pub fn wait_for_joint_packet(&self, timeout: Duration) -> Option<JointAnglesPacket> {
-        self.joint_rx
-            .recv_timeout(timeout)
-            .ok()
+        self.joint_rx.recv_timeout(timeout).ok()
     }
 
     #[cfg(on)]
@@ -357,9 +359,7 @@ impl HspoReceiver {
 
     #[cfg(off)]
     pub fn wait_for_var_packet(&self, timeout: Duration) -> Option<VariablesPacket> {
-        self.var_rx
-            .recv_timeout(timeout)
-            .ok()
+        self.var_rx.recv_timeout(timeout).ok()
     }
 
     #[cfg(on)]

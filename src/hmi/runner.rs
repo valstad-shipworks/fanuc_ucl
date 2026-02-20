@@ -111,13 +111,19 @@ impl HmiRunner {
                 .map_err(HmiError::from)?;
 
             for event in events.iter() {
-                if event.is_writable() && event.token() == HmiRunner::TOK_SOCKET && !connection_established {
+                if event.is_writable()
+                    && event.token() == HmiRunner::TOK_SOCKET
+                    && !connection_established
+                {
                     self.tcp_stream
                         .set_nodelay(true)
-                        .map_err(|_| std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "Failed to set TCP_NODELAY",
-                        )).map_err(HmiError::from)?;
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "Failed to set TCP_NODELAY",
+                            )
+                        })
+                        .map_err(HmiError::from)?;
                     connection_established = true;
                 }
                 match event.token() {

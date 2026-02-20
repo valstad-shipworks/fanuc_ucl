@@ -31,8 +31,8 @@ pub use hmi_handle::{HmiHandle, HmiHandleGeneric};
 use hmi_handle::{caster_array, caster_null, caster_singular};
 
 pub use asg_handle::{
-    AlarmArgs, AsgArgument, AsgVarInterface, BoolIoArgs, IntIoArgs, NumRegArgs, PosRegArgs, CurPosArgs,
-    ProgramStatusArgs, StringRegArgs, SysVarArgs,
+    AlarmArgs, AsgArgument, AsgVarInterface, BoolIoArgs, CurPosArgs, IntIoArgs, NumRegArgs,
+    PosRegArgs, ProgramStatusArgs, StringRegArgs, SysVarArgs,
 };
 
 pub use ports::{
@@ -158,7 +158,8 @@ impl HmiDriver {
         timeout: Option<Duration>,
         thread_config: Option<ThreadConfig>,
     ) -> DriverResult<()> {
-        let timeout = timeout.unwrap_or_else(|| Duration::from_secs_f64(DEFAULT_CONNECT_TIMEOUT_SECS));
+        let timeout =
+            timeout.unwrap_or_else(|| Duration::from_secs_f64(DEFAULT_CONNECT_TIMEOUT_SECS));
         if timeout.is_zero() {
             return Err(HmiError::Other("Timeout must be positive".into()).into());
         }
@@ -178,7 +179,8 @@ impl HmiDriver {
         let ack = self.send_message(Message::INIT)?.wait_timeout(timeout)?;
         self.next_seq(); // INIT uses seq 0
         if ack == Message::INIT_ACK {
-            self.send_message(Message::MAGIC)?.wait_timeout(timeout.saturating_sub(start.elapsed()))?;
+            self.send_message(Message::MAGIC)?
+                .wait_timeout(timeout.saturating_sub(start.elapsed()))?;
             self.next_seq(); // magic uses seq 1
             self.write::<ports::Command>(0, "CLRASG".to_string())?
                 .wait_timeout(timeout.saturating_sub(start.elapsed()))?;
@@ -364,7 +366,11 @@ impl HmiDriver {
         ))
     }
 
-    pub fn register_asg<T: AsgArgument>(&mut self, arg: T, timeout: Duration) -> DriverResult<AsgVarInterface<T::Ret>> {
+    pub fn register_asg<T: AsgArgument>(
+        &mut self,
+        arg: T,
+        timeout: Duration,
+    ) -> DriverResult<AsgVarInterface<T::Ret>> {
         let mut entry = arg.to_asg_entry();
         if self.asg_entries.is_empty() {
             entry.address = 1;
@@ -392,8 +398,11 @@ impl HmiDriver {
         Ok(AsgVarInterface::new(entry_arc))
     }
 
-
-    pub fn register_asg_array<T: AsgArgument, const N: usize>(&mut self, arg: T, timeout: Duration) -> DriverResult<AsgVarInterface<T::Ret, N>> {
+    pub fn register_asg_array<T: AsgArgument, const N: usize>(
+        &mut self,
+        arg: T,
+        timeout: Duration,
+    ) -> DriverResult<AsgVarInterface<T::Ret, N>> {
         let mut entry = arg.to_asg_entry();
         entry.size *= N as u16;
         if self.asg_entries.is_empty() {

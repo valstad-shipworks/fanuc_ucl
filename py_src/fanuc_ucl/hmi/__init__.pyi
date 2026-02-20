@@ -54,7 +54,9 @@ class __READONLY__(ReadablePort[_T_co], Protocol[_T_co]):
     @staticmethod
     def __CAN_READ__() -> None: ...
 
-class __WRITEONLY__(WriteablePort[_T_contra], UnsafelyWriteablePort[_T_contra], Protocol[_T_contra]):
+class __WRITEONLY__(
+    WriteablePort[_T_contra], UnsafelyWriteablePort[_T_contra], Protocol[_T_contra]
+):
     @staticmethod
     def __CAN_WRITE__() -> None: ...
     @staticmethod
@@ -63,7 +65,10 @@ class __WRITEONLY__(WriteablePort[_T_contra], UnsafelyWriteablePort[_T_contra], 
     def __USE__(_unused: _T_contra) -> None: ...
 
 class __READWRITE__(
-    ReadablePort[_T_co], WriteablePort[_T_contra], UnsafelyWriteablePort[_T_contra], Protocol[_T_co, _T_contra]
+    ReadablePort[_T_co],
+    WriteablePort[_T_contra],
+    UnsafelyWriteablePort[_T_contra],
+    Protocol[_T_co, _T_contra],
 ):
     @staticmethod
     def __CAN_READ__() -> None: ...
@@ -137,7 +142,7 @@ class HmiDriver:
         index: int,
         group: int | None = None,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[PositionData]: ...
     @overload
     def register_asg(
@@ -148,7 +153,7 @@ class HmiDriver:
         frame: int,
         group: int | None = None,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> ReadOnlyAsgInterface[PositionData]: ...
     @overload
     def register_asg(
@@ -157,7 +162,7 @@ class HmiDriver:
         *,
         index: int,
         simulation: bool,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[bool]: ...
     @overload
     def register_asg(
@@ -166,7 +171,7 @@ class HmiDriver:
         *,
         index: int,
         simulation: bool,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[int]: ...
     @overload
     def register_asg(
@@ -176,7 +181,7 @@ class HmiDriver:
         source: AlarmSource,
         line: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> ReadOnlyAsgInterface[AlarmData]: ...
     @overload
     def register_asg(
@@ -186,7 +191,7 @@ class HmiDriver:
         task: int,
         kind: ProgramStatusKind,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> ReadOnlyAsgInterface[ProgramStatus]: ...
     @overload
     def register_asg(
@@ -195,7 +200,7 @@ class HmiDriver:
         *,
         index: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[str]: ...
     @overload
     def register_asg(
@@ -204,7 +209,7 @@ class HmiDriver:
         *,
         index: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[float]: ...
     @overload
     def register_asg_array(
@@ -215,7 +220,7 @@ class HmiDriver:
         index: int,
         group: int | None = None,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[PositionData]]: ...
     @overload
     def register_asg_array(
@@ -225,7 +230,7 @@ class HmiDriver:
         *,
         index: int,
         simulation: bool,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[bool]]: ...
     @overload
     def register_asg_array(
@@ -235,7 +240,7 @@ class HmiDriver:
         *,
         index: int,
         simulation: bool,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[int]]: ...
     @overload
     def register_asg_array(
@@ -246,7 +251,7 @@ class HmiDriver:
         source: AlarmSource,
         line: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> ReadOnlyAsgInterface[list[AlarmData]]: ...
     @overload
     def register_asg_array(
@@ -257,7 +262,7 @@ class HmiDriver:
         task: int,
         kind: ProgramStatusKind,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> ReadOnlyAsgInterface[list[ProgramStatus]]: ...
     @overload
     def register_asg_array(
@@ -267,7 +272,7 @@ class HmiDriver:
         *,
         index: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[str]]: ...
     @overload
     def register_asg_array(
@@ -277,7 +282,7 @@ class HmiDriver:
         *,
         index: int,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[float]]: ...
     def register_sysvar_asg(
         self,
@@ -285,7 +290,7 @@ class HmiDriver:
         *,
         name: str,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[_U]: ...
     def register_sysvar_asg_array(
         self,
@@ -294,5 +299,5 @@ class HmiDriver:
         *,
         name: str,
         range: AsgRange = None,
-        timeout_secs: float = 0.016
+        timeout_secs: float = 0.016,
     ) -> AsgInterface[list[_U]]: ...

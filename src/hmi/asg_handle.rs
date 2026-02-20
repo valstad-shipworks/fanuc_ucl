@@ -82,7 +82,7 @@ macro_rules! arr_size_impl {
     };
 }
 
-arr_size_impl!{
+arr_size_impl! {
     2, 3, 4, 5, 6, 7, 8, 9, 10,
     11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
@@ -377,7 +377,6 @@ impl AsgArgument for BoolIoArgs {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntIoSignal {
     GroupInput,
@@ -661,7 +660,6 @@ impl<T: asg::SysVarVal> AsgArgument for SysVarArgs<T> {
             multiply,
         }
     }
-
 }
 
 #[cfg(feature = "py")]
@@ -675,7 +673,6 @@ pub(super) mod py {
 
     use super::*;
     use pyo3::{IntoPyObjectExt, prelude::*, pyclass, pymethods};
-
 
     macro_rules! _arr_size_impl {
         (
@@ -736,7 +733,9 @@ pub(super) mod py {
         member_count: u16,
     ) -> pyo3::PyResult<pyo3::Bound<'a, pyo3::types::PyAny>> {
         if N < 1 || N > 100 {
-            return Err(pyo3::exceptions::PyValueError::new_err("Unsupported array size for Asg array caster"));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Unsupported array size for Asg array caster",
+            ));
         }
         let values: [T; N] = T::many_from_message::<N>(msg, offset, member_count)?;
         let list = pyo3::types::PyList::empty(py);
@@ -801,7 +800,11 @@ pub(super) mod py {
 
     impl PyAsgVarInterface {
         pub(crate) fn new(entry: Arc<AsgEntry>, count: usize, can_write: bool) -> Self {
-            Self { entry, count, can_write }
+            Self {
+                entry,
+                count,
+                can_write,
+            }
         }
     }
 
@@ -813,7 +816,10 @@ pub(super) mod py {
             value: Bound<'_, pyo3::types::PyAny>,
         ) -> DriverResult<PyHmiHandleGeneric> {
             if !self.can_write {
-                return Err(pyo3::exceptions::PyPermissionError::new_err("This ASG variable is read-only").into());
+                return Err(pyo3::exceptions::PyPermissionError::new_err(
+                    "This ASG variable is read-only",
+                )
+                .into());
             }
             let asg_value = py_value_to_asg_value(&value, self.entry.tag)?;
             let bytes = self.entry.encode_to_bytes(&asg_value)?;

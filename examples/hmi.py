@@ -1,5 +1,6 @@
 from fanuc_ucl import hmi
 
+
 def main():
     driver = hmi.HmiDriver("10.0.0.1")
     driver.connect()

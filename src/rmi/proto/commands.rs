@@ -1,4 +1,7 @@
-use crate::{joints::{JointFormat, JointTemplate}, packet_response_wrap, packet_wrap, zst_filler};
+use crate::{
+    joints::{JointFormat, JointTemplate},
+    packet_response_wrap, packet_wrap, zst_filler,
+};
 
 use super::member_structs::*;
 use cfg_mixin::cfg_mixin;
@@ -407,9 +410,7 @@ impl FrcReadJointAngles {
     #[on(new)]
     #[on(pyo3(signature = (group=None)))]
     pub fn new(group: Option<u8>) -> Self {
-        Self {
-            group,
-        }
+        Self { group }
     }
 }
 
@@ -477,16 +478,32 @@ pub struct FrcReadErrorResponse {
     #[serde(rename = "ErrorData")]
     pub error_data: String,
     #[on(pyo3(get, set))]
-    #[serde(rename = "ErrorData2", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "ErrorData2",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error_data2: Option<String>,
     #[on(pyo3(get, set))]
-    #[serde(rename = "ErrorData3", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "ErrorData3",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error_data3: Option<String>,
     #[on(pyo3(get, set))]
-    #[serde(rename = "ErrorData4", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "ErrorData4",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error_data4: Option<String>,
     #[on(pyo3(get, set))]
-    #[serde(rename = "ErrorData5", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "ErrorData5",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error_data5: Option<String>,
 }
 
@@ -539,9 +556,7 @@ impl FrcReadCartesianPosition {
     #[on(new)]
     #[on(pyo3(signature = (group=None)))]
     pub fn new(group: Option<u8>) -> Self {
-        Self {
-            group,
-        }
+        Self { group }
     }
 }
 
@@ -583,7 +598,11 @@ pub struct FrcInitialize {
     #[serde(rename = "GroupMask", default, skip_serializing_if = "Option::is_none")]
     pub group_mask: Option<u8>,
     #[on(pyo3(get, set))]
-    #[serde(rename = "Application", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "Application",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub application: Option<ApplicationType>,
     #[on(pyo3(get, set))]
     #[serde(rename = "Equipment", default, skip_serializing_if = "Option::is_none")]
@@ -600,8 +619,24 @@ pub struct FrcInitialize {
 impl FrcInitialize {
     #[on(new)]
     #[on(pyo3(signature = (group_mask=None, application=None, equipment=None, rtsa=false, palletizing_mode=None)))]
-    pub fn new(group_mask: Option<u8>, application: Option<ApplicationType>, equipment: Option<u8>, rtsa: bool, palletizing_mode: Option<PalletizingMode>) -> Self {
-        Self { group_mask, application, equipment, rtsa: if rtsa { Some(::monostate::MustBe!("ON")) } else { None }, palletizing_mode }
+    pub fn new(
+        group_mask: Option<u8>,
+        application: Option<ApplicationType>,
+        equipment: Option<u8>,
+        rtsa: bool,
+        palletizing_mode: Option<PalletizingMode>,
+    ) -> Self {
+        Self {
+            group_mask,
+            application,
+            equipment,
+            rtsa: if rtsa {
+                Some(::monostate::MustBe!("ON"))
+            } else {
+                None
+            },
+            palletizing_mode,
+        }
     }
 }
 
@@ -641,9 +676,7 @@ impl FrcGetUFrameUTool {
     #[on(new)]
     #[on(pyo3(signature = (group=None)))]
     pub fn new(group: Option<u8>) -> Self {
-        Self {
-            group,
-        }
+        Self { group }
     }
 }
 

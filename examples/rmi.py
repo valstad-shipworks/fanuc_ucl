@@ -1,5 +1,6 @@
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, rmi
 
+
 def main():
     driver = rmi.RmiDriver(rmi.RmiDriverConfig("10.0.0.1"))
     driver.connect(ThreadConfig(80, None))
@@ -14,7 +15,7 @@ def main():
         rmi.JointAngles(
             JointFormat.AbsDeg,
             JointTemplate.SIX,
-            *[-90.0, 0.0, 0.0, -180.0, 90.0, 180.0]
+            *[-90.0, 0.0, 0.0, -180.0, 90.0, 180.0],
         ),
         rmi.SpeedType.MilliSeconds,
         528,
@@ -25,7 +26,7 @@ def main():
         rmi.JointAngles(
             JointFormat.AbsDeg,
             JointTemplate.SIX,
-            *[90.0, 0.0, 0.0, 180.0, -90.0, -180.0]
+            *[90.0, 0.0, 0.0, 180.0, -90.0, -180.0],
         ),
         rmi.SpeedType.MilliSeconds,
         528,
@@ -37,4 +38,6 @@ def main():
     driver.send(movement_cmd2).wait_timeout(0.6)
 
     pos_resp = driver.send(rmi.FrcReadJointAngles()).wait_timeout(0.2)
-    print(f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}")
+    print(
+        f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}"
+    )

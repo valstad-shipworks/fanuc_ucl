@@ -2,7 +2,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-use crate::joints::{JointRepr, JointType, JointValue, JointFormat, JointTemplate};
+use crate::joints::{JointFormat, JointRepr, JointTemplate, JointType, JointValue};
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub enum ApplicationType {
     Handling,
     Arc,
     Spot,
-    Dispense
+    Dispense,
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
@@ -51,7 +51,7 @@ pub enum PalletizingMode {
     PSPIDN,
     PSPIUP,
     MSPIDN,
-    MSPIUP
+    MSPIUP,
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
@@ -194,7 +194,7 @@ impl JointAngles {
         j3: f32,
         j4: f32,
         j5: f32,
-        j6: f32
+        j6: f32,
     ) -> Self {
         let slf = Self {
             j1,
@@ -205,7 +205,7 @@ impl JointAngles {
             j6,
             j7: 0.0,
             j8: 0.0,
-            j9: 0.0
+            j9: 0.0,
         };
         JointFormat::FanucDeg.convert_from(format, template, slf)
     }

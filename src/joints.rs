@@ -330,7 +330,9 @@ use cfg_mixin::cfg_mixin;
 impl JointTemplate {
     #[on(new)]
     pub fn new(axis: Vec<JointType>) -> Self {
-        Self { axis: Box::leak(axis.into_boxed_slice()) }
+        Self {
+            axis: Box::leak(axis.into_boxed_slice()),
+        }
     }
 
     #[cfg(off)]
@@ -340,27 +342,27 @@ impl JointTemplate {
 
     #[on(classattr)]
     pub const SIX: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary, Rotary, Rotary ],
+        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary],
     };
     #[on(classattr)]
     pub const SIX_LINEAR_TRACK: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary, Rotary, Rotary, Linear ],
+        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary, Linear],
     };
     #[on(classattr)]
     pub const FOUR: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary ],
+        axis: &[Rotary, Rotary, Rotary, Rotary],
     };
     #[on(classattr)]
     pub const FOUR_LINEAR_TRACK: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary, Linear ],
+        axis: &[Rotary, Rotary, Rotary, Rotary, Linear],
     };
     #[on(classattr)]
     pub const FIVE: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary, Rotary ],
+        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary],
     };
     #[on(classattr)]
     pub const FIVE_LINEAR_TRACK: Self = Self {
-        axis: &[ Rotary, Rotary, Rotary, Rotary, Rotary, Linear ],
+        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Linear],
     };
 }
 
@@ -388,7 +390,12 @@ pub enum JointFormat {
 }
 
 impl JointFormat {
-    pub fn convert_from<T: JointRepr>(&self, format: JointFormat, template: JointTemplate, joints: T) -> T {
+    pub fn convert_from<T: JointRepr>(
+        &self,
+        format: JointFormat,
+        template: JointTemplate,
+        joints: T,
+    ) -> T {
         let mask = &template.axis;
         match self {
             JointFormat::FanucRad => match format {
@@ -436,9 +443,10 @@ impl JointFormat {
             .map(|item| item.and_then(|obj| obj.extract::<f64>()))
             .collect::<pyo3::PyResult<Vec<f64>>>()?;
         if joints.len() < template.axis.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("joints list must have at least {} elements", template.axis.len()),
-            ));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "joints list must have at least {} elements",
+                template.axis.len()
+            )));
         }
         self.convert_from(format, template, &mut joints);
         Ok(joints)

@@ -55,7 +55,7 @@ impl VariadicString {
         match self {
             VariadicString::None => vec![],
             VariadicString::Single(s) => vec![s],
-            VariadicString::Multiple(v) => v
+            VariadicString::Multiple(v) => v,
         }
     }
 
@@ -303,18 +303,27 @@ impl RmiRunner {
         let mut connection_established = false;
 
         loop {
-            let timeout = if message_queue.is_empty() {Duration::from_millis(8)} else { Duration::from_millis(96) };
-            poll.poll(&mut events, Some(timeout))
-                .expect("Poll failed");
+            let timeout = if message_queue.is_empty() {
+                Duration::from_millis(8)
+            } else {
+                Duration::from_millis(96)
+            };
+            poll.poll(&mut events, Some(timeout)).expect("Poll failed");
 
             for event in events.iter() {
-                if event.is_writable() && event.token() == RmiRunner::TOK_SOCKET && !connection_established {
+                if event.is_writable()
+                    && event.token() == RmiRunner::TOK_SOCKET
+                    && !connection_established
+                {
                     self.tcp_stream
                         .set_nodelay(true)
-                        .map_err(|_| std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "Failed to set TCP_NODELAY",
-                        )).map_err(RmiError::from)?;
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "Failed to set TCP_NODELAY",
+                            )
+                        })
+                        .map_err(RmiError::from)?;
                     connection_established = true;
                 }
                 match event.token() {

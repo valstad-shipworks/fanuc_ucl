@@ -163,7 +163,6 @@ class JointAngles:
         j8: float = 0.0,
         j9: float = 0.0,
     ) -> None: ...
-
     def as_array(self) -> list[float]: ...
 
 class LcbType(Enum):
@@ -475,7 +474,7 @@ class FrcLinearRelativeJRep(Instruction):
         speed_type: SpeedType,
         speed: int,
         term_type: TermType,
-        term_value: int
+        term_value: int,
     ) -> None: ...
 
 class FrcLinearRelativeJRepResponse(InstructionResponse): ...

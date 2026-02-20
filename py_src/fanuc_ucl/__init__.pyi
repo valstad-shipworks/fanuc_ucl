@@ -15,8 +15,7 @@ class ThreadConfig:
         self.priority = priority
         self.cpu_affinity = cpu_affinity
 
-    def configure_this_thread(self) -> None:
-        ...
+    def configure_this_thread(self) -> None: ...
 
 class JointType(Enum):
     Linear = "Linear"
@@ -37,7 +36,9 @@ class JointFormat(Enum):
     AbsDeg = 3
     FanucDeg = 4
 
-    def convert_from(self, format: JointFormat, template: JointTemplate, joints: list[float]) -> list[float]: ...
+    def convert_from(
+        self, format: JointFormat, template: JointTemplate, joints: list[float]
+    ) -> list[float]: ...
 
 class LoggingLevel(Enum):
     Err = "ERR"

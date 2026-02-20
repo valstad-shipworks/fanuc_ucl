@@ -1,4 +1,7 @@
-use std::{fmt::Display, hash::{Hash, Hasher}};
+use std::{
+    fmt::Display,
+    hash::{Hash, Hasher},
+};
 
 use crate::hmi::{HmiError, hmi_handle::HmiResult, proto::wire::Message};
 
@@ -13,7 +16,12 @@ pub trait HmiWireable: Sized {
     fn unpack_sysvar(src: &[u8]) -> Result<(Self, usize), HmiError> {
         Self::unpack(src)
     }
-    fn partial_pack<const N: usize>(&self, start_offset: usize, view_size: usize, dst: &mut [u8]) -> Result<usize, HmiError> {
+    fn partial_pack<const N: usize>(
+        &self,
+        start_offset: usize,
+        view_size: usize,
+        dst: &mut [u8],
+    ) -> Result<usize, HmiError> {
         let mut filler = [0u8; N];
         let packed_size = self.pack(&mut filler);
         if view_size > packed_size || start_offset + view_size > N {
@@ -28,10 +36,19 @@ pub trait HmiWireable: Sized {
         dst[..view_size].copy_from_slice(&filler[start_offset..start_offset + view_size]);
         Ok(view_size)
     }
-    fn partial_pack_sysvar<const N: usize>(&self, start_offset: usize, view_size: usize, dst: &mut [u8]) -> Result<usize, HmiError> {
+    fn partial_pack_sysvar<const N: usize>(
+        &self,
+        start_offset: usize,
+        view_size: usize,
+        dst: &mut [u8],
+    ) -> Result<usize, HmiError> {
         self.partial_pack::<N>(start_offset, view_size, dst)
     }
-    fn partial_unpack<const N: usize>(src: &[u8], start_offset: usize, view_size: usize) -> Result<(Self, usize), HmiError> {
+    fn partial_unpack<const N: usize>(
+        src: &[u8],
+        start_offset: usize,
+        view_size: usize,
+    ) -> Result<(Self, usize), HmiError> {
         let mut filler = [0u8; N];
         if view_size > src.len() || start_offset + view_size > Self::PACKED_SIZE {
             tracing::error!(
@@ -46,7 +63,11 @@ pub trait HmiWireable: Sized {
         let (val, _) = Self::unpack(&filler)?;
         Ok((val, view_size))
     }
-    fn partial_unpack_sysvar<const N: usize>(src: &[u8], start_offset: usize, view_size: usize) -> Result<(Self, usize), HmiError> {
+    fn partial_unpack_sysvar<const N: usize>(
+        src: &[u8],
+        start_offset: usize,
+        view_size: usize,
+    ) -> Result<(Self, usize), HmiError> {
         Self::partial_unpack::<N>(src, start_offset, view_size)
     }
 }
@@ -124,7 +145,6 @@ impl HmiWireable for i16 {
     }
 }
 
-
 impl HmiWireable for u16 {
     const PACKED_SIZE: usize = 2;
     const SYS_VAR_SIZE: usize = i32::SYS_VAR_SIZE;
@@ -153,7 +173,6 @@ impl HmiWireable for u16 {
         Ok((val as u16, consumed))
     }
 }
-
 
 impl HmiWireable for i8 {
     const PACKED_SIZE: usize = 1;
@@ -597,14 +616,7 @@ pub mod position_struct {
                 offset += sz;
                 reserved[i] = val;
             }
-            Ok((
-                FrameData {
-                    uf,
-                    ut,
-                    reserved,
-                },
-                offset,
-            ))
+            Ok((FrameData { uf, ut, reserved }, offset))
         }
     }
 
@@ -807,7 +819,9 @@ pub mod alarm_struct {
             offset += self.time.pack(&mut dst[offset..]);
             offset += self.msg.pack(&mut dst[offset..]);
             offset += self.cause_msg.pack(&mut dst[offset..]);
-            offset += self.severity_msg.partial_pack::<80>(0, 18, &mut dst[offset..])
+            offset += self
+                .severity_msg
+                .partial_pack::<80>(0, 18, &mut dst[offset..])
                 .expect("18 should never be greater than PACKED_SIZE");
             offset
         }
@@ -823,7 +837,8 @@ pub mod alarm_struct {
             offset += sz;
             let (severity_i16, sz) = i16::unpack(&src[offset..])?;
             offset += sz;
-            let severity = AlarmSeverity::try_from(severity_i16).map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
+            let severity = AlarmSeverity::try_from(severity_i16)
+                .map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
             let (time, sz) = TimeData::unpack(&src[offset..])?;
             offset += sz;
             let (msg, sz) = String::unpack(&src[offset..])?;
@@ -900,10 +915,16 @@ pub mod prog_status {
         const SYS_VAR_SIZE: usize = 36;
         fn pack(&self, dst: &mut [u8]) -> usize {
             let mut offset = 0;
-            offset += self.name.partial_pack::<80>(0, 16, &mut dst[offset..]).expect("16 should never be greater than PACKED_SIZE");
+            offset += self
+                .name
+                .partial_pack::<80>(0, 16, &mut dst[offset..])
+                .expect("16 should never be greater than PACKED_SIZE");
             offset += self.line_number.pack(&mut dst[offset..]);
             offset += (self.state as u16).pack(&mut dst[offset..]);
-            offset += self.parent_name.partial_pack::<80>(0, 16, &mut dst[offset..]).expect("16 should never be greater than PACKED_SIZE");
+            offset += self
+                .parent_name
+                .partial_pack::<80>(0, 16, &mut dst[offset..])
+                .expect("16 should never be greater than PACKED_SIZE");
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
@@ -914,7 +935,8 @@ pub mod prog_status {
             offset += sz;
             let (state_u16, sz) = u16::unpack(&src[offset..])?;
             offset += sz;
-            let state = ProgramState::try_from(state_u16).map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
+            let state = ProgramState::try_from(state_u16)
+                .map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
             let (parent_name, sz) = String::partial_unpack::<80>(&src[offset..], 0, 16)?;
             offset += sz;
             Ok((
@@ -977,15 +999,23 @@ pub trait AsgEncodableType:
         let item_count = N;
         let payload = msg.payload();
         let mut ret = Vec::with_capacity(item_count as usize);
-        let byte_count = member_count as usize *2;
-        tracing::trace!("Decoding {} ASG items with {} members each", item_count, member_count);
+        let byte_count = member_count as usize * 2;
+        tracing::trace!(
+            "Decoding {} ASG items with {} members each",
+            item_count,
+            member_count
+        );
         for i in 0..item_count {
             let item_start = i * byte_count as usize;
             let item_payload = &payload[item_start..item_start + byte_count as usize];
             let (value, _) = if 2 > offset {
                 Self::unpack_sysvar(item_payload)?
             } else {
-                Self::partial_unpack_sysvar::<80>(item_payload, offset as usize, byte_count as usize)?
+                Self::partial_unpack_sysvar::<80>(
+                    item_payload,
+                    offset as usize,
+                    byte_count as usize,
+                )?
             };
             ret.push(value);
         }
@@ -1138,49 +1168,49 @@ impl AsgEntry {
                 buf.resize(i16::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Byte(v) => {
                 let mut buf = Vec::with_capacity(i8::SYS_VAR_SIZE);
                 buf.resize(i8::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Real(v) => {
                 let mut buf = Vec::with_capacity(f32::SYS_VAR_SIZE);
                 buf.resize(f32::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Bool(v) => {
                 let mut buf = Vec::with_capacity(bool::SYS_VAR_SIZE);
                 buf.resize(bool::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::String(v) => {
                 let mut buf = Vec::with_capacity(String::SYS_VAR_SIZE);
                 buf.resize(String::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Position(v) => {
                 let mut buf = Vec::with_capacity(position_struct::PositionData::SYS_VAR_SIZE);
                 buf.resize(position_struct::PositionData::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Alarm(v) => {
                 let mut buf = Vec::with_capacity(alarm_struct::AlarmData::SYS_VAR_SIZE);
                 buf.resize(alarm_struct::AlarmData::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
             AsgValue::Program(v) => {
                 let mut buf = Vec::with_capacity(prog_status::ProgramStatus::SYS_VAR_SIZE);
                 buf.resize(prog_status::ProgramStatus::SYS_VAR_SIZE, 0);
                 v.pack_sysvar(&mut buf);
                 buf
-            },
+            }
         })
     }
 }
@@ -1280,6 +1310,5 @@ mod tests {
         assert_eq!(bytes.len(), ProgramStatus::REGISTER_CNT as usize * 2);
         let (unp_prog_ref, _) = ProgramStatus::unpack_sysvar(&bytes).unwrap();
         assert_eq!(prog_ref.line_number, unp_prog_ref.line_number);
-        
     }
 }
