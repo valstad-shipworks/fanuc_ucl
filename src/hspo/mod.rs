@@ -24,6 +24,7 @@ const TOK_SOCKET: Token = Token(0);
 
 static HSPO_SERVER: LazyLock<Mutex<Option<HspoBroker>>> = LazyLock::new(|| Mutex::new(None));
 
+/// Error returned when attempting to create an [`HspoReceiver`] before the HSPO broker has been initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HspoBrokerNotInitializedError;
 impl std::fmt::Display for HspoBrokerNotInitializedError {
@@ -36,6 +37,7 @@ impl std::fmt::Display for HspoBrokerNotInitializedError {
 }
 impl std::error::Error for HspoBrokerNotInitializedError {}
 
+/// A packet from a FANUC controller containing the TCP (Tool Center Point) cartesian position.
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Serialize)]
@@ -91,6 +93,7 @@ impl std::fmt::Display for TcpCartesianPositionPacket {
     }
 }
 
+/// A packet from a FANUC controller containing joint angle values.
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
@@ -115,6 +118,7 @@ pub struct JointAnglesPacket {
 
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl JointAnglesPacket {
+    /// Returns the joint angles converted from the internal FANUC radian format to the specified format and template.
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
         format.convert_from(JointFormat::FanucRad, template, self.joints)
     }
@@ -137,6 +141,7 @@ impl std::fmt::Display for JointAnglesPacket {
     }
 }
 
+/// A packet from a FANUC controller containing up to 10 user-configured variable values.
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
@@ -253,6 +258,10 @@ impl RobotSender {
     }
 }
 
+/// Receives HSPO (High Speed Position Output) packets from a specific FANUC controller.
+///
+/// Created via [`initialize_broker`] followed by [`try_new`](Self::try_new). Packets are buffered internally
+/// and can be consumed with blocking or non-blocking methods.
 #[cfg_attr(feature = "py", pyo3::pyclass)]
 #[derive(Debug)]
 pub struct HspoReceiver {
@@ -294,6 +303,9 @@ impl HspoReceiver {
             .add_robot(ip_of_interest, packet_buffer_size))
     }
 
+    /// Creates a new receiver for the given robot IP address with the specified packet buffer size.
+    ///
+    /// The HSPO broker must be initialized with [`initialize_broker`] before calling this method.
     #[cfg(off)]
     pub fn try_new<T: Into<IpAddr>>(
         ip_of_interest: T,
@@ -316,28 +328,34 @@ impl HspoReceiver {
             .add_robot(ip_of_interest.into(), packet_buffer_size))
     }
 
+    /// Returns `true` if a packet has been received from this robot recently.
     pub fn is_connected(&self) -> bool {
         self.connection_active
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Returns the cumulative HSPO clock in microseconds, accounting for wraps of the controller's 32-bit clock.
     pub fn clock_micros(&self) -> u64 {
         self.tracked_clock.read().0
     }
 
+    /// Returns the cumulative HSPO clock in milliseconds.
     pub fn clock_ms(&self) -> f64 {
         self.clock_micros() as f64 / 1000.0
     }
 
+    /// Returns a pair of `(hspo_clock_micros, system_time_micros)` for correlating controller time with system time.
     pub fn clock_pair_micros(&self) -> (u64, u64) {
         self.tracked_clock.read()
     }
 
+    /// Blocks until a TCP cartesian position packet is received or the timeout elapses.
     #[cfg(off)]
     pub fn wait_for_tcp_packet(&self, timeout: Duration) -> Option<TcpCartesianPositionPacket> {
         self.tcp_rx.recv_timeout(timeout).ok()
     }
 
+    /// Blocks until a TCP cartesian position packet is received or the timeout elapses.
     #[cfg(on)]
     pub fn wait_for_tcp_packet(&self, timeout_secs: f64) -> Option<TcpCartesianPositionPacket> {
         self.tcp_rx
@@ -345,11 +363,13 @@ impl HspoReceiver {
             .ok()
     }
 
+    /// Blocks until a joint angles packet is received or the timeout elapses.
     #[cfg(off)]
     pub fn wait_for_joint_packet(&self, timeout: Duration) -> Option<JointAnglesPacket> {
         self.joint_rx.recv_timeout(timeout).ok()
     }
 
+    /// Blocks until a joint angles packet is received or the timeout elapses.
     #[cfg(on)]
     pub fn wait_for_joint_packet(&self, timeout_secs: f64) -> Option<JointAnglesPacket> {
         self.joint_rx
@@ -357,11 +377,13 @@ impl HspoReceiver {
             .ok()
     }
 
+    /// Blocks until a variables packet is received or the timeout elapses.
     #[cfg(off)]
     pub fn wait_for_var_packet(&self, timeout: Duration) -> Option<VariablesPacket> {
         self.var_rx.recv_timeout(timeout).ok()
     }
 
+    /// Blocks until a variables packet is received or the timeout elapses.
     #[cfg(on)]
     pub fn wait_for_var_packet(&self, timeout_secs: f64) -> Option<VariablesPacket> {
         self.var_rx
@@ -369,18 +391,22 @@ impl HspoReceiver {
             .ok()
     }
 
+    /// Returns the next buffered TCP cartesian position packet without blocking, or `None` if the buffer is empty.
     pub fn try_recv_tcp_packet(&self) -> Option<TcpCartesianPositionPacket> {
         self.tcp_rx.try_recv().ok()
     }
 
+    /// Returns the next buffered joint angles packet without blocking, or `None` if the buffer is empty.
     pub fn try_recv_joint_packet(&self) -> Option<JointAnglesPacket> {
         self.joint_rx.try_recv().ok()
     }
 
+    /// Returns the next buffered variables packet without blocking, or `None` if the buffer is empty.
     pub fn try_recv_var_packet(&self) -> Option<VariablesPacket> {
         self.var_rx.try_recv().ok()
     }
 
+    /// Drains and returns all buffered TCP cartesian position packets.
     pub fn recv_all_tcp_packets(&self) -> Vec<TcpCartesianPositionPacket> {
         let mut packets = Vec::new();
         while let Ok(w) = self.tcp_rx.try_recv() {
@@ -389,6 +415,7 @@ impl HspoReceiver {
         packets
     }
 
+    /// Drains and returns all buffered joint angles packets.
     pub fn recv_all_joint_packets(&self) -> Vec<JointAnglesPacket> {
         let mut packets = Vec::new();
         while let Ok(w) = self.joint_rx.try_recv() {
@@ -397,6 +424,7 @@ impl HspoReceiver {
         packets
     }
 
+    /// Drains and returns all buffered variables packets.
     pub fn recv_all_var_packets(&self) -> Vec<VariablesPacket> {
         let mut packets = Vec::new();
         while let Ok(w) = self.var_rx.try_recv() {
@@ -405,14 +433,17 @@ impl HspoReceiver {
         packets
     }
 
+    /// Discards all buffered joint angles packets.
     pub fn clear_joint_packet_buffer(&self) {
         while let Ok(_) = self.joint_rx.try_recv() {}
     }
 
+    /// Discards all buffered TCP cartesian position packets.
     pub fn clear_tcp_packet_buffer(&self) {
         while let Ok(_) = self.tcp_rx.try_recv() {}
     }
 
+    /// Discards all buffered variables packets.
     pub fn clear_var_packet_buffer(&self) {
         while let Ok(_) = self.var_rx.try_recv() {}
     }
@@ -643,6 +674,9 @@ impl HspoBroker {
     }
 }
 
+/// Initializes the global HSPO broker, binding a socket to `listen_on` and spawning a background listener thread.
+///
+/// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
 #[cfg(not(feature = "py"))]
 pub fn initialize_broker(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) {
     let mut guard = HSPO_SERVER
@@ -654,6 +688,9 @@ pub fn initialize_broker(listen_on: SocketAddr, thread_config: Option<ThreadConf
     }
 }
 
+/// Initializes the global HSPO broker, binding a socket to `listen_on` and spawning a background listener thread.
+///
+/// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
 #[cfg(feature = "py")]
 #[pyo3::pyfunction]
 #[pyo3(signature=(listen_on, thread_config=None))]
@@ -674,6 +711,7 @@ pub fn initialize_broker(
     Ok(())
 }
 
+/// Shuts down the global HSPO broker and joins its background thread.
 #[cfg_attr(feature = "py", pyo3::pyfunction)]
 pub fn destroy_broker() {
     let mut guard = HSPO_SERVER

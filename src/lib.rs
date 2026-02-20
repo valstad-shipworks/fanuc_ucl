@@ -114,15 +114,27 @@ impl std::fmt::Display for ResponseNotFulfilled {
 }
 impl std::error::Error for ResponseNotFulfilled {}
 
+/// A trait representing a handle to an asynchronous response that can be awaited or queried for its status in synchronous contexts.
+/// This is used for operations that may complete in the future, allowing the caller to check if the response is ready,
+/// retrieve the result, or wait for completion with an optional timeout.
 pub trait ResponseHandle:
     Future<Output = Result<Self::Ret, Self::Error>> + Send + Sync + 'static
 {
     type Ret;
     type Error: std::error::Error;
+    /// Checks if the response has been fulfilled and is ready to be retrieved.
     fn is_set(&self) -> bool;
+    /// Attempts to retrieve the result of the response if it has been fulfilled, returning an error if it is not yet ready.
+    /// If the response is fulfilled but contains an error, that error will be returned instead.
+    /// If the response is not fulfilled at all, an error will be returned.
     fn get(&self) -> Result<Self::Ret, Self::Error>;
+    /// Retrieves the timestamp of when the response was fulfilled, if available.
+    /// This is can either be when the response was fulfilled or received over the network, depending on the implementation.
     fn timestamp(&self) -> Option<std::time::SystemTime>;
+    /// Waits for the response to be fulfilled, with an optional timeout.
+    /// If the timeout is reached before fulfillment an error is returned.
     fn wait_timeout(&self, timeout: std::time::Duration) -> Result<Self::Ret, Self::Error>;
+    /// Waits indefinitely for the response to be fulfilled and retrieves the result.
     fn wait(&self) -> Result<Self::Ret, Self::Error>;
 }
 

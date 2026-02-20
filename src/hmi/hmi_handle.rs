@@ -17,6 +17,7 @@ use crate::{
     },
 };
 
+/// Convenience alias for `Result<T, HmiError>`.
 pub type HmiResult<T> = Result<T, HmiError>;
 
 #[derive(Debug)]
@@ -63,6 +64,10 @@ pub(super) fn caster_null<T: DataPort>(_: Message, _: u16, _: u16) -> HmiResult<
     Ok(())
 }
 
+/// An untyped handle to a pending HMI response.
+///
+/// This is the low-level handle returned by the runner; it can be polled, waited on,
+/// or wrapped in a typed [`HmiHandle`] to decode the response payload.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HmiHandleGeneric {
@@ -97,10 +102,12 @@ impl ResponseHandle for HmiHandleGeneric {
     type Ret = Message;
     type Error = HmiError;
 
+    /// Returns `true` if the response (or an error) has been received.
     pub fn is_set(&self) -> bool {
         self.resp.0.get().is_some()
     }
 
+    /// Returns the response message if available, or an error if the request failed or the response has not yet arrived.
     pub fn get(&self) -> Result<Message, HmiError> {
         match self.resp.0.get() {
             Some(ResponseOrError::Response(v, _)) => Ok(v.clone()),
@@ -109,6 +116,7 @@ impl ResponseHandle for HmiHandleGeneric {
         }
     }
 
+    /// Returns the timestamp at which the response was received, or `None` if it has not arrived yet.
     pub fn timestamp(&self) -> Option<SystemTime> {
         if !self.is_set() {
             return None;
@@ -123,6 +131,7 @@ impl ResponseHandle for HmiHandleGeneric {
             .flatten()
     }
 
+    /// Blocks until the response arrives or the timeout elapses, returning [`HmiError::Timeout`] on expiry.
     pub fn wait_timeout(&self, timeout: Duration) -> Result<Message, HmiError> {
         if self.is_set() {
             return self.get();
@@ -135,6 +144,7 @@ impl ResponseHandle for HmiHandleGeneric {
         }
     }
 
+    /// Blocks indefinitely until the response arrives.
     pub fn wait(&self) -> Result<Message, HmiError> {
         self.wait_timeout(Duration::MAX)
     }
@@ -157,6 +167,9 @@ impl Future for HmiHandleGeneric {
     }
 }
 
+/// A typed handle to a pending HMI response that decodes the raw message into `T`.
+///
+/// Implements [`Future`] for async usage and provides blocking [`wait`](Self::wait) / [`wait_timeout`](Self::wait_timeout) methods.
 #[derive(Debug, Clone)]
 pub struct HmiHandle<T: Send + Sync + 'static> {
     generic: HmiHandleGeneric,
@@ -181,6 +194,7 @@ impl<T: Send + Sync + 'static> HmiHandle<T> {
         }
     }
 
+    /// Returns a clone of the underlying untyped [`HmiHandleGeneric`].
     pub fn generic(&self) -> HmiHandleGeneric {
         self.generic.clone()
     }

@@ -2,13 +2,18 @@ from fanuc_ucl import hmi
 
 
 def main():
-    driver = hmi.HmiDriver("10.0.0.1")
+    driver = hmi.HmiDriver("10.23.16.111")
     driver.connect()
 
     if driver.read(hmi.DigitalOutput, 1).wait_timeout(0.01):
         print("DO1 is on")
     else:
         print("DO1 is off")
+
+    if driver.read(hmi.DigitalInput, 1).wait_timeout(0.01):
+        print("DI1 is on")
+    else:
+        print("DI1 is off")
 
     groups = driver.read(hmi.GroupInput, 1, 40).wait_timeout(0.01)
     for i, group in enumerate(groups):
@@ -27,3 +32,7 @@ def main():
 
     # ASG has ALOT of functionality, so we won't cover it all here.
     # When the Rustdocs are finished it will delve more into it.
+
+
+if __name__ == "__main__":
+    main()

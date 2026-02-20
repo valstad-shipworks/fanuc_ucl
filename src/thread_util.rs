@@ -12,10 +12,13 @@ use std::{
     thread::JoinHandle,
 };
 
+/// Configuration for thread scheduling and CPU affinity.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Debug, Clone, Copy)]
 pub struct ThreadConfig {
+    /// Thread priority. If less than 1, the thread will be scheduled with SCHED_OTHER and a nice value of -8.
     pub priority: i32,
+    /// Optional CPU affinity. If set, the thread will be pinned to the specified CPU core.
     pub cpu_affinity: Option<usize>,
 }
 
@@ -107,7 +110,7 @@ fn configure_thread_scheduling(_prio: i32, _cpu_affinity: Option<usize>) -> io::
 }
 
 #[derive(Debug, Clone)]
-enum WakerVariant {
+pub(crate) enum WakerVariant {
     #[allow(dead_code)]
     Std(Arc<std::task::Waker>),
     Mio(Arc<mio::Waker>),

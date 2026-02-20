@@ -21,3 +21,4 @@ __pycache__/
 **/target/
 **/Cargo.lock
 .venv/
+.ruff_cache/

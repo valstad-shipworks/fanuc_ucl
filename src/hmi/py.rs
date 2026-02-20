@@ -198,7 +198,7 @@ impl HmiDriver {
 
     #[pyo3(name = "disconnect")]
     pub fn py_disconnect(&mut self) -> DriverResult<()> {
-        HmiDriver::disconnect(self)
+        HmiDriver::disconnect(self, true)
     }
 
     #[pyo3(name = "is_connected")]

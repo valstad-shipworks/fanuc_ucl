@@ -5,7 +5,37 @@ use std::{
 
 use crate::hmi::{HmiError, hmi_handle::HmiResult, proto::wire::Message};
 
-pub trait HmiWireable: Sized {
+#[doc(hidden)]
+pub(crate) mod __private {
+    use super::*;
+    pub trait Sealed {}
+    macro_rules! sealer {
+        ($($ty:ty),*) => {
+            $(
+                impl Sealed for $ty {}
+            )*
+        };
+    }
+    sealer! {
+        bool,
+        i8,
+        i16,
+        u16,
+        i32,
+        f32,
+        f64,
+        String,
+        CartesianData,
+        JointData,
+        FrameData,
+        PositionData,
+        AlarmData,
+        TimeData,
+        ProgramStatus
+    }
+}
+
+pub trait HmiWireable: Sized + __private::Sealed {
     const PACKED_SIZE: usize;
     const SYS_VAR_SIZE: usize;
     fn pack(&self, dst: &mut [u8]) -> usize;
@@ -668,6 +698,7 @@ pub mod position_struct {
         }
     }
 }
+pub use position_struct::*;
 
 pub mod alarm_struct {
     use int_enum::IntEnum;
@@ -864,6 +895,7 @@ pub mod alarm_struct {
         }
     }
 }
+pub use alarm_struct::*;
 
 pub mod prog_status {
     use int_enum::IntEnum;
@@ -951,6 +983,7 @@ pub mod prog_status {
         }
     }
 }
+pub use prog_status::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsgTypeMismatchError {

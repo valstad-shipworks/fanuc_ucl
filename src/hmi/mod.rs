@@ -42,6 +42,7 @@ pub use ports::{
 };
 pub use proto::asg;
 
+/// Errors that can occur during HMI communication with a FANUC robot controller.
 #[derive(Debug, thiserror::Error)]
 pub enum HmiError {
     #[error("Timeout")]
@@ -134,6 +135,8 @@ struct HmiConnection {
     to_runner: Sender<RunnerMessage>,
 }
 
+/// The main driver struct for interfacing with a FANUC robot via SNPX HMI.
+/// This struct manages the connection to the HMI, sending commands, reading/writing data ports, and registering ASG variables.
 #[cfg_attr(feature = "py", pyo3::pyclass)]
 #[derive(Debug)]
 pub struct HmiDriver {
@@ -144,6 +147,9 @@ pub struct HmiDriver {
 }
 
 impl HmiDriver {
+    /// Creates a new HmiDriver instance with the specified remote IP address of the HMI.
+    ///
+    /// This does not immediately establish a connection to the HMI; the [connect] method must be called to do so.
     pub fn new<T: Into<IpAddr>>(remote_addr: T) -> Self {
         Self {
             remote_addr: remote_addr.into(),
@@ -153,6 +159,9 @@ impl HmiDriver {
         }
     }
 
+    /// Connects to the HMI and performs the necessary handshake to establish communication.
+    ///
+    /// This method is blocking and will wait for the connection to be established and the handshake to complete, with an optional timeout.
     pub fn connect(
         &mut self,
         timeout: Option<Duration>,
@@ -190,35 +199,26 @@ impl HmiDriver {
         }
     }
 
-    pub fn disconnect(&mut self) -> DriverResult<()> {
+    /// Disconnects from the HMI, shutting down the runner thread and cleaning up resources.
+    pub fn disconnect(&mut self, ignore_join: bool) -> DriverResult<()> {
         if let Some(conn) = self.connection.take() {
             let _ = conn.to_runner.send(RunnerMessage::Shutdown);
             conn.handle.wake().map_err(HmiError::from)?;
-            conn.handle.join();
+            if !ignore_join {
+                conn.handle.join();
+            }
             Ok(())
         } else {
             Err(HmiError::NotConnected.into())
         }
     }
 
+    /// Checks if the driver is currently connected to the HMI.
     pub fn is_connected(&self) -> bool {
         self.connection
             .as_ref()
             .map(|conn| conn.handle.is_alive())
             .unwrap_or(false)
-    }
-
-    pub fn update_connection(&mut self) -> DriverResult<()> {
-        if let Some(conn) = &self.connection {
-            if conn.handle.is_alive() {
-                Ok(())
-            } else {
-                self.connection = None;
-                Err(HmiError::NotConnected.into())
-            }
-        } else {
-            Err(HmiError::NotConnected.into())
-        }
     }
 
     fn next_seq(&self) -> u8 {
@@ -262,6 +262,11 @@ impl HmiDriver {
             .map_err(Into::into)
     }
 
+    /// Writes to multiple contiguous port indexes for a given data port type, returning a handle to the asynchronous success response.
+    ///
+    /// # Safety
+    /// This function is unsafe because it allows writing to read-only ports.
+    /// Read only ports are advised against writing to but it is technically possible and mostly functional so it is exposed through a nuanced API here.
     pub fn write_array_unsafe<T: UnsafelyWritableDataPort>(
         &self,
         index: usize,
@@ -288,6 +293,11 @@ impl HmiDriver {
         ))
     }
 
+    /// Writes a single value to a data port, returning a handle to the asynchronous success response.
+    ///
+    /// # Safety
+    /// This function is unsafe because it allows writing to read-only ports.
+    /// Read only ports are advised against writing to but it is technically possible and mostly functional so it is exposed through a nuanced API here.
     #[inline]
     pub fn write_unsafe<T: UnsafelyWritableDataPort>(
         &self,
@@ -297,6 +307,7 @@ impl HmiDriver {
         self.write_array_unsafe::<T>(index, &[value])
     }
 
+    /// Writes to multiple contiguous port indexes for a given writable data port type, returning a handle to the asynchronous success response.
     #[inline]
     pub fn write_array<T: WritableDataPort>(
         &self,
@@ -306,6 +317,7 @@ impl HmiDriver {
         self.write_array_unsafe::<T>(index, values)
     }
 
+    /// Writes a single value to a writable data port at the given index, returning a handle to the asynchronous success response.
     #[inline]
     pub fn write<T: WritableDataPort>(
         &self,
@@ -315,6 +327,7 @@ impl HmiDriver {
         self.write_array::<T>(index, &[value])
     }
 
+    /// Reads multiple contiguous values from a readable data port starting at the given index, returning a handle to the asynchronous response containing the values.
     pub fn read_array<T: ReadableDataPort>(
         &self,
         index: usize,
@@ -343,6 +356,7 @@ impl HmiDriver {
         ))
     }
 
+    /// Reads a single value from a readable data port at the given index, returning a handle to the asynchronous response.
     pub fn read<T: ReadableDataPort>(&self, index: usize) -> DriverResult<HmiHandle<T::ValueType>>
     where
         T::ValueType: Send + Sync + 'static,
@@ -431,6 +445,7 @@ impl HmiDriver {
         Ok(AsgVarInterface::<T::Ret, N>::new(entry_arc))
     }
 
+    /// Sends a command to clear all active alarms on the controller.
     pub fn clear_alarms(&self) -> DriverResult<HmiHandle<()>> {
         self.write::<ports::Command>(0, "CLRALM".to_string())
     }

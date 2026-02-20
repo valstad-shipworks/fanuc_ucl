@@ -1,3 +1,4 @@
+/// A trait to be implemented on a scalar value that can be used to represent a joint value in a variety of datastructures.
 pub trait JointValue: Copy {
     fn to_f64(self) -> f64;
     fn from_f64(v: f64) -> Self;
@@ -49,6 +50,7 @@ impl JointValue for f32 {
     }
 }
 
+/// An enum represnting the unit quantity for a joint and how to handle conversions between different formats.
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JointType {
@@ -66,6 +68,7 @@ impl std::fmt::Display for JointType {
     }
 }
 
+/// A trait representing a joint representation that can be converted between different formats and units.
 pub trait JointRepr: std::fmt::Debug {
     fn to_deg(self, mask: &[JointType]) -> Self;
     fn to_rad(self, mask: &[JointType]) -> Self;
@@ -179,6 +182,18 @@ macro_rules! float_slice_joint {
     };
 }
 
+float_slice_joint!(f64, 3, std::f64::consts::PI);
+float_slice_joint!(&mut f64, 3, std::f64::consts::PI);
+float_slice_joint!(f32, 3, std::f32::consts::PI);
+float_slice_joint!(&mut f32, 3, std::f32::consts::PI);
+float_slice_joint!(f64, 4, std::f64::consts::PI);
+float_slice_joint!(&mut f64, 4, std::f64::consts::PI);
+float_slice_joint!(f32, 4, std::f32::consts::PI);
+float_slice_joint!(&mut f32, 4, std::f32::consts::PI);
+float_slice_joint!(f64, 5, std::f64::consts::PI);
+float_slice_joint!(&mut f64, 5, std::f64::consts::PI);
+float_slice_joint!(f32, 5, std::f32::consts::PI);
+float_slice_joint!(&mut f32, 5, std::f32::consts::PI);
 float_slice_joint!(f64, 6, std::f64::consts::PI);
 float_slice_joint!(&mut f64, 6, std::f64::consts::PI);
 float_slice_joint!(f32, 6, std::f32::consts::PI);
@@ -317,6 +332,18 @@ impl std::fmt::Display for JointDataSizeError {
 }
 impl std::error::Error for JointDataSizeError {}
 
+/// A datastructure representing the units/[``JointType``] of each joint in a robot, which can be used to convert between different formats and units.
+///
+/// [JointTemplate] comes with a variety of pre-defined templates for common robot configurations,
+/// but can also be constructed from a list of [JointType]s to represent custom robot configurations.
+///
+/// Premade templates include:
+/// - [JointTemplate::SIX]: A 6-axis robot with all rotary joints.
+/// - [JointTemplate::SIX_LINEAR_TRACK]: A 7-axis robot with 6 rotary joints and a linear track.
+/// - [JointTemplate::FOUR]: A 4-axis robot with all rotary joints.
+/// - [JointTemplate::FOUR_LINEAR_TRACK]: A 5-axis robot with 4 rotary joints and a linear track.
+/// - [JointTemplate::FIVE]: A 5-axis robot with all rotary joints.
+/// - [JointTemplate::FIVE_LINEAR_TRACK]: A 6-axis robot with 5 rotary joints and a linear track.
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy)]
 pub struct JointTemplate {
@@ -380,6 +407,11 @@ impl std::fmt::Display for JointTemplate {
     }
 }
 
+/// An enum representing the format of joint data,
+/// which can be used to convert between different formats and units to determine the appropriate conversions for each joint.
+///
+/// This enum is often passed into the API's in this library to know how to return the information in the appropriate format
+/// however users have access to [JointFormat::convert_from] to convert between formats on their own data as well.
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy)]
 pub enum JointFormat {

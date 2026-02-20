@@ -107,6 +107,8 @@ class ProgramStatus:
     parent_name: str
 
 class BoolIoSignal(IntEnum):
+    """Boolean I/O signal types available on a FANUC controller."""
+
     DigitalInput = 0
     DigitalOutput = 1
     RobotInput = 2
@@ -121,12 +123,16 @@ class BoolIoSignal(IntEnum):
     WireStickOutput = 11
 
 class IntIoSignal(IntEnum):
+    """Integer (group/analog) I/O signal types available on a FANUC controller."""
+
     GroupInput = 0
     GroupOutput = 1
     AnalogInput = 2
     AnalogOutput = 3
 
 class AlarmSource(IntEnum):
+    """Source log from which to read alarms on the controller."""
+
     Active = 0
     History = 1
     PasswordLog = 2
@@ -135,6 +141,8 @@ class AlarmSource(IntEnum):
     System = 5
 
 class ProgramStatusKind(IntEnum):
+    """The kind of program task to query status for."""
+
     Default = 0
     MacroCaller = 1
     KarelCaller = 2
@@ -143,8 +151,18 @@ class ProgramStatusKind(IntEnum):
 SysVarCompat = int | float | str | bool | PositionData
 
 class ReadOnlyAsgInterface(Generic[_V]):
-    def read(self, driver: HmiDriver) -> HmiHandle[_V]: ...
+    """A read-only interface for a registered ASG variable on the controller."""
+
+    def read(self, driver: HmiDriver) -> HmiHandle[_V]:
+        """Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response."""
+        ...
 
 class AsgInterface(Generic[_V], ReadOnlyAsgInterface[_V]):
-    def read(self, driver: HmiDriver) -> HmiHandle[_V]: ...
-    def write(self, driver: HmiDriver, value: _V) -> HmiHandle[None]: ...
+    """A typed interface for reading and writing a registered ASG variable on the controller."""
+
+    def read(self, driver: HmiDriver) -> HmiHandle[_V]:
+        """Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response."""
+        ...
+    def write(self, driver: HmiDriver, value: _V) -> HmiHandle[None]:
+        """Writes a value to this ASG variable on the controller, returning a handle to the asynchronous response."""
+        ...

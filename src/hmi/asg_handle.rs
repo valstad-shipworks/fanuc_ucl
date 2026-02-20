@@ -6,6 +6,9 @@ use crate::hmi::{
     proto::ports,
 };
 
+/// A typed interface for reading and writing a registered ASG variable on the controller.
+///
+/// `T` is the value type and `ARR` is the array size (1 for scalar variables).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsgVarInterface<T: AsgEncodableType, const ARR: usize = 1> {
     entry: Arc<AsgEntry>,
@@ -22,6 +25,7 @@ impl<T: AsgEncodableType, const ARR: usize> AsgVarInterface<T, ARR> {
 }
 
 impl<T: AsgEncodableType> AsgVarInterface<T, 1> {
+    /// Writes a value to this ASG variable on the controller, returning a handle to the asynchronous response.
     pub fn write(
         &self,
         driver: &HmiDriver,
@@ -31,6 +35,7 @@ impl<T: AsgEncodableType> AsgVarInterface<T, 1> {
         driver.write_array::<ports::Register>(self.entry.address as usize, bytes_to_i16(&bytes))
     }
 
+    /// Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response.
     pub fn read(&self, driver: &HmiDriver) -> DriverResult<HmiHandle<T>> {
         let gen_handle = driver
             .read_array::<ports::Register>(
@@ -95,6 +100,9 @@ arr_size_impl! {
     91, 92, 93, 94, 95, 96, 97, 98, 99, 100
 }
 
+/// Trait for types that describe an ASG variable to be registered on the controller.
+///
+/// Implementors define how to produce an [`AsgEntry`] from their configuration fields.
 pub trait AsgArgument: Sized + Send + Sync + 'static {
     type Ret: AsgEncodableType;
     const WRITABLE: bool = true;
@@ -102,6 +110,7 @@ pub trait AsgArgument: Sized + Send + Sync + 'static {
     fn to_asg_entry(self) -> AsgEntry;
 }
 
+/// Arguments for registering a position register (`PR[...]`) as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct PosRegArgs {
     pub index: u16,
@@ -148,6 +157,7 @@ impl AsgArgument for PosRegArgs {
     }
 }
 
+/// Arguments for registering the current position (`POS[...]`) as a read-only ASG variable.
 #[derive(Debug, Clone)]
 pub struct CurPosArgs {
     pub frame: i8,
@@ -195,6 +205,7 @@ impl AsgArgument for CurPosArgs {
     }
 }
 
+/// Arguments for registering a numeric register (`R[...]`) as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct NumRegArgs {
     pub index: u16,
@@ -241,6 +252,7 @@ fn format_slice_suffix(default_len: u16, range: Option<(u16, u16)>) -> (u16, u16
     }
 }
 
+/// Arguments for registering a string register (`SR[...]`) as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct StringRegArgs {
     pub index: u16,
@@ -279,6 +291,7 @@ impl AsgArgument for StringRegArgs {
     }
 }
 
+/// Boolean I/O signal types available on a FANUC controller.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolIoSignal {
@@ -334,6 +347,7 @@ impl std::fmt::Display for BoolIoSignal {
     }
 }
 
+/// Arguments for registering a boolean I/O signal as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct BoolIoArgs {
     pub signal: BoolIoSignal,
@@ -376,6 +390,7 @@ impl AsgArgument for BoolIoArgs {
     }
 }
 
+/// Integer (group/analog) I/O signal types available on a FANUC controller.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntIoSignal {
@@ -407,6 +422,7 @@ impl std::fmt::Display for IntIoSignal {
     }
 }
 
+/// Arguments for registering an integer I/O signal as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct IntIoArgs {
     pub signal: IntIoSignal,
@@ -449,6 +465,7 @@ impl AsgArgument for IntIoArgs {
     }
 }
 
+/// Source log from which to read alarms on the controller.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlarmSource {
@@ -492,6 +509,7 @@ impl std::fmt::Display for AlarmSource {
     }
 }
 
+/// Arguments for registering an alarm entry as a read-only ASG variable.
 #[derive(Debug, Clone)]
 pub struct AlarmArgs {
     pub source: AlarmSource,
@@ -534,6 +552,7 @@ impl AsgArgument for AlarmArgs {
     }
 }
 
+/// The kind of program task to query status for.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramStatusKind {
@@ -571,6 +590,7 @@ impl std::fmt::Display for ProgramStatusKind {
     }
 }
 
+/// Arguments for registering a program status entry as a read-only ASG variable.
 #[derive(Debug, Clone)]
 pub struct ProgramStatusArgs {
     pub task: u16,
@@ -613,6 +633,7 @@ impl AsgArgument for ProgramStatusArgs {
     }
 }
 
+/// Arguments for registering an arbitrary system variable by name as an ASG variable.
 #[derive(Debug, Clone)]
 pub struct SysVarArgs<T: asg::SysVarVal> {
     pub var_name: String,
