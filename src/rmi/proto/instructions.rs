@@ -966,6 +966,7 @@ pub struct FrcCircularRelative {
 impl FrcCircularRelative {
     #[on(new)]
     #[on(pyo3(signature = (configuration, position, via_configuration, via_position, speed_type, speed, term_type, term_value)))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         configuration: Configuration,
         position: Position,
@@ -1066,6 +1067,7 @@ pub struct FrcCircularMotion {
 impl FrcCircularMotion {
     #[on(new)]
     #[on(pyo3(signature = (configuration, position, via_configuration, via_position, speed_type, speed, term_type, term_value)))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         configuration: Configuration,
         position: Position,

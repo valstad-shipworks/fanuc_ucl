@@ -48,7 +48,7 @@ pub trait UnsafelyWritableDataPort: DataPort {
         std::mem::size_of::<Self::ValueType>()
     }
     fn size_of_array(_target_idx: u16, values: &[Self::ValueType]) -> usize {
-        std::mem::size_of::<Self::ValueType>() * values.len()
+        std::mem::size_of_val(values)
     }
     fn item_count(_target_idx: u16, values: &[Self::ValueType]) -> u16 {
         values.len() as u16
@@ -142,7 +142,7 @@ macro_rules! readable_impl {
                 let mut out = Vec::with_capacity(count as usize);
                 let start_byte = (target_idx / 8) as usize;
                 let end_bit = target_idx + count;
-                let end_byte = ((end_bit + 7) / 8) as usize;
+                let end_byte = end_bit.div_ceil(8) as usize;
                 let mut current_bit = target_idx;
                 for byte_idx in start_byte..end_byte {
                     let byte = data[byte_idx];
@@ -234,7 +234,7 @@ macro_rules! writable_impl {
             #[inline]
             fn size_of_array(target_idx: u16, values: &[Self::ValueType]) -> usize {
                 let total_bits = target_idx as usize % 8 + values.len();
-                (total_bits + 7) / 8
+                total_bits.div_ceil(8)
             }
         }
     };

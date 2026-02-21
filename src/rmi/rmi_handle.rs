@@ -101,12 +101,11 @@ impl ResponseHandle for RmiHandleGeneric {
         self.resp
             .0
             .get()
-            .map(|r| match r {
+            .and_then(|r| match r {
                 ResponseOrError::Response(_, t) => Some(*t),
                 ResponseOrError::Error(_, t) => Some(*t),
                 ResponseOrError::Skipped => None,
             })
-            .flatten()
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
@@ -214,12 +213,6 @@ pub struct RmiQueueGeneric {
 }
 
 impl RmiQueueGeneric {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
     pub fn push(&mut self, handle: RmiHandleGeneric) {
         self.queue.push_back(handle);
     }
@@ -297,13 +290,6 @@ pub struct RmiQueue<T: ReceivablePacket> {
 }
 
 impl<T: ReceivablePacket> RmiQueue<T> {
-    pub fn new() -> Self {
-        Self {
-            generic: RmiQueueGeneric::new(),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
     pub fn push(&mut self, handle: RmiHandle<T>) {
         self.generic.push(handle.generic());
     }

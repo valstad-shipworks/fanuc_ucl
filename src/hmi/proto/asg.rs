@@ -155,7 +155,7 @@ impl HmiWireable for i16 {
         2
     }
     fn pack_sysvar(&self, dst: &mut [u8]) -> usize {
-        (self.clone() as i32).pack_sysvar(dst)
+        (*self as i32).pack_sysvar(dst)
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 2 {
@@ -184,7 +184,7 @@ impl HmiWireable for u16 {
         2
     }
     fn pack_sysvar(&self, dst: &mut [u8]) -> usize {
-        (self.clone() as i32).pack_sysvar(dst)
+        (*self as i32).pack_sysvar(dst)
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 2 {
@@ -212,7 +212,7 @@ impl HmiWireable for i8 {
         1
     }
     fn pack_sysvar(&self, dst: &mut [u8]) -> usize {
-        (self.clone() as i32).pack_sysvar(dst)
+        (*self as i32).pack_sysvar(dst)
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.is_empty() {
@@ -238,7 +238,7 @@ impl HmiWireable for bool {
         1
     }
     fn pack_sysvar(&self, dst: &mut [u8]) -> usize {
-        (self.clone() as i16).pack_sysvar(dst)
+        (*self as i16).pack_sysvar(dst)
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.is_empty() {
@@ -259,6 +259,7 @@ impl HmiWireable for bool {
 impl HmiWireable for String {
     const PACKED_SIZE: usize = 80;
     const SYS_VAR_SIZE: usize = 80;
+    #[allow(clippy::needless_range_loop)]
     fn pack(&self, dst: &mut [u8]) -> usize {
         let bytes = self.as_bytes();
         let len = bytes.len().min(80);
@@ -634,6 +635,7 @@ pub mod position_struct {
             }
             offset
         }
+        #[allow(clippy::needless_range_loop)]
         fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
             let mut offset = 0;
             let (uf, sz) = i16::unpack(&src[offset..])?;
@@ -1187,56 +1189,47 @@ impl AsgEntry {
         }
         Ok(match value {
             AsgValue::Integer(v) => {
-                let mut buf = Vec::with_capacity(i32::SYS_VAR_SIZE);
-                buf.resize(i32::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; i32::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Short(v) => {
-                let mut buf = Vec::with_capacity(i16::SYS_VAR_SIZE);
-                buf.resize(i16::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; i16::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Byte(v) => {
-                let mut buf = Vec::with_capacity(i8::SYS_VAR_SIZE);
-                buf.resize(i8::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; i8::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Real(v) => {
-                let mut buf = Vec::with_capacity(f32::SYS_VAR_SIZE);
-                buf.resize(f32::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; f32::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Bool(v) => {
-                let mut buf = Vec::with_capacity(bool::SYS_VAR_SIZE);
-                buf.resize(bool::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; bool::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::String(v) => {
-                let mut buf = Vec::with_capacity(String::SYS_VAR_SIZE);
-                buf.resize(String::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; String::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Position(v) => {
-                let mut buf = Vec::with_capacity(position_struct::PositionData::SYS_VAR_SIZE);
-                buf.resize(position_struct::PositionData::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; position_struct::PositionData::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Alarm(v) => {
-                let mut buf = Vec::with_capacity(alarm_struct::AlarmData::SYS_VAR_SIZE);
-                buf.resize(alarm_struct::AlarmData::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; alarm_struct::AlarmData::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }
             AsgValue::Program(v) => {
-                let mut buf = Vec::with_capacity(prog_status::ProgramStatus::SYS_VAR_SIZE);
-                buf.resize(prog_status::ProgramStatus::SYS_VAR_SIZE, 0);
+                let mut buf = vec![0; prog_status::ProgramStatus::SYS_VAR_SIZE];
                 v.pack_sysvar(&mut buf);
                 buf
             }

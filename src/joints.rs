@@ -75,6 +75,9 @@ pub trait JointRepr: std::fmt::Debug {
     fn to_fanuc(self) -> Self;
     fn to_abs(self) -> Self;
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn to_array<const N: usize, D: JointValue>(
         self,
         fill_missing_nan: bool,
@@ -103,11 +106,11 @@ macro_rules! float_slice_joint {
                 self
             }
             fn to_fanuc(self) -> Self {
-                self[2] = self[2] - self[1];
+                self[2] -= self[1];
                 self
             }
             fn to_abs(self) -> Self {
-                self[2] = self[2] + self[1];
+                self[2] += self[1];
                 self
             }
 
@@ -153,11 +156,11 @@ macro_rules! float_slice_joint {
                 self
             }
             fn to_fanuc(mut self) -> Self {
-                self[2] = self[2] - self[1];
+                self[2] -= self[1];
                 self
             }
             fn to_abs(mut self) -> Self {
-                self[2] = self[2] + self[1];
+                self[2] += self[1];
                 self
             }
             fn len(&self) -> usize {
@@ -234,13 +237,13 @@ macro_rules! float_vec_joint {
             }
             fn to_fanuc(self) -> Self {
                 if self.len() >= 3 {
-                    self[2] = self[2] - self[1];
+                    self[2] -= self[1];
                 }
                 self
             }
             fn to_abs(self) -> Self {
                 if self.len() >= 3 {
-                    self[2] = self[2] + self[1];
+                    self[2] += self[1];
                 }
                 self
             }
@@ -286,13 +289,13 @@ macro_rules! float_vec_joint {
             }
             fn to_fanuc(mut self) -> Self {
                 if self.len() >= 3 {
-                    self[2] = self[2] - self[1];
+                    self[2] -= self[1];
                 }
                 self
             }
             fn to_abs(mut self) -> Self {
                 if self.len() >= 3 {
-                    self[2] = self[2] + self[1];
+                    self[2] += self[1];
                 }
                 self
             }

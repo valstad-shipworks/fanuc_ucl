@@ -158,20 +158,11 @@ impl AsgArgument for PosRegArgs {
 }
 
 /// Arguments for registering the current position (`POS[...]`) as a read-only ASG variable.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct CurPosArgs {
     pub frame: i8,
     pub group: Option<u8>,
     pub range: Option<(u16, u16)>,
-}
-impl Default for CurPosArgs {
-    fn default() -> Self {
-        Self {
-            frame: 0,
-            group: None,
-            range: None,
-        }
-    }
 }
 impl AsgArgument for CurPosArgs {
     type Ret = asg::position_struct::PositionData;
@@ -468,7 +459,9 @@ impl AsgArgument for IntIoArgs {
 /// Source log from which to read alarms on the controller.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlarmSource {
+    #[default]
     Active,
     History,
     PasswordLog,
@@ -477,11 +470,6 @@ pub enum AlarmSource {
     System,
 }
 
-impl Default for AlarmSource {
-    fn default() -> Self {
-        AlarmSource::Active
-    }
-}
 
 impl AlarmSource {
     fn prefix(&self) -> &'static str {
@@ -555,18 +543,15 @@ impl AsgArgument for AlarmArgs {
 /// The kind of program task to query status for.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ProgramStatusKind {
+    #[default]
     Default,
     MacroCaller,
     KarelCaller,
     MacroOrKarel,
 }
 
-impl Default for ProgramStatusKind {
-    fn default() -> Self {
-        ProgramStatusKind::Default
-    }
-}
 
 impl ProgramStatusKind {
     fn prefix(&self) -> &'static str {

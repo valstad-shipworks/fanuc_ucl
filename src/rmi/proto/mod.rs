@@ -17,7 +17,7 @@ pub use member_structs::*;
 macro_rules! zst_filler {
     ($name:ident) => {
         #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-        #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct $name;
 
         #[cfg_mixin::cfg_mixin(feature = "py")]

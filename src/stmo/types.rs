@@ -143,7 +143,7 @@ impl std::fmt::Display for AxisMotionConstraint {
  */
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimit {
     #[on(pyo3(get))]
     pub velocity: AxisMotionConstraint,
@@ -187,16 +187,6 @@ impl JointMovementLimit {
     }
 }
 
-impl Default for JointMovementLimit {
-    fn default() -> Self {
-        Self {
-            velocity: AxisMotionConstraint::default(),
-            acceleration: AxisMotionConstraint::default(),
-            jerk: AxisMotionConstraint::default(),
-        }
-    }
-}
-
 impl std::fmt::Display for JointMovementLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let opening = if cfg!(feature = "py") { "(" } else { "{" };
@@ -215,6 +205,7 @@ impl std::fmt::Display for JointMovementLimit {
  */
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct JointMovementLimits {
     pub vmax: u32,
     pub joints: [Option<JointMovementLimit>; 9],
@@ -252,14 +243,6 @@ impl JointMovementLimits {
     }
 }
 
-impl Default for JointMovementLimits {
-    fn default() -> Self {
-        Self {
-            vmax: 0,
-            joints: [None; 9],
-        }
-    }
-}
 
 #[cfg(feature = "py")]
 #[pyo3::pymethods]

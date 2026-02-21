@@ -55,6 +55,7 @@ impl Display for PoseData {
 impl PoseData {
     #[on(new)]
     #[on(pyo3(signature = (x, y, z, w, p, r, e1=0.0, e2=0.0, e3=0.0)))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(x: f32, y: f32, z: f32, w: f32, p: f32, r: f32, e1: f32, e2: f32, e3: f32) -> Self {
         Self {
             x,
@@ -727,7 +728,7 @@ impl TxPackets {
             TxPackets::MotionCommand(ref pkt) => {
                 if pkt.should_cast_to_single(version) {
                     let single: MotionCommandPacketSingle = (*pkt).into();
-                    bincode::encode_into_slice(&single, data_buf, cfg)
+                    bincode::encode_into_slice(single, data_buf, cfg)
                         .expect("Failed to encode MotionCommandPacketSingle")
                 } else {
                     bincode::encode_into_slice(pkt, data_buf, cfg)
@@ -853,9 +854,9 @@ mod tests {
             read_io_mask: 0xabcd,
             joint_format: true,
             write_io_type: IoType::WI,
-            write_io_index: 0b01010101_1010101,
-            write_io_mask: 0b01010101_1010101,
-            write_io_value: 0b01010101_1010101,
+            write_io_index: 0b010_1010_1101_0101,
+            write_io_mask: 0b010_1010_1101_0101,
+            write_io_value: 0b010_1010_1101_0101,
             unused: 0xFFFF,
             position: [
                 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1_000.0, 10_000.0, 100_000.0,
@@ -879,9 +880,9 @@ mod tests {
             read_io_mask: 0xabcd,
             joint_format: true,
             write_io_type: IoType::WI,
-            write_io_index: 0b01010101_1010101,
-            write_io_mask: 0b01010101_1010101,
-            write_io_value: 0b01010101_1010101,
+            write_io_index: 0b010_1010_1101_0101,
+            write_io_mask: 0b010_1010_1101_0101,
+            write_io_value: 0b010_1010_1101_0101,
             unused: [0xFFFF, 0x3333, 0x3333],
             position: [
                 0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1_000.0, 10_000.0, 100_000.0,
@@ -912,15 +913,15 @@ mod tests {
         assert_eq!(bincode_bytes[11], IoType::WI as u8);
         assert_eq!(
             u16::from_be_bytes(bincode_bytes[12..14].try_into().unwrap()),
-            0b01010101_1010101
+            0b010_1010_1101_0101
         );
         assert_eq!(
             u16::from_be_bytes(bincode_bytes[14..16].try_into().unwrap()),
-            0b01010101_1010101
+            0b010_1010_1101_0101
         );
         assert_eq!(
             u16::from_be_bytes(bincode_bytes[16..18].try_into().unwrap()),
-            0b01010101_1010101
+            0b010_1010_1101_0101
         );
         assert_eq!(
             u16::from_be_bytes(bincode_bytes[18..20].try_into().unwrap()),

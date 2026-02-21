@@ -141,7 +141,7 @@ impl crate::rmi::ReceivablePacket for FrcTerminateResponse {
 }
 impl std::fmt::Display for FrcTerminateResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(self.clone()))
+        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(*self))
             .map_err(|_| std::fmt::Error)?;
         write!(f, "{}", json_string)
     }
@@ -173,7 +173,7 @@ impl crate::rmi::ReceivablePacket for FrcSystemFaultResponse {
 }
 impl std::fmt::Display for FrcSystemFaultResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(self.clone()))
+        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(*self))
             .map_err(|_| std::fmt::Error)?;
         write!(f, "{}", json_string)
     }

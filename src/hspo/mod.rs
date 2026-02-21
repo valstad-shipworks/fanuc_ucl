@@ -141,7 +141,7 @@ impl std::fmt::Display for JointAnglesPacket {
             self.clock,
             self.typ,
             self.motion_group,
-            self.joints.iter().map(|d| d).collect::<Vec<_>>(),
+            self.joints.iter().collect::<Vec<_>>(),
             self.status,
             self.io
         )
@@ -175,7 +175,7 @@ impl std::fmt::Display for VariablesPacket {
             self.index,
             self.clock,
             self.typ,
-            self.data.iter().map(|d| d).collect::<Vec<_>>()
+            self.data.iter().collect::<Vec<_>>()
         )
     }
 }
@@ -421,17 +421,17 @@ impl HspoReceiver {
 
     /// Discards all buffered joint angles packets.
     pub fn clear_joint_packet_buffer(&self) {
-        while let Ok(_) = self.joint_rx.try_recv() {}
+        while self.joint_rx.try_recv().is_ok() {}
     }
 
     /// Discards all buffered TCP cartesian position packets.
     pub fn clear_tcp_packet_buffer(&self) {
-        while let Ok(_) = self.tcp_rx.try_recv() {}
+        while self.tcp_rx.try_recv().is_ok() {}
     }
 
     /// Discards all buffered variables packets.
     pub fn clear_var_packet_buffer(&self) {
-        while let Ok(_) = self.var_rx.try_recv() {}
+        while self.var_rx.try_recv().is_ok() {}
     }
 }
 
@@ -498,7 +498,7 @@ impl HspoBroker {
                 let mut poll = Poll::new().expect("Failed to create Poll instance");
                 let mut events = Events::with_capacity(256);
                 let mut socket =
-                    MioUdpSocket::bind(listen_on.into()).expect("Failed to bind UDP socket");
+                    MioUdpSocket::bind(listen_on).expect("Failed to bind UDP socket");
                 poll.registry()
                     .register(&mut socket, TOK_SOCKET, Interest::READABLE)
                     .expect("Failed to register UDP socket with poll");

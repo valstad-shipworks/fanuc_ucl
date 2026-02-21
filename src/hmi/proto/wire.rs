@@ -567,7 +567,7 @@ impl Message {
                 body: Body::Req {
                     service_request: ServiceRequestCode::WriteSysMemory,
                     segment: T::SEGMENT,
-                    payload: payload,
+                    payload,
                     target_index: index,
                     target_size: data_count,
                     unk: 0,

@@ -158,6 +158,7 @@ pub struct JointAngles {
 impl JointAngles {
     #[on(new)]
     #[on(pyo3(signature = (format, template, j1, j2, j3, j4, j5, j6, j7=0.0, j8=0.0, j9=0.0)))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new9(
         format: JointFormat,
         template: JointTemplate,
@@ -186,6 +187,7 @@ impl JointAngles {
     }
 
     #[cfg(off)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new6(
         format: JointFormat,
         template: JointTemplate,
@@ -226,7 +228,7 @@ impl std::fmt::Display for JointAngles {
 
 impl JointRepr for JointAngles {
     fn to_deg(mut self, mask: &[JointType]) -> Self {
-        if mask.len() > 0 && mask[0] == JointType::Rotary {
+        if !mask.is_empty() && mask[0] == JointType::Rotary {
             self.j1 = self.j1.to_degrees();
         }
         if mask.len() > 1 && mask[1] == JointType::Rotary {
@@ -257,7 +259,7 @@ impl JointRepr for JointAngles {
     }
 
     fn to_rad(mut self, mask: &[JointType]) -> Self {
-        if mask.len() > 0 && mask[0] == JointType::Rotary {
+        if !mask.is_empty() && mask[0] == JointType::Rotary {
             self.j1 = self.j1.to_radians();
         }
         if mask.len() > 1 && mask[1] == JointType::Rotary {
@@ -358,7 +360,7 @@ pub struct LocalConditionBlock {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetRegisterNumbers {
     #[on(pyo3(get, set))]
     #[serde(
@@ -381,16 +383,6 @@ pub struct OffsetRegisterNumbers {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_offset: Option<u16>,
-}
-
-impl Default for OffsetRegisterNumbers {
-    fn default() -> Self {
-        Self {
-            offset: None,
-            vision_offset: None,
-            tool_offset: None,
-        }
-    }
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]

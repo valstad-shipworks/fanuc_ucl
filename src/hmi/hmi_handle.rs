@@ -40,7 +40,7 @@ pub(super) fn caster_singular<T: ReadableDataPort>(
         );
         return Err(HmiError::MalformedResponse);
     }
-    return Ok(T::unpack_single(target, payload));
+    Ok(T::unpack_single(target, payload))
 }
 
 pub(super) fn caster_array<T: ReadableDataPort>(
@@ -125,10 +125,9 @@ impl ResponseHandle for HmiHandleGeneric {
             .0
             .get()
             .map(|r| match r {
-                ResponseOrError::Response(_, t) => Some(*t),
-                ResponseOrError::Error(_, t) => Some(*t),
+                ResponseOrError::Response(_, t) => *t,
+                ResponseOrError::Error(_, t) => *t,
             })
-            .flatten()
     }
 
     /// Blocks until the response arrives or the timeout elapses, returning [`HmiError::Timeout`] on expiry.
