@@ -3,11 +3,11 @@ from enum import Enum
 from . import hspo, rmi, stmo
 
 __all__ = [
-    "stmo",
-    "rmi",
-    "hspo",
-    "ThreadConfig",
     "JointFormat",
+    "ThreadConfig",
+    "hspo",
+    "rmi",
+    "stmo",
 ]
 
 class ThreadConfig:
@@ -58,10 +58,12 @@ class JointFormat(Enum):
     FanucDeg = 4
 
     def convert_from(
-        self, format: JointFormat, template: JointTemplate, joints: list[float]
+        self,
+        format: JointFormat,
+        template: JointTemplate,
+        joints: list[float],
     ) -> list[float]:
         """Converts joint data from ``format`` into ``self``, using the given template to determine per-joint conversions."""
-        ...
 
 class LoggingLevel(Enum):
     Err = "ERR"
@@ -71,9 +73,7 @@ class LoggingLevel(Enum):
     Trace = "TRACE"
 
 def config_logging(level: LoggingLevel) -> None:
-    """
-    Configure logging level for the Fanuc driver.
+    """Configure logging level for the Fanuc driver.
 
     :param LoggingLevel level: The desired logging level.
     """
-    ...

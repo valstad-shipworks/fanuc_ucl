@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_map_on_constructor, clippy::useless_conversion)]
+
 use std::{
     collections::VecDeque,
     io,
@@ -148,7 +150,7 @@ impl StreamMotionContext {
                 if !vec.is_empty() {
                     return vec.pop();
                 } else {
-                    self.motion_command_queue.pop_front();
+                    let _ = self.motion_command_queue.pop_front();
                     return self.next_motion_command();
                 }
             }
@@ -219,7 +221,7 @@ impl StreamMotionContext {
                                                     );
                                                 }
                                                 let mut cmd =
-                                                    MotionCommandPacket::from_status(&state, false);
+                                                    MotionCommandPacket::from_status(state, false);
                                                 cmd.seq = state.seq;
                                                 let _ = self.send(
                                                     TxPackets::MotionCommand(cmd),
@@ -421,7 +423,7 @@ impl StreamMotionDriver {
     }
 
     pub fn command_motion(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
-        if let None = &self.connection {
+        if self.connection.is_none() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);
         }
         if !self.is_started() {
@@ -439,7 +441,7 @@ impl StreamMotionDriver {
         if motions.len() == 1 {
             return self.command_motion(motions.pop().unwrap());
         }
-        if let None = &self.connection {
+        if self.connection.is_none() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);
         }
         if !self.is_started() {
@@ -536,11 +538,10 @@ impl StreamMotionDriver {
             let mut started = false;
             while start_time.elapsed() < timeout {
                 let remaining = end_time.saturating_duration_since(Instant::now());
-                match conn.from_thread.recv_timeout(remaining) {
-                    Ok(RxPackets::VersionNumberResponse(_)) => {
-                        started = true;
-                    }
-                    _ => {}
+                if let Ok(RxPackets::VersionNumberResponse(_)) =
+                    conn.from_thread.recv_timeout(remaining)
+                {
+                    started = true;
                 }
             }
             if !started {
@@ -580,6 +581,7 @@ impl StreamMotionDriver {
     }
 
     #[on(pyo3(signature = (extra_axis=0)))]
+    #[allow(clippy::needless_range_loop)]
     pub fn fetch_movement_limits(&mut self, extra_axis: u8) -> DriverResult<JointMovementLimits> {
         if !self.is_connected() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);

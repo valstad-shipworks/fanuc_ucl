@@ -9,7 +9,7 @@ def main():
     joint_packet = receiver.wait_for_joint_packet(0.016)
     if joint_packet is not None:
         print(
-            f"Received joint packet: {joint_packet.joints(JointFormat.AbsDeg, JointTemplate.SIX)}"
+            f"Received joint packet: {joint_packet.joints(JointFormat.AbsDeg, JointTemplate.SIX)}",
         )
 
     receiver.clear_tcp_packet_buffer()

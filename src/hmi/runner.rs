@@ -86,7 +86,7 @@ impl HmiRunner {
             })?;
         let waker = waker_rx
             .recv()
-            .map_err(|e| HmiError::Io(IoError::new(ErrorKind::Other, e)))?;
+            .map_err(|e| HmiError::Io(IoError::other(e)))?;
         tracing::trace!("HMI runner started");
         Ok((join_handle, waker))
     }
@@ -117,12 +117,7 @@ impl HmiRunner {
                 {
                     self.tcp_stream
                         .set_nodelay(true)
-                        .map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "Failed to set TCP_NODELAY",
-                            )
-                        })
+                        .map_err(|_| std::io::Error::other("Failed to set TCP_NODELAY"))
                         .map_err(HmiError::from)?;
                     connection_established = true;
                 }

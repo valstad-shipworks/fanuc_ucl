@@ -1,3 +1,49 @@
+#![doc = include_str!("../README.md")]
+// #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
+// #![deny(
+//     missing_copy_implementations,
+//     single_use_lifetimes,
+//     variant_size_differences,
+//     arithmetic_overflow,
+//     missing_debug_implementations,
+//     trivial_casts,
+//     trivial_numeric_casts,
+//     unused_import_braces,
+//     unused_lifetimes,
+//     unused_unsafe,
+//     useless_ptr_null_checks,
+//     while_true,
+//     unused_features,
+//     absolute_paths_not_starting_with_crate,
+//     unused_allocation,
+//     unreachable_code,
+//     unused_comparisons,
+//     unused_parens,
+//     asm_sub_register,
+//     break_with_label_and_loop,
+//     bindings_with_variant_name,
+//     anonymous_parameters,
+//     clippy::unwrap_used,
+//     clippy::panicking_unwrap,
+//     missing_abi,
+//     clippy::missing_safety_doc,
+//     clippy::missing_asserts_for_indexing,
+//     clippy::missing_assert_message,
+//     clippy::possible_missing_comma,
+//     deprecated
+// )]
+// #![allow(clippy::module_name_repetitions, clippy::option_if_let_else)]
+// #![cfg_attr(
+//     not(test),
+//     forbid(
+//         clippy::panic,
+//         clippy::todo,
+//         clippy::unimplemented,
+//         clippy::expect_used
+//     )
+// )]
+// #![cfg_attr(not(test), warn(missing_docs))]
+
 #[cfg(feature = "hmi")]
 pub mod hmi;
 #[cfg(feature = "hspo")]
@@ -138,7 +184,7 @@ pub trait ResponseHandle:
     fn wait(&self) -> Result<Self::Ret, Self::Error>;
 }
 
-#[cfg(any(feature = "stmo"))]
+#[cfg(feature = "stmo")]
 #[macro_export]
 #[doc(hidden)]
 macro_rules! bincode_enum {
@@ -195,7 +241,7 @@ macro_rules! bincode_enum {
             }
         }
 
-        impl<'de, Ctx> bincode::de::BorrowDecode<'de, Ctx> for $enm {
+        impl<Ctx> bincode::de::BorrowDecode<'_, Ctx> for $enm {
             fn borrow_decode<D: bincode::de::Decoder<Context = Ctx>>(
                 decoder: &mut D,
             ) -> Result<Self, bincode::error::DecodeError> {

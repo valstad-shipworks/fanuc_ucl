@@ -150,7 +150,7 @@ impl<Ctx> bincode::Decode<Ctx> for PlcStatusFlags {
         Ok(PlcStatusFlags::from_bits_retain(variant_int))
     }
 }
-impl<'de, Ctx> bincode::de::BorrowDecode<'de, Ctx> for PlcStatusFlags {
+impl<Ctx> bincode::de::BorrowDecode<'_, Ctx> for PlcStatusFlags {
     fn borrow_decode<D: bincode::de::Decoder<Context = Ctx>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {
@@ -567,9 +567,9 @@ impl Message {
                 body: Body::Req {
                     service_request: ServiceRequestCode::WriteSysMemory,
                     segment: T::SEGMENT,
-                    payload: payload,
+                    payload,
                     target_index: index,
-                    target_size: data_count as u16,
+                    target_size: data_count,
                     unk: 0,
                 },
             }
@@ -600,7 +600,7 @@ impl Message {
                     service_request: ServiceRequestCode::WriteSysMemory,
                     segment: T::SEGMENT,
                     target_index: index,
-                    target_size: data_count as u16,
+                    target_size: data_count,
                     payload,
                 },
             }

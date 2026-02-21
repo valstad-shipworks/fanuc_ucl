@@ -5,7 +5,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use crate::joints::{JointFormat, JointRepr, JointTemplate, JointType, JointValue};
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnOff {
     ON,
     OFF,
@@ -35,7 +35,7 @@ macro_rules! impl_monostate_member {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationType {
     Handling,
     Arc,
@@ -44,7 +44,7 @@ pub enum ApplicationType {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PalletizingMode {
     ZERODN,
     ZEROUP,
@@ -55,7 +55,7 @@ pub enum PalletizingMode {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrameData {
     pub x: f32,
     pub y: f32,
@@ -66,7 +66,7 @@ pub struct FrameData {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configuration {
     #[serde(rename = "UToolNumber")]
     pub u_tool_number: u8,
@@ -137,7 +137,7 @@ impl Default for Position {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object, get_all, set_all))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct JointAngles {
     pub j1: f32,
@@ -158,6 +158,7 @@ pub struct JointAngles {
 impl JointAngles {
     #[on(new)]
     #[on(pyo3(signature = (format, template, j1, j2, j3, j4, j5, j6, j7=0.0, j8=0.0, j9=0.0)))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new9(
         format: JointFormat,
         template: JointTemplate,
@@ -186,6 +187,7 @@ impl JointAngles {
     }
 
     #[cfg(off)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new6(
         format: JointFormat,
         template: JointTemplate,
@@ -226,7 +228,7 @@ impl std::fmt::Display for JointAngles {
 
 impl JointRepr for JointAngles {
     fn to_deg(mut self, mask: &[JointType]) -> Self {
-        if mask.len() > 0 && mask[0] == JointType::Rotary {
+        if !mask.is_empty() && mask[0] == JointType::Rotary {
             self.j1 = self.j1.to_degrees();
         }
         if mask.len() > 1 && mask[1] == JointType::Rotary {
@@ -257,7 +259,7 @@ impl JointRepr for JointAngles {
     }
 
     fn to_rad(mut self, mask: &[JointType]) -> Self {
-        if mask.len() > 0 && mask[0] == JointType::Rotary {
+        if !mask.is_empty() && mask[0] == JointType::Rotary {
             self.j1 = self.j1.to_radians();
         }
         if mask.len() > 1 && mask[1] == JointType::Rotary {
@@ -337,7 +339,7 @@ pub enum PortType {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalConditionBlock {
     #[on(pyo3(get, set))]
     #[serde(rename = "LCBType")]
@@ -358,7 +360,7 @@ pub struct LocalConditionBlock {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetRegisterNumbers {
     #[on(pyo3(get, set))]
     #[serde(
@@ -383,18 +385,8 @@ pub struct OffsetRegisterNumbers {
     pub tool_offset: Option<u16>,
 }
 
-impl Default for OffsetRegisterNumbers {
-    fn default() -> Self {
-        Self {
-            offset: None,
-            vision_offset: None,
-            tool_offset: None,
-        }
-    }
-}
-
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermType {
     FINE,
     /// Continuous motion
@@ -415,7 +407,7 @@ pub enum TermType {
 /// * `Time` - Represents time in 0.1 second increments.
 /// * `MilliSeconds` - Represents time in milliseconds (0.001 seconds).
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedType {
     #[serde(rename = "mmSec")]
     MMSec, // Speed in millimeters per second (mm/sec).

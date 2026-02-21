@@ -40,7 +40,7 @@ pub(super) fn caster_singular<T: ReadableDataPort>(
         );
         return Err(HmiError::MalformedResponse);
     }
-    return Ok(T::unpack_single(target, payload));
+    Ok(T::unpack_single(target, payload))
 }
 
 pub(super) fn caster_array<T: ReadableDataPort>(
@@ -121,14 +121,10 @@ impl ResponseHandle for HmiHandleGeneric {
         if !self.is_set() {
             return None;
         }
-        self.resp
-            .0
-            .get()
-            .map(|r| match r {
-                ResponseOrError::Response(_, t) => Some(*t),
-                ResponseOrError::Error(_, t) => Some(*t),
-            })
-            .flatten()
+        self.resp.0.get().map(|r| match r {
+            ResponseOrError::Response(_, t) => *t,
+            ResponseOrError::Error(_, t) => *t,
+        })
     }
 
     /// Blocks until the response arrives or the timeout elapses, returning [`HmiError::Timeout`] on expiry.
@@ -284,6 +280,7 @@ pub(super) mod py {
         list.into_bound_py_any(py)
     }
 
+    #[allow(clippy::extra_unused_type_parameters)]
     pub fn py_caster_null<'a, T>(
         py: Python<'a>,
         _: Message,
@@ -293,6 +290,7 @@ pub(super) mod py {
         pyo3::types::PyNone::get(py).into_bound_py_any(py)
     }
 
+    #[derive(Debug)]
     #[pyclass(name = "HmiHandle", generic)]
     pub struct PyHmiHandleGeneric {
         pub inner: HmiHandleGeneric,
@@ -311,8 +309,7 @@ pub(super) mod py {
             self.inner
                 .get()
                 .map_err(Into::into)
-                .map(|v| (self.caster)(py, v, self.target, self.count))
-                .flatten()
+                .and_then(|v| (self.caster)(py, v, self.target, self.count))
         }
 
         pub fn wait_timeout<'a>(
@@ -324,8 +321,7 @@ pub(super) mod py {
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
-                .map(|v| (self.caster)(py, v, self.target, self.count))
-                .flatten()
+                .and_then(|v| (self.caster)(py, v, self.target, self.count))
         }
 
         pub fn wait<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {

@@ -197,9 +197,9 @@ impl std::fmt::Display for RmiProtocolError {
 impl std::error::Error for RmiProtocolError {}
 
 #[cfg(feature = "py")]
-impl Into<pyo3::PyErr> for RmiError {
-    fn into(self) -> pyo3::PyErr {
-        match self {
+impl From<RmiError> for pyo3::PyErr {
+    fn from(e: RmiError) -> Self {
+        match e {
             RmiError::CommunicationError(e) => {
                 pyo3::exceptions::PyIOError::new_err(format!("{}", e))
             }

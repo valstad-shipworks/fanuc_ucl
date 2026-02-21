@@ -37,6 +37,7 @@ impls = { version = "1.0.3", optional = true }
 inherent = { version = "1.0.13", optional = true }
 tracing-subscriber = { version = "0.3.*", features = ["env-filter"], optional = true}
 openport = { version = "0.1.1", optional = true }
+parking_lot = "0.12.5"
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.28.0", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }

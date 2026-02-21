@@ -61,11 +61,11 @@ impl FeatureGates {
                 Err(FeatureGateFailure::MissingOption(name, *opt))
             }
             FeatureGates::FieldPresent(field) if !fields.contains(field) => {
-                Err(FeatureGateFailure::MissingField(name, *field, "unknown"))
+                Err(FeatureGateFailure::MissingField(name, field, "unknown"))
             }
-            FeatureGates::FieldAbsent(field) if fields.contains(field) => Err(
-                FeatureGateFailure::UnsupportedField(name, *field, "unknown"),
-            ),
+            FeatureGates::FieldAbsent(field) if fields.contains(field) => {
+                Err(FeatureGateFailure::UnsupportedField(name, field, "unknown"))
+            }
             _ => Ok(()),
         }
     }
@@ -192,7 +192,7 @@ macro_rules! packet_wrap {
                     $crate::rmi::SendPacket::from(self.clone())
                 }
                 #[staticmethod]
-                pub fn from_send_packet(packet: crate::rmi::SendPacket) -> pyo3::PyResult<Self> {
+                pub fn from_send_packet(packet: $crate::rmi::SendPacket) -> pyo3::PyResult<Self> {
                     let slf: Self = packet.try_into()
                         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Packet type mismatch"))?;
                     Ok(slf)
@@ -256,7 +256,7 @@ macro_rules! packet_response_wrap {
                     $crate::rmi::ResponsePacket::from(self.clone())
                 }
                 #[staticmethod]
-                pub fn from_response_packet(packet: crate::rmi::ResponsePacket) -> pyo3::PyResult<Self> {
+                pub fn from_response_packet(packet: $crate::rmi::ResponsePacket) -> pyo3::PyResult<Self> {
                     let slf: Self = packet.try_into()
                         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Packet type mismatch"))?;
                     Ok(slf)
@@ -315,7 +315,7 @@ impl<T, P> Packet<P> for T where
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[doc(hidden)]
 pub struct NeverPacket;

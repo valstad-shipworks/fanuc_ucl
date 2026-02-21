@@ -1,30 +1,32 @@
 from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, Literal, Protocol, Sequence, TypeVar, overload
 
+from typing_extensions import TypeAlias
+
 from fanuc_ucl import ThreadConfig
 
 from .asg import *
 
 __all__ = [
+    "AnalogInput",
+    "AnalogOutput",
+    "Command",
     "DigitalInput",
     "DigitalOutput",
+    "GroupInput",
+    "GroupOutput",
+    "HmiDriver",
+    "Register",
     "RobotInput",
     "RobotOutput",
-    "UopInput",
-    "UopOutput",
     "SopInput",
     "SopOutput",
+    "UopInput",
+    "UopOutput",
     "WeldInput",
     "WeldOutput",
     "WireStickInput",
     "WireStickOutput",
-    "GroupInput",
-    "GroupOutput",
-    "AnalogInput",
-    "AnalogOutput",
-    "Register",
-    "Command",
-    "HmiDriver",
 ]
 
 _T_co = TypeVar("_T_co", covariant=True)
@@ -55,7 +57,9 @@ class __READONLY__(ReadablePort[_T_co], Protocol[_T_co]):
     def __CAN_READ__() -> None: ...
 
 class __WRITEONLY__(
-    WriteablePort[_T_contra], UnsafelyWriteablePort[_T_contra], Protocol[_T_contra]
+    WriteablePort[_T_contra],
+    UnsafelyWriteablePort[_T_contra],
+    Protocol[_T_contra],
 ):
     @staticmethod
     def __CAN_WRITE__() -> None: ...
@@ -80,7 +84,9 @@ class __READWRITE__(
     def __USE__(_unused: _T_contra) -> None: ...
 
 class __READUNSAFEWRITE__(
-    ReadablePort[_T_co], UnsafelyWriteablePort[_T_contra], Protocol[_T_co, _T_contra]
+    ReadablePort[_T_co],
+    UnsafelyWriteablePort[_T_contra],
+    Protocol[_T_co, _T_contra],
 ):
     @staticmethod
     def __CAN_READ__() -> None: ...
@@ -89,40 +95,36 @@ class __READUNSAFEWRITE__(
     @staticmethod
     def __USE__(_unused: _T_contra) -> None: ...
 
-DigitalInput = __READUNSAFEWRITE__[bool, bool]
-DigitalOutput = __READWRITE__[bool, bool]
-RobotInput = __READUNSAFEWRITE__[bool, bool]
-RobotOutput = __READWRITE__[bool, bool]
-UopInput = __READUNSAFEWRITE__[bool, bool]
-UopOutput = __READWRITE__[bool, bool]
-SopInput = __READUNSAFEWRITE__[bool, bool]
-SopOutput = __READWRITE__[bool, bool]
-WeldInput = __READUNSAFEWRITE__[bool, bool]
-WeldOutput = __READWRITE__[bool, bool]
-WireStickInput = __READUNSAFEWRITE__[bool, bool]
-WireStickOutput = __READWRITE__[bool, bool]
-GroupInput = __READUNSAFEWRITE__[int, int]
-GroupOutput = __READWRITE__[int, int]
-AnalogInput = __READUNSAFEWRITE__[int, int]
-AnalogOutput = __READWRITE__[int, int]
-Register = __READWRITE__[int, int]
-Command = __WRITEONLY__[str]
+DigitalInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+DigitalOutput: TypeAlias = __READWRITE__[bool, bool]
+RobotInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+RobotOutput: TypeAlias = __READWRITE__[bool, bool]
+UopInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+UopOutput: TypeAlias = __READWRITE__[bool, bool]
+SopInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+SopOutput: TypeAlias = __READWRITE__[bool, bool]
+WeldInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+WeldOutput: TypeAlias = __READWRITE__[bool, bool]
+WireStickInput: TypeAlias = __READUNSAFEWRITE__[bool, bool]
+WireStickOutput: TypeAlias = __READWRITE__[bool, bool]
+GroupInput: TypeAlias = __READUNSAFEWRITE__[int, int]
+GroupOutput: TypeAlias = __READWRITE__[int, int]
+AnalogInput: TypeAlias = __READUNSAFEWRITE__[int, int]
+AnalogOutput: TypeAlias = __READWRITE__[int, int]
+Register: TypeAlias = __READWRITE__[int, int]
+Command: TypeAlias = __WRITEONLY__[str]
 
 class HmiHandle(Generic[_H]):
     """A typed handle to a pending HMI response that decodes the raw message into the target type."""
 
     def is_set(self) -> bool:
         """Returns True if the response (or an error) has been received."""
-        ...
     def get(self) -> _H:
         """Returns the response value if available, or raises if the request failed or the response has not yet arrived."""
-        ...
     def wait_timeout(self, timeout_secs: float) -> _H:
         """Blocks until the response arrives or the timeout elapses, raising TimeoutError on expiry."""
-        ...
     def wait(self) -> _H:
         """Blocks indefinitely until the response arrives."""
-        ...
 
 class HmiDriver:
     """The main driver for interfacing with a FANUC robot via SNPX HMI.
@@ -132,36 +134,41 @@ class HmiDriver:
 
     def __init__(self, address: str | IPv4Address | IPv6Address) -> None:
         """Creates a new HmiDriver instance. Does not connect; call ``connect()`` to establish a connection."""
-        ...
     def connect(
-        self, timeout_secs: float = 1.0, thread_config: ThreadConfig | None = None
+        self,
+        timeout_secs: float = 1.0,
+        thread_config: ThreadConfig | None = None,
     ) -> None:
         """Connects to the HMI and performs the necessary handshake to establish communication."""
-        ...
     def disconnect(self) -> None:
         """Disconnects from the HMI, shutting down the runner thread and cleaning up resources."""
-        ...
     def clear_alarms(self) -> HmiHandle[None]:
         """Sends a command to clear all active alarms on the controller."""
-        ...
     def write(
-        self, port: WriteablePort[_T], index: int, value: _T | Sequence[_T]
+        self,
+        port: WriteablePort[_T],
+        index: int,
+        value: _T | Sequence[_T],
     ) -> HmiHandle[None]:
         """Writes a value to a writable data port at the given index, returning a handle to the asynchronous response."""
-        ...
     def write_unsafe(
-        self, port: UnsafelyWriteablePort[_T], index: int, value: _T | Sequence[_T]
+        self,
+        port: UnsafelyWriteablePort[_T],
+        index: int,
+        value: _T | Sequence[_T],
     ) -> HmiHandle[None]:
         """Writes a value to a data port, bypassing write-safety checks.
 
         This allows writing to read-only ports which is technically possible but not advised.
         """
-        ...
     @overload
     def read(self, port: ReadablePort[_T], index: int) -> HmiHandle[_T]: ...
     @overload
     def read(
-        self, port: ReadablePort[_T], index: int, count: int
+        self,
+        port: ReadablePort[_T],
+        index: int,
+        count: int,
     ) -> HmiHandle[list[_T]]: ...
     @overload
     def register_asg(

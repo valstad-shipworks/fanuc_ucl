@@ -1,20 +1,18 @@
-from __future__ import annotations
-
 from enum import IntEnum
 from typing import Sequence
 
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig
 
 __all__ = [
-    "PoseData",
-    "MotionCommandPacket",
-    "IoType",
-    "StatusBitfield",
-    "RobotStatusPacket",
-    "CommandPositionResponsePacket",
     "AxisMotionConstraint",
+    "CommandPositionResponsePacket",
+    "IoType",
     "JointMovementLimit",
     "JointMovementLimits",
+    "MotionCommandPacket",
+    "PoseData",
+    "RobotStatusPacket",
+    "StatusBitfield",
     "StreamMotionDriver",
 ]
 
@@ -41,7 +39,6 @@ class PoseData:
         e2: float = 0.0,
         e3: float = 0.0,
     ) -> None: ...
-    def __repr__(self) -> str: ...
 
 class IoType(IntEnum):
     DI = 1
@@ -60,14 +57,19 @@ class IoType(IntEnum):
     M = 36
 
 class MotionCommandPacket:
-    def __repr__(self) -> str: ...
     @staticmethod
     def try_from_joints(
-        format: JointFormat, template: JointTemplate, joints: Sequence[float]
+        format: JointFormat,
+        template: JointTemplate,
+        joints: Sequence[float],
     ) -> MotionCommandPacket: ...
     def set_read_io(self, io_type: IoType, index: int, mask: int) -> None: ...
     def set_write_io(
-        self, io_type: IoType, index: int, mask: int, value: int
+        self,
+        io_type: IoType,
+        index: int,
+        mask: int,
+        value: int,
     ) -> None: ...
     def set_last_command(self, last: bool) -> None: ...
 
@@ -77,7 +79,6 @@ class StatusBitfield:
     def command_received(self) -> bool: ...
     def sysrdy(self) -> bool: ...
     def packet_rate(self) -> int: ...
-    def __repr__(self) -> str: ...
 
 class RobotStatusPacket:
     seq: int
@@ -96,7 +97,6 @@ class RobotStatusPacket:
     Length of 9
     """
 
-    def __repr__(self) -> str: ...
     def status_bits(self) -> StatusBitfield: ...
     def joints(self, format: JointFormat) -> list[float]: ...
 
@@ -104,7 +104,6 @@ class CommandPositionResponsePacket:
     timestamp: int
     position: PoseData
 
-    def __repr__(self) -> str: ...
     def joints(self, format: JointFormat) -> list[float]: ...
 
 class AxisMotionConstraint:
@@ -112,9 +111,12 @@ class AxisMotionConstraint:
     max_payload: Sequence[float]
 
     def __init__(self, no_payload: list[float], max_payload: list[float]) -> None: ...
-    def __repr__(self) -> str: ...
     def calculate(
-        self, tcp_speed: float, payload: float, vmax: float, max_payload: float
+        self,
+        tcp_speed: float,
+        payload: float,
+        vmax: float,
+        max_payload: float,
     ) -> float: ...
 
 class JointMovementLimit:
@@ -128,9 +130,12 @@ class JointMovementLimit:
         acceleration: AxisMotionConstraint,
         jerk: AxisMotionConstraint,
     ) -> None: ...
-    def __repr__(self) -> str: ...
     def calculate(
-        self, tcp_speed: float, payload: float, vmax: float, max_payload: float
+        self,
+        tcp_speed: float,
+        payload: float,
+        vmax: float,
+        max_payload: float,
     ) -> tuple[float, float, float]: ...
 
 class JointMovementLimits:
@@ -141,7 +146,6 @@ class JointMovementLimits:
     @staticmethod
     def from_json(json_str: str) -> JointMovementLimits: ...
     def __init__(self, vmax: int, joints: list[JointMovementLimit]) -> None: ...
-    def __repr__(self) -> str: ...
 
 class StreamMotionDriver:
     def __init__(self, remote_addr_string: str) -> None: ...
@@ -162,10 +166,12 @@ class StreamMotionDriver:
     def is_connected(self) -> bool: ...
     def is_started(self) -> bool: ...
     def fetch_movement_limits(
-        self, extra_axis: int = 0
+        self,
+        extra_axis: int = 0,
     ) -> JointMovementLimits | None: ...
     def pull_states(self) -> list[RobotStatusPacket]: ...
     def pull_command_positions(self) -> list[CommandPositionResponsePacket]: ...
     def wait_for_command_position(
-        self, timeout_ms: int = 200
+        self,
+        timeout_ms: int = 200,
     ) -> CommandPositionResponsePacket | None: ...

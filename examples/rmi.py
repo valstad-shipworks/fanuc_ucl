@@ -39,5 +39,5 @@ def main():
 
     pos_resp = driver.send(rmi.FrcReadJointAngles()).wait_timeout(0.2)
     print(
-        f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}"
+        f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}",
     )

@@ -143,7 +143,7 @@ impl std::fmt::Display for AxisMotionConstraint {
  */
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimit {
     #[on(pyo3(get))]
     pub velocity: AxisMotionConstraint,
@@ -187,16 +187,6 @@ impl JointMovementLimit {
     }
 }
 
-impl Default for JointMovementLimit {
-    fn default() -> Self {
-        Self {
-            velocity: AxisMotionConstraint::default(),
-            acceleration: AxisMotionConstraint::default(),
-            jerk: AxisMotionConstraint::default(),
-        }
-    }
-}
-
 impl std::fmt::Display for JointMovementLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let opening = if cfg!(feature = "py") { "(" } else { "{" };
@@ -214,7 +204,7 @@ impl std::fmt::Display for JointMovementLimit {
  * vmax is the maximum TCP speed in mm/s that these limits apply to.
  */
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimits {
     pub vmax: u32,
     pub joints: [Option<JointMovementLimit>; 9],
@@ -252,15 +242,6 @@ impl JointMovementLimits {
     }
 }
 
-impl Default for JointMovementLimits {
-    fn default() -> Self {
-        Self {
-            vmax: 0,
-            joints: [None; 9],
-        }
-    }
-}
-
 #[cfg(feature = "py")]
 #[pyo3::pymethods]
 impl JointMovementLimits {
@@ -274,7 +255,7 @@ impl JointMovementLimits {
         self.joints.iter().filter_map(|&j| j).collect()
     }
 
-    fn to_json(&self) -> pyo3::PyResult<String> {
+    fn as_json(&self) -> pyo3::PyResult<String> {
         serde_json::to_string(self).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Serialization error: {}", e))
         })
@@ -321,13 +302,13 @@ impl RxStorage {
 
     pub fn prune(&mut self) {
         while self.state.len() > 50 {
-            self.state.pop_front();
+            let _ = self.state.pop_front();
         }
         while self.command_position.len() > 10 {
-            self.command_position.pop_front();
+            let _ = self.command_position.pop_front();
         }
         while self.threshold_table.len() > 25 {
-            self.threshold_table.pop_front();
+            let _ = self.threshold_table.pop_front();
         }
     }
 

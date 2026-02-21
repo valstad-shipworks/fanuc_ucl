@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcConnectResponse {
     #[on(pyo3(get))]
     #[serde(rename = "ErrorID")]
@@ -25,7 +25,7 @@ pub struct FrcConnectResponse {
 }
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcDisconnectResponse {
     #[on(pyo3(get))]
     #[serde(rename = "ErrorID")]
@@ -33,7 +33,7 @@ pub struct FrcDisconnectResponse {
 }
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSystemFaultResponse {
     #[on(pyo3(get))]
     #[serde(rename = "SequenceID")]
@@ -45,7 +45,7 @@ zst_filler!(FrcDisconnect);
 zst_filler!(FrcTerminateResponse);
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum Communication {
     #[serde(rename = "FRC_Connect")]
@@ -72,7 +72,7 @@ packet_wrap!(Communication {
 });
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "Communication")]
 pub enum CommunicationResponse {
     #[serde(rename = "FRC_Connect")]
@@ -141,7 +141,7 @@ impl crate::rmi::ReceivablePacket for FrcTerminateResponse {
 }
 impl std::fmt::Display for FrcTerminateResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(self.clone()))
+        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(*self))
             .map_err(|_| std::fmt::Error)?;
         write!(f, "{}", json_string)
     }
@@ -173,7 +173,7 @@ impl crate::rmi::ReceivablePacket for FrcSystemFaultResponse {
 }
 impl std::fmt::Display for FrcSystemFaultResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(self.clone()))
+        let json_string = serde_json::to_string_pretty(&ResponsePacket::from(*self))
             .map_err(|_| std::fmt::Error)?;
         write!(f, "{}", json_string)
     }

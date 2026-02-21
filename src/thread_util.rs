@@ -103,8 +103,7 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
 
 #[cfg(not(target_os = "linux"))]
 fn configure_thread_scheduling(_prio: i32, _cpu_affinity: Option<usize>) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Other,
+    Err(io::Error::other(
         "Thread scheduling configuration is only supported on Linux systems",
     ))
 }

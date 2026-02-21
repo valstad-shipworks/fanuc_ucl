@@ -98,15 +98,11 @@ impl ResponseHandle for RmiHandleGeneric {
     }
 
     pub fn timestamp(&self) -> Option<SystemTime> {
-        self.resp
-            .0
-            .get()
-            .map(|r| match r {
-                ResponseOrError::Response(_, t) => Some(*t),
-                ResponseOrError::Error(_, t) => Some(*t),
-                ResponseOrError::Skipped => None,
-            })
-            .flatten()
+        self.resp.0.get().and_then(|r| match r {
+            ResponseOrError::Response(_, t) => Some(*t),
+            ResponseOrError::Error(_, t) => Some(*t),
+            ResponseOrError::Skipped => None,
+        })
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
@@ -214,12 +210,6 @@ pub struct RmiQueueGeneric {
 }
 
 impl RmiQueueGeneric {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
     pub fn push(&mut self, handle: RmiHandleGeneric) {
         self.queue.push_back(handle);
     }
@@ -297,13 +287,6 @@ pub struct RmiQueue<T: ReceivablePacket> {
 }
 
 impl<T: ReceivablePacket> RmiQueue<T> {
-    pub fn new() -> Self {
-        Self {
-            generic: RmiQueueGeneric::new(),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
     pub fn push(&mut self, handle: RmiHandle<T>) {
         self.generic.push(handle.generic());
     }
@@ -378,8 +361,7 @@ pub(super) mod py {
             self.inner
                 .get()
                 .map_err(Into::into)
-                .map(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
-                .flatten()
+                .and_then(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
         }
 
         pub fn wait_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
@@ -387,8 +369,7 @@ pub(super) mod py {
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
-                .map(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
-                .flatten()
+                .and_then(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
         }
 
         pub fn wait(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -407,7 +388,9 @@ pub(super) mod py {
         #[new]
         pub fn new() -> Self {
             Self {
-                inner: super::RmiQueueGeneric::new(),
+                inner: super::RmiQueueGeneric {
+                    queue: std::collections::VecDeque::new(),
+                },
                 pytype: None,
             }
         }

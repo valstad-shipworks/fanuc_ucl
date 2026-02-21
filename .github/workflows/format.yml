@@ -28,5 +28,5 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
-      - run: uv tool run ruff check
+      - run: uv tool run ruff check --ignore F403,F405 .
       - run: uv tool run ruff format --check
