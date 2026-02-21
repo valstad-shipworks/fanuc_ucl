@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use cfg_mixin::cfg_mixin;
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "linux")]
 use libc::{
     CPU_SET, CPU_ZERO, cpu_set_t, pthread_self, pthread_setaffinity_np, pthread_setschedparam,
     sched_get_priority_max, sched_get_priority_min, sched_param, setpriority,
@@ -41,7 +41,7 @@ impl ThreadConfig {
     }
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "linux")]
 fn set_nice(nice: i32) -> io::Result<()> {
     let rc = unsafe { setpriority(libc::PRIO_PROCESS, 0, nice) };
     if rc == 0 {
@@ -51,7 +51,7 @@ fn set_nice(nice: i32) -> io::Result<()> {
     }
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(target_os = "linux")]
 fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Result<()> {
     unsafe {
         if let Some(cpu) = cpu_affinity {
@@ -101,11 +101,11 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
     Ok(())
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(not(target_os = "linux"))]
 fn configure_thread_scheduling(_prio: i32, _cpu_affinity: Option<usize>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Other,
-        "Thread scheduling configuration is only supported on Unix-like systems",
+        "Thread scheduling configuration is only supported on Linux systems",
     ))
 }
 

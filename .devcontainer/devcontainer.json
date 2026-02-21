@@ -21,11 +21,7 @@
         }
     },
     "postStartCommand": "sudo usermod -aG sudo vscode",
-    "postCreateCommand": "sudo chown -R vscode:vscode /workspace/fanuc_ucl",
-    "containerUser": "vscode",
-    "remoteUser": "vscode",
-    "privileged": true,
-    "updateRemoteUserUID": true,
+    "postCreateCommand": "sudo chown -R vscode:vscode /workspaces/fanuc_ucl",
     "features": {
         "ghcr.io/devcontainers/features/common-utils:2": {
             "username": "vscode"

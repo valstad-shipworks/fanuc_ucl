@@ -16,7 +16,9 @@ pkg-config \
 libfmt-dev \
 lsb-release \
 curl \
+crossbuild-essential-arm64 \
+gcc-mingw-w64-x86-64 \
 && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip config set global.break-system-packages true
-RUN pip install --no-cache-dir uv maturin ruff
+RUN pip install --no-cache-dir uv maturin ruff ziglang cargo-zigbuild
