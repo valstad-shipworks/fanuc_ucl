@@ -31,6 +31,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install llvm-dlltool
+        if: contains(matrix.target, 'windows')
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
