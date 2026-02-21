@@ -1044,11 +1044,7 @@ pub trait AsgEncodableType:
             let (value, _) = if 2 > offset {
                 Self::unpack_sysvar(item_payload)?
             } else {
-                Self::partial_unpack_sysvar::<80>(
-                    item_payload,
-                    offset as usize,
-                    byte_count,
-                )?
+                Self::partial_unpack_sysvar::<80>(item_payload, offset as usize, byte_count)?
             };
             ret.push(value);
         }

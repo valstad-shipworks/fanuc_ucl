@@ -54,6 +54,7 @@ def initialize_broker(listen_on: str, thread_config: ThreadConfig) -> None:
     This must be called before creating any ``HspoReceiver``. Calling it again after initialization is a no-op.
     """
     ...
+
 def destroy_broker() -> None:
     """Shuts down the global HSPO broker and joins its background thread."""
     ...
@@ -83,9 +84,7 @@ class HspoReceiver:
     def clock_pair_micros(self) -> tuple[int, int]:
         """Returns a pair of ``(hspo_clock_micros, system_time_micros)`` for correlating controller time with system time."""
         ...
-    def wait_for_tcp_packet(
-        self, timeout_secs: float
-    ) -> TcpCartesianPositionPacket:
+    def wait_for_tcp_packet(self, timeout_secs: float) -> TcpCartesianPositionPacket:
         """Blocks until a TCP cartesian position packet is received or the timeout elapses."""
         ...
     def try_recv_tcp_packet(self) -> TcpCartesianPositionPacket | None:

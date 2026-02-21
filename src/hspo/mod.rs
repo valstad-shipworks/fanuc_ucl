@@ -1,3 +1,4 @@
+use parking_lot::Mutex;
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
@@ -8,7 +9,6 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
-use parking_lot::Mutex;
 
 use crate::{
     joints::{JointFormat, JointTemplate},
@@ -309,7 +309,7 @@ impl HspoReceiver {
         packet_buffer_size: usize,
     ) -> Result<Self, HspoBrokerNotInitializedError> {
         if let Some(server) = HSPO_SERVER.lock().as_ref() {
-            Ok(server.add_robot(ip_of_interest.into(), packet_buffer_size))
+            server.add_robot(ip_of_interest.into(), packet_buffer_size)
         } else {
             Err(HspoBrokerNotInitializedError)
         }
@@ -317,8 +317,7 @@ impl HspoReceiver {
 
     /// Returns `true` if a packet has been received from this robot recently.
     pub fn is_connected(&self) -> bool {
-        self.connection_active
-            .load(Ordering::Relaxed)
+        self.connection_active.load(Ordering::Relaxed)
     }
 
     /// Returns the cumulative HSPO clock in microseconds, accounting for wraps of the controller's 32-bit clock.
@@ -443,7 +442,11 @@ struct HspoBroker {
 }
 
 impl HspoBroker {
-    fn add_robot(&self, ip_of_interest: IpAddr, packet_buffer_size: usize) -> Result<HspoReceiver, HspoBrokerNotInitializedError> {
+    fn add_robot(
+        &self,
+        ip_of_interest: IpAddr,
+        packet_buffer_size: usize,
+    ) -> Result<HspoReceiver, HspoBrokerNotInitializedError> {
         let (tcp_tx, tcp_rx) = bounded::<TcpCartesianPositionPacket>(packet_buffer_size);
         let (joint_tx, joint_rx) = bounded::<JointAnglesPacket>(packet_buffer_size);
         let (var_tx, var_rx) = bounded::<VariablesPacket>(packet_buffer_size);
@@ -477,7 +480,10 @@ impl HspoBroker {
         })
     }
 
-    fn create(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) -> Result<Self, HspoBrokerNotInitializedError> {
+    fn create(
+        listen_on: SocketAddr,
+        thread_config: Option<ThreadConfig>,
+    ) -> Result<Self, HspoBrokerNotInitializedError> {
         let local_kill_switch = Arc::new(AtomicBool::new(false));
         let (robot_appender, robot_receiver) = unbounded::<RobotSender>();
 
@@ -665,7 +671,10 @@ impl HspoBroker {
 ///
 /// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
 #[cfg(not(feature = "py"))]
-pub fn initialize_broker(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) -> Result<(), HspoBrokerNotInitializedError> {
+pub fn initialize_broker(
+    listen_on: SocketAddr,
+    thread_config: Option<ThreadConfig>,
+) -> Result<(), HspoBrokerNotInitializedError> {
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
         let server = HspoBroker::create(listen_on, thread_config)?;
