@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-wheels:
     strategy:
       fail-fast: false
       matrix:
@@ -57,11 +57,11 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
-  publish:
+  publish-pypi:
     runs-on: ubuntu-latest
-    name: Publish
-    needs: [build, sdist]
-    environment: pypi
+    name: Publish to PyPI
+    needs: [build-wheels, sdist]
+    environment: publish
 
     steps:
       - uses: actions/download-artifact@v4
@@ -75,3 +75,18 @@ jobs:
         run: uv publish dist/*
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    name: Publish to crates.io
+    environment: publish
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
