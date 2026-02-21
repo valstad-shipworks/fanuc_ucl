@@ -2,12 +2,13 @@ use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
     time::{Duration, SystemTime},
 };
+use parking_lot::Mutex;
 
 use crate::{
     joints::{JointFormat, JointTemplate},
@@ -36,6 +37,12 @@ impl std::fmt::Display for HspoBrokerNotInitializedError {
     }
 }
 impl std::error::Error for HspoBrokerNotInitializedError {}
+#[cfg(feature = "py")]
+impl From<HspoBrokerNotInitializedError> for pyo3::PyErr {
+    fn from(err: HspoBrokerNotInitializedError) -> Self {
+        pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
+    }
+}
 
 /// A packet from a FANUC controller containing the TCP (Tool Center Point) cartesian position.
 #[cfg_mixin(feature = "py")]
@@ -211,13 +218,13 @@ impl Default for ClockSpec {
 
 impl ClockSpec {
     fn write(&self, hspo_add: u64, system: u64) {
-        let mut guard = self.mutex.lock().unwrap();
+        let mut guard = self.mutex.lock();
         guard.0 += hspo_add;
         guard.1 = system;
     }
 
     fn read(&self) -> (u64, u64) {
-        let guard = self.mutex.lock().unwrap();
+        let guard = self.mutex.lock();
         (guard.0, guard.1)
     }
 }
@@ -284,23 +291,13 @@ impl HspoReceiver {
     ) -> pyo3::PyResult<Self> {
         use pyo3::types::PyAnyMethods;
         let ip_of_interest: IpAddr = ip_of_interest.extract()?;
-        let server_guard = HSPO_SERVER.lock();
-        if server_guard
-            .as_ref()
-            .expect("Failed to lock HSPO server mutex")
-            .is_none()
-        {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+        if let Some(server) = HSPO_SERVER.lock().as_ref() {
+            Ok(server.add_robot(ip_of_interest, packet_buffer_size)?)
+        } else {
+            Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "HSPO server not initialized. Please initialize the server before creating a driver.",
-            ));
+            ))
         }
-        drop(server_guard);
-        Ok(HSPO_SERVER
-            .lock()
-            .expect("Failed to lock HSPO server mutex")
-            .as_ref()
-            .expect("HSPO server should be initialized")
-            .add_robot(ip_of_interest, packet_buffer_size))
     }
 
     /// Creates a new receiver for the given robot IP address with the specified packet buffer size.
@@ -311,27 +308,17 @@ impl HspoReceiver {
         ip_of_interest: T,
         packet_buffer_size: usize,
     ) -> Result<Self, HspoBrokerNotInitializedError> {
-        let server_guard = HSPO_SERVER.lock();
-        if server_guard
-            .as_ref()
-            .expect("Failed to lock HSPO server mutex")
-            .is_none()
-        {
-            return Err(HspoBrokerNotInitializedError);
+        if let Some(server) = HSPO_SERVER.lock().as_ref() {
+            Ok(server.add_robot(ip_of_interest.into(), packet_buffer_size))
+        } else {
+            Err(HspoBrokerNotInitializedError)
         }
-        drop(server_guard);
-        Ok(HSPO_SERVER
-            .lock()
-            .expect("Failed to lock HSPO server mutex")
-            .as_ref()
-            .expect("HSPO server should be initialized")
-            .add_robot(ip_of_interest.into(), packet_buffer_size))
     }
 
     /// Returns `true` if a packet has been received from this robot recently.
     pub fn is_connected(&self) -> bool {
         self.connection_active
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(Ordering::Relaxed)
     }
 
     /// Returns the cumulative HSPO clock in microseconds, accounting for wraps of the controller's 32-bit clock.
@@ -456,7 +443,7 @@ struct HspoBroker {
 }
 
 impl HspoBroker {
-    fn add_robot(&self, ip_of_interest: IpAddr, packet_buffer_size: usize) -> HspoReceiver {
+    fn add_robot(&self, ip_of_interest: IpAddr, packet_buffer_size: usize) -> Result<HspoReceiver, HspoBrokerNotInitializedError> {
         let (tcp_tx, tcp_rx) = bounded::<TcpCartesianPositionPacket>(packet_buffer_size);
         let (joint_tx, joint_rx) = bounded::<JointAnglesPacket>(packet_buffer_size);
         let (var_tx, var_rx) = bounded::<VariablesPacket>(packet_buffer_size);
@@ -479,18 +466,18 @@ impl HspoBroker {
 
         self.robot_appender
             .send(robot_sender)
-            .expect("Failed to send robot sender to HSPO server");
+            .map_err(|_| HspoBrokerNotInitializedError)?;
 
-        HspoReceiver {
+        Ok(HspoReceiver {
             connection_active,
             tracked_clock,
             tcp_rx,
             joint_rx,
             var_rx,
-        }
+        })
     }
 
-    fn create(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) -> Self {
+    fn create(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) -> Result<Self, HspoBrokerNotInitializedError> {
         let local_kill_switch = Arc::new(AtomicBool::new(false));
         let (robot_appender, robot_receiver) = unbounded::<RobotSender>();
 
@@ -664,13 +651,13 @@ impl HspoBroker {
                     }
                 }
             })
-            .expect("Failed to spawn HSPO server thread");
+            .map_err(|_| HspoBrokerNotInitializedError)?;
 
-        HspoBroker {
+        Ok(HspoBroker {
             robot_appender,
             kill_switch: local_kill_switch,
             _thread_handle,
-        }
+        })
     }
 }
 
@@ -678,14 +665,13 @@ impl HspoBroker {
 ///
 /// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
 #[cfg(not(feature = "py"))]
-pub fn initialize_broker(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) {
-    let mut guard = HSPO_SERVER
-        .lock()
-        .expect("Failed to lock HSPO server mutex");
+pub fn initialize_broker(listen_on: SocketAddr, thread_config: Option<ThreadConfig>) -> Result<(), HspoBrokerNotInitializedError> {
+    let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
-        let server = HspoBroker::create(listen_on, thread_config);
+        let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
     }
+    Ok(())
 }
 
 /// Initializes the global HSPO broker, binding a socket to `listen_on` and spawning a background listener thread.
@@ -701,11 +687,9 @@ pub fn initialize_broker(
     let listen_on: SocketAddr = listen_on.parse().map_err(|_| {
         pyo3::exceptions::PyValueError::new_err("Invalid SocketAddr format for listen_on")
     })?;
-    let mut guard = HSPO_SERVER
-        .lock()
-        .expect("Failed to lock HSPO server mutex");
+    let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
-        let server = HspoBroker::create(listen_on, thread_config);
+        let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
     }
     Ok(())
@@ -714,9 +698,7 @@ pub fn initialize_broker(
 /// Shuts down the global HSPO broker and joins its background thread.
 #[cfg_attr(feature = "py", pyo3::pyfunction)]
 pub fn destroy_broker() {
-    let mut guard = HSPO_SERVER
-        .lock()
-        .expect("Failed to lock HSPO server mutex");
+    let mut guard = HSPO_SERVER.lock();
     if let Some(broker) = guard.take() {
         broker.kill_switch.store(true, Ordering::Relaxed);
         let _ = broker._thread_handle.join();

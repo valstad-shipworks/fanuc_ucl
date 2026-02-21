@@ -470,7 +470,7 @@ impl JointFormat {
     ) -> pyo3::PyResult<Vec<f64>> {
         use pyo3::types::PyAnyMethods;
 
-        let mut joints: Vec<f64> = joints
+        let joints: Vec<f64> = joints
             .try_iter()?
             .map(|item| item.and_then(|obj| obj.extract::<f64>()))
             .collect::<pyo3::PyResult<Vec<f64>>>()?;
@@ -480,8 +480,7 @@ impl JointFormat {
                 template.axis.len()
             )));
         }
-        self.convert_from(format, template, &mut joints);
-        Ok(joints)
+        Ok(self.convert_from(format, template, joints))
     }
 }
 

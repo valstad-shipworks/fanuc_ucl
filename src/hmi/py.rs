@@ -76,7 +76,7 @@ where
     }
 }
 
-fn extract_range_kwarg<'py>(kwargs: &Bound<'py, PyDict>) -> PyResult<Option<(u16, u16)>> {
+fn extract_range_kwarg(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<(u16, u16)>> {
     optional_kwarg::<(u16, u16)>(kwargs, "range")
 }
 
@@ -93,7 +93,7 @@ fn make_asg_interface<T: AsgArgument>(
         entry.address = 1;
         let entry_arc = Arc::new(entry);
         driver.send_asg_cmd(entry_arc.clone(), timeout)?;
-        driver
+        let _ = driver
             .asg_entries
             .insert(entry_arc.var_name.clone(), entry_arc.clone());
         return Ok(PyAsgVarInterface::new(entry_arc, count, T::WRITABLE));
@@ -111,7 +111,7 @@ fn make_asg_interface<T: AsgArgument>(
     entry.address = max_address;
     let entry_arc = Arc::new(entry);
     driver.send_asg_cmd(entry_arc.clone(), timeout)?;
-    driver
+    let _ = driver
         .asg_entries
         .insert(entry_arc.var_name.clone(), entry_arc.clone());
     Ok(PyAsgVarInterface::new(entry_arc, count, T::WRITABLE))
@@ -641,9 +641,9 @@ impl HmiDriver {
     }
 
     #[pyo3(signature = (port, index, count = 1), name = "read")]
-    pub fn read_py<'a>(
+    pub fn read_py(
         &self,
-        py: Python<'a>,
+        py: Python<'_>,
         port: DataPortGeneric,
         index: usize,
         count: usize,
@@ -776,9 +776,9 @@ impl HmiDriver {
         }
     }
 
-    fn read_variant<'a, T: ReadableDataPort>(
+    fn read_variant<T: ReadableDataPort>(
         &self,
-        _py: Python<'a>,
+        _py: Python<'_>,
         index: usize,
         count: usize,
     ) -> DriverResult<PyHmiHandleGeneric>

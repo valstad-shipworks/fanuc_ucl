@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWaitTime {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -43,7 +43,7 @@ impl FrcWaitTime {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitTimeResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -55,7 +55,7 @@ pub struct FrcWaitTimeResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitDIN {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -83,7 +83,7 @@ impl FrcWaitDIN {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitDINResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -95,7 +95,7 @@ pub struct FrcWaitDINResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUTool {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -119,7 +119,7 @@ impl FrcSetUTool {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUToolResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -131,7 +131,7 @@ pub struct FrcSetUToolResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrame {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -155,7 +155,7 @@ impl FrcSetUFrame {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -167,7 +167,7 @@ pub struct FrcSetUFrameResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetPayLoad {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -191,7 +191,7 @@ impl FrcSetPayLoad {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetPayLoadResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -203,7 +203,7 @@ pub struct FrcSetPayLoadResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcLinearRelativeJRep {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -284,7 +284,7 @@ impl_monostate_member!(FrcLinearRelativeJRep.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearRelativeJRepResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -296,7 +296,7 @@ pub struct FrcLinearRelativeJRepResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcLinearRelative {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -382,7 +382,7 @@ impl_monostate_member!(FrcLinearRelative.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearRelativeResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -394,7 +394,7 @@ pub struct FrcLinearRelativeResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcLinearMotionJRep {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -482,7 +482,7 @@ impl_monostate_member!(FrcLinearMotionJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearMotionJRepResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -494,7 +494,7 @@ pub struct FrcLinearMotionJRepResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcLinearMotion {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -587,7 +587,7 @@ impl_monostate_member!(FrcLinearMotion.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearMotionResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -599,7 +599,7 @@ pub struct FrcLinearMotionResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointRelativeJRep {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -663,7 +663,7 @@ impl_monostate_member!(FrcJointRelativeJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointRelativeJRepResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -675,7 +675,7 @@ pub struct FrcJointRelativeJRepResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointRelative {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -744,7 +744,7 @@ impl_monostate_member!(FrcJointRelative.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointRelativeResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -756,7 +756,7 @@ pub struct FrcJointRelativeResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointMotionJRep {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -820,7 +820,7 @@ impl_monostate_member!(FrcJointMotionJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointMotionJRepResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -832,7 +832,7 @@ pub struct FrcJointMotionJRepResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointMotion {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -901,7 +901,7 @@ impl_monostate_member!(FrcJointMotion.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointMotionResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -913,7 +913,7 @@ pub struct FrcJointMotionResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcCircularRelative {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -1001,7 +1001,7 @@ impl_monostate_member!(FrcCircularRelative.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCircularRelativeResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -1013,7 +1013,7 @@ pub struct FrcCircularRelativeResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcCircularMotion {
     #[serde(rename = "SequenceID")]
     sequence_id: Option<NonZeroU32>,
@@ -1101,7 +1101,7 @@ impl_monostate_member!(FrcCircularMotion.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCircularMotionResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -1137,7 +1137,7 @@ impl FrcCall {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCallResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -1202,7 +1202,7 @@ pub enum Instruction {
 
 impl Instruction {
     pub(crate) fn set_seq_id(&mut self, value: u32) {
-        let value = unsafe { NonZeroU32::new_unchecked(value) };
+        let value = NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
         match self {
             Instruction::FrcWaitDIN(instr) => instr.sequence_id = Some(value),
             Instruction::FrcSetUFrame(instr) => instr.sequence_id = Some(value),
@@ -1272,7 +1272,7 @@ packet_wrap! {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(tag = "Instruction")]
 pub enum InstructionResponse {
     #[serde(rename = "FRC_WaitDIN")]

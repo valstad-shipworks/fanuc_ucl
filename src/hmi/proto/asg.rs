@@ -1031,7 +1031,7 @@ pub trait AsgEncodableType:
     ) -> HmiResult<[Self; N]> {
         let item_count = N;
         let payload = msg.payload();
-        let mut ret = Vec::with_capacity(item_count as usize);
+        let mut ret = Vec::with_capacity(item_count);
         let byte_count = member_count as usize * 2;
         tracing::trace!(
             "Decoding {} ASG items with {} members each",
@@ -1039,15 +1039,15 @@ pub trait AsgEncodableType:
             member_count
         );
         for i in 0..item_count {
-            let item_start = i * byte_count as usize;
-            let item_payload = &payload[item_start..item_start + byte_count as usize];
+            let item_start = i * byte_count;
+            let item_payload = &payload[item_start..item_start + byte_count];
             let (value, _) = if 2 > offset {
                 Self::unpack_sysvar(item_payload)?
             } else {
                 Self::partial_unpack_sysvar::<80>(
                     item_payload,
                     offset as usize,
-                    byte_count as usize,
+                    byte_count,
                 )?
             };
             ret.push(value);

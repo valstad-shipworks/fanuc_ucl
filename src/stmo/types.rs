@@ -321,13 +321,13 @@ impl RxStorage {
 
     pub fn prune(&mut self) {
         while self.state.len() > 50 {
-            self.state.pop_front();
+            let _ = self.state.pop_front();
         }
         while self.command_position.len() > 10 {
-            self.command_position.pop_front();
+            let _ = self.command_position.pop_front();
         }
         while self.threshold_table.len() > 25 {
-            self.threshold_table.pop_front();
+            let _ = self.threshold_table.pop_front();
         }
     }
 

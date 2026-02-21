@@ -148,7 +148,7 @@ impl StreamMotionContext {
                 if !vec.is_empty() {
                     return vec.pop();
                 } else {
-                    self.motion_command_queue.pop_front();
+                    let _ = self.motion_command_queue.pop_front();
                     return self.next_motion_command();
                 }
             }

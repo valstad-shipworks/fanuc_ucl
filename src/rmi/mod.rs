@@ -315,7 +315,7 @@ impl<T, P> Packet<P> for T where
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[doc(hidden)]
 pub struct NeverPacket;

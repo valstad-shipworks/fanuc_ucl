@@ -91,6 +91,7 @@ macro_rules! python_type {
 macro_rules! port {
     (port: $name:ident, value_type: $value_type:ident, segment: $segment:expr, offset: $offset:expr, zero_indexed: $zero_indexed:expr) => {
         // An HMI data port
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub struct $name;
         impl DataPort for $name {
             type ValueType = $value_type;

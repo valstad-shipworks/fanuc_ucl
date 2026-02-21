@@ -5,7 +5,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use crate::joints::{JointFormat, JointRepr, JointTemplate, JointType, JointValue};
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnOff {
     ON,
     OFF,
@@ -35,7 +35,7 @@ macro_rules! impl_monostate_member {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationType {
     Handling,
     Arc,
@@ -44,7 +44,7 @@ pub enum ApplicationType {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PalletizingMode {
     ZERODN,
     ZEROUP,
@@ -55,7 +55,7 @@ pub enum PalletizingMode {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrameData {
     pub x: f32,
     pub y: f32,
@@ -66,7 +66,7 @@ pub struct FrameData {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configuration {
     #[serde(rename = "UToolNumber")]
     pub u_tool_number: u8,
@@ -137,7 +137,7 @@ impl Default for Position {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object, get_all, set_all))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
 pub struct JointAngles {
     pub j1: f32,
@@ -337,7 +337,7 @@ pub enum PortType {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalConditionBlock {
     #[on(pyo3(get, set))]
     #[serde(rename = "LCBType")]
@@ -358,7 +358,7 @@ pub struct LocalConditionBlock {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct OffsetRegisterNumbers {
     #[on(pyo3(get, set))]
     #[serde(
@@ -394,7 +394,7 @@ impl Default for OffsetRegisterNumbers {
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermType {
     FINE,
     /// Continuous motion
@@ -415,7 +415,7 @@ pub enum TermType {
 /// * `Time` - Represents time in 0.1 second increments.
 /// * `MilliSeconds` - Represents time in milliseconds (0.001 seconds).
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedType {
     #[serde(rename = "mmSec")]
     MMSec, // Speed in millimeters per second (mm/sec).

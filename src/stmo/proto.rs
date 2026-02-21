@@ -391,7 +391,7 @@ impl<Ctx> bincode::Decode<Ctx> for IoType {
     }
 }
 
-impl<'de, Ctx> bincode::de::BorrowDecode<'de, Ctx> for IoType {
+impl<Ctx> bincode::de::BorrowDecode<'_, Ctx> for IoType {
     fn borrow_decode<D: bincode::de::Decoder<Context = Ctx>>(
         decoder: &mut D,
     ) -> Result<Self, bincode::error::DecodeError> {

@@ -293,6 +293,7 @@ pub(super) mod py {
         pyo3::types::PyNone::get(py).into_bound_py_any(py)
     }
 
+    #[derive(Debug)]
     #[pyclass(name = "HmiHandle", generic)]
     pub struct PyHmiHandleGeneric {
         pub inner: HmiHandleGeneric,

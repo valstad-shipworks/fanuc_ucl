@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWriteUToolData {
     #[on(pyo3(get, set))]
     #[serde(rename = "ToolNumber")]
@@ -38,7 +38,7 @@ impl FrcWriteUToolData {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteUToolDataResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -50,7 +50,7 @@ pub struct FrcWriteUToolDataResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWriteUFrameData {
     #[on(pyo3(get, set))]
     #[serde(rename = "FrameNumber")]
@@ -79,7 +79,7 @@ impl FrcWriteUFrameData {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteUFrameDataResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -91,7 +91,7 @@ pub struct FrcWriteUFrameDataResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWritePositionRegister {
     #[on(pyo3(get, set))]
     #[serde(rename = "RegisterNumber")]
@@ -129,7 +129,7 @@ impl FrcWritePositionRegister {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWritePositionRegisterResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -138,7 +138,7 @@ pub struct FrcWritePositionRegisterResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteDOUT {
     #[on(pyo3(get, set))]
     #[serde(rename = "PortNumber")]
@@ -163,7 +163,7 @@ impl FrcWriteDOUT {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteDOUTResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -172,7 +172,7 @@ pub struct FrcWriteDOUTResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameUTool {
     #[on(pyo3(get, set))]
     #[serde(rename = "UFrameNumber")]
@@ -201,7 +201,7 @@ impl FrcSetUFrameUTool {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameUToolResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -213,7 +213,7 @@ pub struct FrcSetUFrameUToolResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetOverRide {
     #[on(pyo3(get, set))]
     #[serde(rename = "Value")]
@@ -232,7 +232,7 @@ impl FrcSetOverRide {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetOverRideResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -241,7 +241,7 @@ pub struct FrcSetOverRideResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcResetResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -250,7 +250,7 @@ pub struct FrcResetResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadUToolData {
     #[on(pyo3(get, set))]
     #[serde(rename = "FrameNumber")]
@@ -275,7 +275,7 @@ impl FrcReadUToolData {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadUToolDataResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -293,7 +293,7 @@ pub struct FrcReadUToolDataResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadUFrameData {
     #[on(pyo3(get, set))]
     #[serde(rename = "FrameNumber")]
@@ -318,7 +318,7 @@ impl FrcReadUFrameData {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadUFrameDataResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -336,7 +336,7 @@ pub struct FrcReadUFrameDataResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadTCPSpeedResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -351,7 +351,7 @@ pub struct FrcReadTCPSpeedResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
     #[on(pyo3(get, set))]
     #[serde(rename = "RegisterNumber")]
@@ -376,7 +376,7 @@ impl FrcReadPositionRegister {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadPositionRegisterResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -397,7 +397,7 @@ pub struct FrcReadPositionRegisterResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadJointAngles {
     #[on(pyo3(get, set))]
     #[serde(rename = "Group", default, skip_serializing_if = "Option::is_none")]
@@ -416,7 +416,7 @@ impl FrcReadJointAngles {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadJointAnglesResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -441,7 +441,7 @@ impl FrcReadJointAnglesResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadError {
     #[on(pyo3(get, set))]
     #[serde(rename = "Count", default, skip_serializing_if = "Option::is_none")]
@@ -509,7 +509,7 @@ pub struct FrcReadErrorResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadDIN {
     #[on(pyo3(get, set))]
     #[serde(rename = "PortNumber")]
@@ -528,7 +528,7 @@ impl FrcReadDIN {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadDINResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -543,7 +543,7 @@ pub struct FrcReadDINResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadCartesianPosition {
     #[on(pyo3(get, set))]
     #[serde(rename = "Group", default, skip_serializing_if = "Option::is_none")]
@@ -562,7 +562,7 @@ impl FrcReadCartesianPosition {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadCartesianPositionResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -583,7 +583,7 @@ pub struct FrcReadCartesianPositionResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcPauseResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -592,7 +592,7 @@ pub struct FrcPauseResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcInitialize {
     #[on(pyo3(get, set))]
     #[serde(rename = "GroupMask", default, skip_serializing_if = "Option::is_none")]
@@ -651,7 +651,7 @@ impl Default for FrcInitialize {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcInitializeResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -663,7 +663,7 @@ pub struct FrcInitializeResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetUFrameUTool {
     #[on(pyo3(get, set))]
     #[serde(rename = "Group", default, skip_serializing_if = "Option::is_none")]
@@ -682,7 +682,7 @@ impl FrcGetUFrameUTool {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetUFrameUToolResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "UFrameNumber")]
@@ -700,7 +700,7 @@ pub struct FrcGetUFrameUToolResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetStatusResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -730,7 +730,7 @@ pub struct FrcGetStatusResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcContinueResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -739,7 +739,7 @@ pub struct FrcContinueResponse {
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcAbortResponse {
     #[on(pyo3(get, set))]
     #[serde(rename = "ErrorID")]
@@ -754,7 +754,7 @@ zst_filler!(FrcReset);
 zst_filler!(FrcGetStatus);
 
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(tag = "Command")]
 pub enum Command {
     #[serde(rename = "FRC_Initialize")]
