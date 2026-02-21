@@ -1,11 +1,13 @@
 from enum import IntEnum
 from typing import Generic, TypeVar
 
+from typing_extensions import TypeAlias
+
 from ..hmi import HmiDriver, HmiHandle
 
 _V = TypeVar("_V")
 
-AsgRange = tuple[int, int] | None
+AsgRange: TypeAlias = tuple[int, int] | None
 
 class FlipState(IntEnum):
     Unflipped = 0
@@ -148,21 +150,18 @@ class ProgramStatusKind(IntEnum):
     KarelCaller = 2
     MacroOrKarel = 3
 
-SysVarCompat = int | float | str | bool | PositionData
+SysVarCompat: TypeAlias = int | float | str | bool | PositionData
 
 class ReadOnlyAsgInterface(Generic[_V]):
     """A read-only interface for a registered ASG variable on the controller."""
 
     def read(self, driver: HmiDriver) -> HmiHandle[_V]:
         """Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response."""
-        ...
 
 class AsgInterface(Generic[_V], ReadOnlyAsgInterface[_V]):
     """A typed interface for reading and writing a registered ASG variable on the controller."""
 
     def read(self, driver: HmiDriver) -> HmiHandle[_V]:
         """Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response."""
-        ...
     def write(self, driver: HmiDriver, value: _V) -> HmiHandle[None]:
         """Writes a value to this ASG variable on the controller, returning a handle to the asynchronous response."""
-        ...

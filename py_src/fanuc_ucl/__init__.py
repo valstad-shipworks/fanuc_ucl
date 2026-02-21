@@ -20,6 +20,6 @@ def __dir__() -> list[str]:
     return sorted(set(globals().keys()) | set(dir(core)))
 
 
-import fanuc_ucl._fanuc_core  # type: ignore
+import fanuc_ucl._fanuc_core  # noqa: E402
 
 fanuc_ucl._fanuc_core.config_logging(fanuc_ucl._fanuc_core.LoggingLevel.Err)
