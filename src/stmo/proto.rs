@@ -259,7 +259,7 @@ impl MotionCommandPacket {
             .try_iter()?
             .map(|item| item.and_then(|obj| obj.extract::<f64>()))
             .collect::<pyo3::PyResult<Vec<f64>>>()?;
-        return Self::try_from_joints(format, template, joints).map_err(Into::into);
+        Self::try_from_joints(format, template, joints).map_err(Into::into)
     }
 
     #[cfg(feature = "py")]

@@ -249,7 +249,7 @@ impl HmiDriver {
                     group,
                     range,
                 };
-                return Ok(make_asg_interface(self, arg, 1, timeout)?);
+                make_asg_interface(self, arg, 1, timeout)
             } else {
                 let index = require_kwarg::<u16>(&kwargs, "index")?;
                 let group = optional_kwarg::<u8>(&kwargs, "group")?;
@@ -259,10 +259,9 @@ impl HmiDriver {
                     group,
                     range,
                 };
-                return Ok(make_asg_interface(self, arg, 1, timeout)?);
+                make_asg_interface(self, arg, 1, timeout)
             }
-        }
-        if tag.get_type().is(py.get_type::<BoolIoSignal>()) {
+        } else if tag.get_type().is(py.get_type::<BoolIoSignal>()) {
             let signal = tag.extract::<BoolIoSignal>()?;
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let simulation = require_kwarg::<bool>(&kwargs, "simulation")?;
@@ -271,9 +270,8 @@ impl HmiDriver {
                 index,
                 simulation,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
-        }
-        if tag.get_type().is(py.get_type::<IntIoSignal>()) {
+            make_asg_interface(self, arg, 1, timeout)
+        } else if tag.get_type().is(py.get_type::<IntIoSignal>()) {
             let signal = tag.extract::<IntIoSignal>()?;
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let simulation = require_kwarg::<bool>(&kwargs, "simulation")?;
@@ -282,9 +280,8 @@ impl HmiDriver {
                 index,
                 simulation,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
-        }
-        if tag.is(py.get_type::<alarm_struct::AlarmData>()) {
+            make_asg_interface(self, arg, 1, timeout)
+        } else if tag.is(py.get_type::<alarm_struct::AlarmData>()) {
             let source = require_kwarg::<AlarmSource>(&kwargs, "source")?;
             let line = require_kwarg::<u16>(&kwargs, "line")?;
             let range = extract_range_kwarg(&kwargs)?;
@@ -293,30 +290,28 @@ impl HmiDriver {
                 line,
                 range,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
-        }
-        if tag.is(py.get_type::<prog_status::ProgramStatus>()) {
+            make_asg_interface(self, arg, 1, timeout)
+        } else if tag.is(py.get_type::<prog_status::ProgramStatus>()) {
             let task = require_kwarg::<u16>(&kwargs, "task")?;
             let kind = require_kwarg::<ProgramStatusKind>(&kwargs, "kind")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = ProgramStatusArgs { task, kind, range };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
-        }
-        if tag.is(py.get_type::<PyString>()) {
+            make_asg_interface(self, arg, 1, timeout)
+        } else if tag.is(py.get_type::<PyString>()) {
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = StringRegArgs { index, range };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
-        }
-        if tag.is(py.get_type::<PyFloat>()) {
+            make_asg_interface(self, arg, 1, timeout)
+        } else if tag.is(py.get_type::<PyFloat>()) {
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = NumRegArgs { index, range };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
+        } else {
+            Err(PyTypeError::new_err(
+                "Unsupported ASG type for register_asg",
+            ))
         }
-        Err(PyTypeError::new_err(
-            "Unsupported ASG type for register_asg",
-        ))
     }
 
     #[pyo3(name = "register_sysvar_asg", signature = (*args, **kwargs))]
@@ -344,39 +339,40 @@ impl HmiDriver {
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
         } else if tag.is(py.get_type::<PyInt>()) {
             let arg = SysVarArgs::<i32> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
         } else if tag.is(py.get_type::<PyFloat>()) {
             let arg = SysVarArgs::<f32> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
         } else if tag.is(py.get_type::<PyString>()) {
             let arg = SysVarArgs::<String> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
         } else if tag.is(py.get_type::<position_struct::PositionData>()) {
             let arg = SysVarArgs::<position_struct::PositionData> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, 1, timeout)?);
+            make_asg_interface(self, arg, 1, timeout)
+        } else {
+            Err(PyTypeError::new_err(
+                "Unsupported system variable type for register_sysvar_asg",
+            ))
         }
-        Err(PyTypeError::new_err(
-            "Unsupported system variable type for register_sysvar_asg",
-        ))
     }
 
     #[pyo3(name = "register_asg_array", signature = (*args, **kwargs))]
@@ -406,9 +402,8 @@ impl HmiDriver {
                 group,
                 range,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.get_type().is(py.get_type::<BoolIoSignal>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.get_type().is(py.get_type::<BoolIoSignal>()) {
             let signal = tag.extract::<BoolIoSignal>()?;
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let simulation = require_kwarg::<bool>(&kwargs, "simulation")?;
@@ -417,9 +412,8 @@ impl HmiDriver {
                 index,
                 simulation,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.get_type().is(py.get_type::<IntIoSignal>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.get_type().is(py.get_type::<IntIoSignal>()) {
             let signal = tag.extract::<IntIoSignal>()?;
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let simulation = require_kwarg::<bool>(&kwargs, "simulation")?;
@@ -428,9 +422,8 @@ impl HmiDriver {
                 index,
                 simulation,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.is(py.get_type::<alarm_struct::AlarmData>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.is(py.get_type::<alarm_struct::AlarmData>()) {
             let source = require_kwarg::<AlarmSource>(&kwargs, "source")?;
             let line = require_kwarg::<u16>(&kwargs, "line")?;
             let range = extract_range_kwarg(&kwargs)?;
@@ -439,30 +432,28 @@ impl HmiDriver {
                 line,
                 range,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.is(py.get_type::<prog_status::ProgramStatus>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.is(py.get_type::<prog_status::ProgramStatus>()) {
             let task = require_kwarg::<u16>(&kwargs, "task")?;
             let kind = require_kwarg::<ProgramStatusKind>(&kwargs, "kind")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = ProgramStatusArgs { task, kind, range };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.is(py.get_type::<PyString>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.is(py.get_type::<PyString>()) {
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = StringRegArgs { index, range };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
-        }
-        if tag.is(py.get_type::<PyFloat>()) {
+            make_asg_interface(self, arg, count, timeout)
+        } else if tag.is(py.get_type::<PyFloat>()) {
             let index = require_kwarg::<u16>(&kwargs, "index")?;
             let range = extract_range_kwarg(&kwargs)?;
             let arg = NumRegArgs { index, range };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
+        } else {
+            Err(PyTypeError::new_err(
+                "Unsupported ASG type for register_asg",
+            ))
         }
-        Err(PyTypeError::new_err(
-            "Unsupported ASG type for register_asg",
-        ))
     }
 
     #[pyo3(name = "register_sysvar_asg_array", signature = (*args, **kwargs))]
@@ -491,39 +482,40 @@ impl HmiDriver {
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
         } else if tag.is(py.get_type::<PyInt>()) {
             let arg = SysVarArgs::<i32> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
         } else if tag.is(py.get_type::<PyFloat>()) {
             let arg = SysVarArgs::<f32> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
         } else if tag.is(py.get_type::<PyString>()) {
             let arg = SysVarArgs::<String> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
         } else if tag.is(py.get_type::<position_struct::PositionData>()) {
             let arg = SysVarArgs::<position_struct::PositionData> {
                 var_name,
                 range,
                 _marker: PhantomData,
             };
-            return Ok(make_asg_interface(self, arg, count, timeout)?);
+            make_asg_interface(self, arg, count, timeout)
+        } else {
+            Err(PyTypeError::new_err(
+                "Unsupported system variable type for register_sysvar_asg_array",
+            ))
         }
-        Err(PyTypeError::new_err(
-            "Unsupported system variable type for register_sysvar_asg_array",
-        ))
     }
 
     #[pyo3(signature = (port, index, value), name = "write")]

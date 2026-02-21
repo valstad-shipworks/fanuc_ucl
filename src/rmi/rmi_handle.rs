@@ -361,8 +361,7 @@ pub(super) mod py {
             self.inner
                 .get()
                 .map_err(Into::into)
-                .map(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
-                .flatten()
+                .and_then(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
         }
 
         pub fn wait_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
@@ -370,8 +369,7 @@ pub(super) mod py {
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
-                .map(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
-                .flatten()
+                .and_then(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
         }
 
         pub fn wait(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -390,7 +388,9 @@ pub(super) mod py {
         #[new]
         pub fn new() -> Self {
             Self {
-                inner: super::RmiQueueGeneric::new(),
+                inner: super::RmiQueueGeneric {
+                    queue: std::collections::VecDeque::new(),
+                },
                 pytype: None,
             }
         }

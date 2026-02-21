@@ -745,7 +745,7 @@ pub(super) mod py {
             let obj = asg_value_to_py_value(py, &v.into())?;
             list.append(obj)?;
         }
-        Ok(list.into_bound_py_any(py)?)
+        list.into_bound_py_any(py)
     }
 
     fn caster_null<'a>(

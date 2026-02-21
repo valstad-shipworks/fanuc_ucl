@@ -255,7 +255,7 @@ impl JointMovementLimits {
         self.joints.iter().filter_map(|&j| j).collect()
     }
 
-    fn to_json(&self) -> pyo3::PyResult<String> {
+    fn as_json(&self) -> pyo3::PyResult<String> {
         serde_json::to_string(self).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Serialization error: {}", e))
         })

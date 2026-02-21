@@ -280,6 +280,7 @@ pub(super) mod py {
         list.into_bound_py_any(py)
     }
 
+    #[allow(clippy::extra_unused_type_parameters)]
     pub fn py_caster_null<'a, T>(
         py: Python<'a>,
         _: Message,
@@ -308,8 +309,7 @@ pub(super) mod py {
             self.inner
                 .get()
                 .map_err(Into::into)
-                .map(|v| (self.caster)(py, v, self.target, self.count))
-                .flatten()
+                .and_then(|v| (self.caster)(py, v, self.target, self.count))
         }
 
         pub fn wait_timeout<'a>(
@@ -321,8 +321,7 @@ pub(super) mod py {
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
-                .map(|v| (self.caster)(py, v, self.target, self.count))
-                .flatten()
+                .and_then(|v| (self.caster)(py, v, self.target, self.count))
         }
 
         pub fn wait<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
