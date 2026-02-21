@@ -117,11 +117,7 @@ impl HmiRunner {
                 {
                     self.tcp_stream
                         .set_nodelay(true)
-                        .map_err(|_| {
-                            std::io::Error::other(
-                                "Failed to set TCP_NODELAY",
-                            )
-                        })
+                        .map_err(|_| std::io::Error::other("Failed to set TCP_NODELAY"))
                         .map_err(HmiError::from)?;
                     connection_established = true;
                 }

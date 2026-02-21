@@ -497,8 +497,7 @@ impl HspoBroker {
 
                 let mut poll = Poll::new().expect("Failed to create Poll instance");
                 let mut events = Events::with_capacity(256);
-                let mut socket =
-                    MioUdpSocket::bind(listen_on).expect("Failed to bind UDP socket");
+                let mut socket = MioUdpSocket::bind(listen_on).expect("Failed to bind UDP socket");
                 poll.registry()
                     .register(&mut socket, TOK_SOCKET, Interest::READABLE)
                     .expect("Failed to register UDP socket with poll");

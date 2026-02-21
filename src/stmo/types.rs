@@ -204,8 +204,7 @@ impl std::fmt::Display for JointMovementLimit {
  * vmax is the maximum TCP speed in mm/s that these limits apply to.
  */
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimits {
     pub vmax: u32,
     pub joints: [Option<JointMovementLimit>; 9],
@@ -242,7 +241,6 @@ impl JointMovementLimits {
         })
     }
 }
-
 
 #[cfg(feature = "py")]
 #[pyo3::pymethods]

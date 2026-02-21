@@ -189,9 +189,9 @@ impl RmiRunner {
                     tracing::warn!("RMI Runner encountered an error: {}", e);
                 }
             })?;
-        let waker = waker_rx.recv().map_err(|e| {
-            RmiError::CommunicationError(std::io::Error::other(e))
-        })?;
+        let waker = waker_rx
+            .recv()
+            .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
         Ok((handle, waker))
     }
 
@@ -317,11 +317,7 @@ impl RmiRunner {
                 {
                     self.tcp_stream
                         .set_nodelay(true)
-                        .map_err(|_| {
-                            std::io::Error::other(
-                                "Failed to set TCP_NODELAY"
-                            )
-                        })
+                        .map_err(|_| std::io::Error::other("Failed to set TCP_NODELAY"))
                         .map_err(RmiError::from)?;
                     connection_established = true;
                 }
@@ -583,9 +579,7 @@ impl RmiDriver {
             let specific_handle = RmiHandle::new_from_generic(&resp_handle);
             conn.to_runner
                 .send(RunnerMessage::Disconnect(data, resp_handle, true))
-                .map_err(|e| {
-                    RmiError::CommunicationError(std::io::Error::other(e))
-                })?;
+                .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
             conn.handle.join();
             Ok(specific_handle)
         } else {
@@ -594,10 +588,7 @@ impl RmiDriver {
     }
 
     fn get_connection(&self) -> RmiResult<&RmiConnection> {
-        let cnx = self
-            .connection
-            .as_ref()
-            .ok_or(RmiError::Disconnected)?;
+        let cnx = self.connection.as_ref().ok_or(RmiError::Disconnected)?;
         if cnx.handle.is_alive() {
             Ok(cnx)
         } else {
@@ -655,9 +646,7 @@ impl RmiDriver {
                 rmi_string_writer(content)?,
                 generic_handle.clone(),
             ))
-            .map_err(|e| {
-                RmiError::CommunicationError(std::io::Error::other(e))
-            })?;
+            .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
         conn.handle.wake()?;
         Ok(generic_handle)
     }

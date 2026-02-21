@@ -63,9 +63,9 @@ impl FeatureGates {
             FeatureGates::FieldPresent(field) if !fields.contains(field) => {
                 Err(FeatureGateFailure::MissingField(name, field, "unknown"))
             }
-            FeatureGates::FieldAbsent(field) if fields.contains(field) => Err(
-                FeatureGateFailure::UnsupportedField(name, field, "unknown"),
-            ),
+            FeatureGates::FieldAbsent(field) if fields.contains(field) => {
+                Err(FeatureGateFailure::UnsupportedField(name, field, "unknown"))
+            }
             _ => Ok(()),
         }
     }

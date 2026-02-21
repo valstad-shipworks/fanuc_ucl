@@ -1,8 +1,4 @@
-#![
-    allow(
-        clippy::useless_conversion
-    )
-]
+#![allow(clippy::useless_conversion)]
 mod asg_handle;
 mod hmi_handle;
 mod proto;

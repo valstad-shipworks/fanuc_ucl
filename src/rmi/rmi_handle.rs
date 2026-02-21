@@ -98,14 +98,11 @@ impl ResponseHandle for RmiHandleGeneric {
     }
 
     pub fn timestamp(&self) -> Option<SystemTime> {
-        self.resp
-            .0
-            .get()
-            .and_then(|r| match r {
-                ResponseOrError::Response(_, t) => Some(*t),
-                ResponseOrError::Error(_, t) => Some(*t),
-                ResponseOrError::Skipped => None,
-            })
+        self.resp.0.get().and_then(|r| match r {
+            ResponseOrError::Response(_, t) => Some(*t),
+            ResponseOrError::Error(_, t) => Some(*t),
+            ResponseOrError::Skipped => None,
+        })
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {

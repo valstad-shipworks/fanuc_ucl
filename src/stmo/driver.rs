@@ -1,9 +1,4 @@
-#![
-    allow(
-        clippy::unnecessary_map_on_constructor,
-        clippy::useless_conversion
-    )
-]
+#![allow(clippy::unnecessary_map_on_constructor, clippy::useless_conversion)]
 
 use std::{
     collections::VecDeque,
@@ -543,7 +538,9 @@ impl StreamMotionDriver {
             let mut started = false;
             while start_time.elapsed() < timeout {
                 let remaining = end_time.saturating_duration_since(Instant::now());
-                if let Ok(RxPackets::VersionNumberResponse(_)) = conn.from_thread.recv_timeout(remaining) {
+                if let Ok(RxPackets::VersionNumberResponse(_)) =
+                    conn.from_thread.recv_timeout(remaining)
+                {
                     started = true;
                 }
             }

@@ -458,8 +458,7 @@ impl AsgArgument for IntIoArgs {
 
 /// Source log from which to read alarms on the controller.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlarmSource {
     #[default]
     Active,
@@ -469,7 +468,6 @@ pub enum AlarmSource {
     Application,
     System,
 }
-
 
 impl AlarmSource {
     fn prefix(&self) -> &'static str {
@@ -542,8 +540,7 @@ impl AsgArgument for AlarmArgs {
 
 /// The kind of program task to query status for.
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProgramStatusKind {
     #[default]
     Default,
@@ -551,7 +548,6 @@ pub enum ProgramStatusKind {
     KarelCaller,
     MacroOrKarel,
 }
-
 
 impl ProgramStatusKind {
     fn prefix(&self) -> &'static str {

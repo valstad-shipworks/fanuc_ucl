@@ -121,13 +121,10 @@ impl ResponseHandle for HmiHandleGeneric {
         if !self.is_set() {
             return None;
         }
-        self.resp
-            .0
-            .get()
-            .map(|r| match r {
-                ResponseOrError::Response(_, t) => *t,
-                ResponseOrError::Error(_, t) => *t,
-            })
+        self.resp.0.get().map(|r| match r {
+            ResponseOrError::Response(_, t) => *t,
+            ResponseOrError::Error(_, t) => *t,
+        })
     }
 
     /// Blocks until the response arrives or the timeout elapses, returning [`HmiError::Timeout`] on expiry.
