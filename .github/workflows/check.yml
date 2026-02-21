@@ -34,5 +34,11 @@ jobs:
       - name: Cargo check
         run: cargo check --target ${{ matrix.target }}
 
+      - name: Cargo Python check
+        run: cargo check --target ${{ matrix.target }} -F py
+
       - name: Clippy
         run: cargo clippy --target ${{ matrix.target }} -- -D warnings
+
+      - name: Clippy Python
+        run: cargo clippy --target ${{ matrix.target }} -F py -- -D warnings
