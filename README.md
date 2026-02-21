@@ -17,14 +17,14 @@ Has been tested with Linux(x86_64 and arm64), Windows(x86_64) and MacOS(arm64) a
 Add the following to your Cargo.toml:
 ```toml
 [dependencies]
-fanuc_ucl = "0.1"
+fanuc_ucl = "1"
 ```
 or run `cargo add fanuc_ucl` in your project directory.
 
 ### Python
 The library is available on PyPI as `fanuc_ucl`, so you can install it using pip:
 ```bash
-pip install fanuc_ucl
+pip install fanuc_ucl==1
 ```
 
 ## Usage
