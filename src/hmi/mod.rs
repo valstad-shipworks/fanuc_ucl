@@ -14,7 +14,7 @@ use std::convert::TryFrom;
 use std::io::{Error as IoError, ErrorKind};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::hmi::asg::AsgEntry;
@@ -134,6 +134,7 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: f64 = 1.0;
 struct HmiConnection {
     handle: ThreadHandle,
     to_runner: Sender<RunnerMessage>,
+    err_flag: Arc<AtomicBool>,
 }
 
 /// The main driver struct for interfacing with a FANUC robot via SNPX HMI.
@@ -179,12 +180,16 @@ impl HmiDriver {
         let addr = SocketAddr::new(self.remote_addr, HMI_DEFAULT_PORT);
         let (to_runner, from_driver) = flume::unbounded();
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker) =
+        let (join_handle, waker, err_flag) =
             HmiRunner::start(addr, handle.to_pass_in(), from_driver, thread_config)?;
         handle.set_handle(join_handle);
         handle.set_waker_mio(waker);
         self.seq.store(0, Ordering::SeqCst);
-        self.connection = Some(HmiConnection { handle, to_runner });
+        self.connection = Some(HmiConnection {
+            handle,
+            to_runner,
+            err_flag,
+        });
         let start = Instant::now();
         let ack = self.send_message(Message::INIT)?.wait_timeout(timeout)?;
         self.next_seq(); // INIT uses seq 0
@@ -222,6 +227,14 @@ impl HmiDriver {
             .unwrap_or(false)
     }
 
+    pub fn has_connection_errored(&self) -> bool {
+        if let Some(conn) = &self.connection {
+            conn.err_flag.load(Ordering::Relaxed)
+        } else {
+            false
+        }
+    }
+
     fn next_seq(&self) -> u8 {
         self.seq.fetch_add(1, Ordering::SeqCst)
     }
@@ -236,7 +249,7 @@ impl HmiDriver {
     fn send_message(&self, msg: Message) -> DriverResult<HmiHandleGeneric> {
         let conn = self.get_connection()?;
         let seq = msg.seq();
-        tracing::trace!("Sending message: {:?}", msg);
+        log::trace!("Sending message: {:?}", msg);
         let encoded = bincode::encode_to_vec(msg, BINCODE_CFG).map_err(HmiError::from)?;
         let handle = HmiHandleGeneric::new();
         conn.to_runner
@@ -246,9 +259,9 @@ impl HmiDriver {
                 handle: handle.clone(),
             })
             .map_err(|e| HmiError::Io(IoError::new(ErrorKind::BrokenPipe, e)))?;
-        tracing::trace!("Sent message");
+        log::trace!("Sent message");
         conn.handle.wake().map_err(HmiError::from)?;
-        tracing::trace!("Woke wakere");
+        log::trace!("Woke wakere");
         Ok(handle)
     }
 
@@ -257,7 +270,7 @@ impl HmiDriver {
             "SETASG {} {} {} {}",
             entry.address, entry.size, entry.var_name, entry.multiply
         );
-        tracing::debug!("Sending ASG command: {}", cmd);
+        log::debug!("Sending ASG command: {}", cmd);
         self.write::<ports::Command>(0, cmd)?
             .wait_timeout(timeout)
             .map_err(Into::into)
@@ -277,7 +290,7 @@ impl HmiDriver {
         if !T::ZERO_INDEXED && index == 0 {
             return Err(HmiError::ZeroIndex.into());
         }
-        tracing::trace!(
+        log::trace!(
             "Writing to port {} at index {} values {:?}",
             T::NAME,
             index,

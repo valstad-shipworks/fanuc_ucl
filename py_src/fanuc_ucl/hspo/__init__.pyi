@@ -53,8 +53,18 @@ def initialize_broker(listen_on: str, thread_config: ThreadConfig) -> None:
     This must be called before creating any ``HspoReceiver``. Calling it again after initialization is a no-op.
     """
 
-def destroy_broker() -> None:
-    """Shuts down the global HSPO broker and joins its background thread."""
+def destroy_broker(wait_for_thread: bool = True) -> None:
+    """Shuts down the global HSPO broker.
+
+    If ``wait_for_thread`` is ``True``, blocks until the broker thread has fully exited.
+    """
+
+def has_broker_errored() -> bool:
+    """Returns ``True`` if the HSPO broker thread encountered an error during setup.
+
+    When this returns ``True`` the broker is likely non-functional and should
+    be destroyed and re-initialized.
+    """
 
 class HspoReceiver:
     """Receives HSPO (High Speed Position Output) packets from a specific FANUC controller.
@@ -66,6 +76,7 @@ class HspoReceiver:
         self,
         ip_of_interest: str | IPv4Address | IPv6Address,
         packet_buffer_size: int = 128,
+        connection_timeout_secs: float = 0.016,
     ) -> None:
         """Creates a new receiver for the given robot IP address with the specified packet buffer size."""
     def is_connected(self) -> bool:

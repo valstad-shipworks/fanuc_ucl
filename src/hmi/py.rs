@@ -87,7 +87,7 @@ fn make_asg_interface<T: AsgArgument>(
     timeout: Duration,
 ) -> DriverResult<PyAsgVarInterface> {
     let mut entry = arg.to_asg_entry();
-    tracing::trace!("Making ASG interface for entry: {}", entry);
+    log::trace!("Making ASG interface for entry: {}", entry);
     entry.size *= count as u16;
     if driver.asg_entries.is_empty() {
         entry.address = 1;
@@ -204,6 +204,11 @@ impl HmiDriver {
     #[pyo3(name = "is_connected")]
     pub fn py_is_connected(&self) -> bool {
         HmiDriver::is_connected(self)
+    }
+
+    #[pyo3(name = "has_connection_errored")]
+    pub fn py_has_connection_errored(&self) -> bool {
+        HmiDriver::has_connection_errored(self)
     }
 
     #[pyo3(name = "register_asg", signature = (*args, **kwargs))]

@@ -703,7 +703,7 @@ pub enum TxPackets {
 }
 
 impl TxPackets {
-    pub fn encode_into(self, version: u32, buffer: &mut [u8]) -> usize {
+    pub fn encode_into(self, version: u32, buffer: &mut [u8]) -> Result<usize, StreamMotionError> {
         let pkt_type = match self {
             TxPackets::MotionCommand(ref pkt) => {
                 if pkt.should_cast_to_single(version) {
@@ -728,33 +728,25 @@ impl TxPackets {
             TxPackets::MotionCommand(ref pkt) => {
                 if pkt.should_cast_to_single(version) {
                     let single: MotionCommandPacketSingle = (*pkt).into();
-                    bincode::encode_into_slice(single, data_buf, cfg)
-                        .expect("Failed to encode MotionCommandPacketSingle")
+                    bincode::encode_into_slice(single, data_buf, cfg)?
                 } else {
-                    bincode::encode_into_slice(pkt, data_buf, cfg)
-                        .expect("Failed to encode MotionCommandPacket")
+                    bincode::encode_into_slice(pkt, data_buf, cfg)?
                 }
             }
-            TxPackets::Stop(ref pkt) => {
-                bincode::encode_into_slice(pkt, data_buf, cfg).expect("Failed to encode StopPacket")
-            }
-            TxPackets::Start(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)
-                .expect("Failed to encode StartPacket"),
+            TxPackets::Stop(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
+            TxPackets::Start(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
             TxPackets::CommandPositionRequest(ref pkt) => {
-                bincode::encode_into_slice(pkt, data_buf, cfg)
-                    .expect("Failed to encode CommandPositionRequestPacket")
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
             }
             TxPackets::ThresholdTableRequest(ref pkt) => {
-                bincode::encode_into_slice(pkt, data_buf, cfg)
-                    .expect("Failed to encode ThresholdTableRequestPacket")
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
             }
             TxPackets::VersionNumberRequest(ref pkt) => {
-                bincode::encode_into_slice(pkt, data_buf, cfg)
-                    .expect("Failed to encode VersionNumberRequestPacket")
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
             }
         };
-        tracing::trace!("Encoded packet type {} with {} bytes of data", pkt_type, n);
-        n + 8
+        log::trace!("Encoded packet type {} with {} bytes of data", pkt_type, n);
+        Ok(n + 8)
     }
 }
 
@@ -770,7 +762,7 @@ pub enum RxPackets {
 impl RxPackets {
     pub fn decode_from(buf: &[u8]) -> Option<Self> {
         if buf.len() < 8 {
-            tracing::warn!("Received packet too short: {} bytes", buf.len());
+            log::warn!("Received packet too short: {} bytes", buf.len());
             return None;
         }
         let packet_type = u32::from_be_bytes(buf[0..4].try_into().ok()?);
@@ -788,7 +780,7 @@ impl RxPackets {
             RobotStatusPacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    tracing::warn!(
+                    log::warn!(
                         "Warning: RobotStatusPacket decoded length {} does not match data length {}",
                         n,
                         data_buf.len()
@@ -799,8 +791,8 @@ impl RxPackets {
             ThresholdTableResponsePacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    tracing::warn!(
-                        "Warning: RobotStatusPacket decoded length {} does not match data length {}",
+                    log::warn!(
+                        "Warning: ThresholdTableResponsePacket decoded length {} does not match data length {}",
                         n,
                         data_buf.len()
                     );
@@ -810,7 +802,7 @@ impl RxPackets {
             CommandPositionResponsePacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    tracing::warn!(
+                    log::warn!(
                         "Warning: CommandPositionResponsePacket decoded length {} does not match data length {}",
                         n,
                         data_buf.len()

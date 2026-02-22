@@ -7,6 +7,8 @@ use libc::{
     sched_get_priority_max, sched_get_priority_min, sched_param, setpriority,
 };
 use std::{
+    error::Error,
+    fmt::Debug,
     io,
     sync::{Arc, atomic::AtomicBool},
     thread::JoinHandle,
@@ -25,6 +27,12 @@ pub struct ThreadConfig {
 impl ThreadConfig {
     pub fn configure_this_thread(&self) -> io::Result<()> {
         configure_thread_scheduling(self.priority, self.cpu_affinity)
+    }
+
+    pub(crate) fn configure_this_thread_print_failure(&self) {
+        if let Err(e) = self.configure_this_thread() {
+            log::error!("Failed to configure thread scheduling: {}", e);
+        }
     }
 }
 
@@ -209,6 +217,86 @@ impl Drop for ThreadHandle {
                 handle.thread().unpark();
                 let _ = handle.join();
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoCustomError;
+impl std::fmt::Display for NoCustomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "No custom error")
+    }
+}
+impl Error for NoCustomError {}
+
+#[derive(Debug)]
+pub(crate) enum GeneralThreadError<
+    T: Sized + Send + Sync + core::fmt::Debug + Error + 'static = NoCustomError,
+> {
+    Io(std::io::Error),
+    FailedToCreatePoll,
+    FailedSocketBinding,
+    FailedSocketRegistry,
+    FailedWakerCreation,
+    FlumeSend,
+    FlumeRecv(flume::RecvError),
+    Custom(T),
+}
+
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static> From<std::io::Error>
+    for GeneralThreadError<T>
+{
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static> From<flume::RecvError>
+    for GeneralThreadError<T>
+{
+    fn from(value: flume::RecvError) -> Self {
+        Self::FlumeRecv(value)
+    }
+}
+
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static, U> From<flume::SendError<U>>
+    for GeneralThreadError<T>
+{
+    fn from(_value: flume::SendError<U>) -> Self {
+        Self::FlumeSend
+    }
+}
+
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static> std::fmt::Display
+    for GeneralThreadError<T>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "IO error: {}", e),
+            Self::FailedToCreatePoll => write!(f, "Failed to create poll instance"),
+            Self::FailedSocketBinding => write!(f, "Failed to bind socket"),
+            Self::FailedSocketRegistry => write!(f, "Failed to register socket"),
+            Self::FailedWakerCreation => write!(f, "Failed to create waker"),
+            Self::FlumeSend => write!(f, "Flume send error"),
+            Self::FlumeRecv(e) => write!(f, "Flume receive error: {}", e),
+            Self::Custom(e) => write!(f, "Custom error: {:?}", e),
+        }
+    }
+}
+
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static> Error for GeneralThreadError<T> {}
+
+#[cfg(feature = "py")]
+impl<T: Sized + Send + Sync + core::fmt::Debug + Error + 'static> From<GeneralThreadError<T>>
+    for pyo3::PyErr
+{
+    fn from(value: GeneralThreadError<T>) -> Self {
+        match value {
+            GeneralThreadError::Io(e) => {
+                pyo3::PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("IO error: {}", e))
+            }
+            other => pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", other)),
         }
     }
 }
