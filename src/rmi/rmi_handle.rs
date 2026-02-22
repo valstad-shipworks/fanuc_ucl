@@ -432,15 +432,20 @@ pub(super) mod py {
             }
             self.inner
                 .handles()
-                .map(|h| Ok(PyRmiHandleGeneric {
-                    inner: h.clone(),
-                    pytype: self.pytype.as_ref()
-                        .ok_or_else(|| {
-                            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                                "Cannot convert packet to Python object without a known type",
-                            )
-                        }).map(|t| t.clone_ref(py))?
-                }))
+                .map(|h| {
+                    Ok(PyRmiHandleGeneric {
+                        inner: h.clone(),
+                        pytype: self
+                            .pytype
+                            .as_ref()
+                            .ok_or_else(|| {
+                                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                                    "Cannot convert packet to Python object without a known type",
+                                )
+                            })
+                            .map(|t| t.clone_ref(py))?,
+                    })
+                })
                 .collect::<PyResult<Vec<_>>>()
         }
 

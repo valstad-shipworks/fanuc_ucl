@@ -69,7 +69,10 @@ pub mod py {
     #[pyo3::pymodule(name = "_fanuc_core")]
     fn py_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         pyo3_log::try_init().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to initialize logging: {}", e))
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to initialize logging: {}",
+                e
+            ))
         })?;
 
         hmi::py::register_child_module(m)?;

@@ -59,13 +59,9 @@ impl HmiRunner {
         let join_handle = std::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
-                if let Err(e) = hmi_runner_runtime(
-                    handle,
-                    tcp_stream,
-                    from_driver,
-                    thread_config,
-                    waker_tx,
-                ) {
+                if let Err(e) =
+                    hmi_runner_runtime(handle, tcp_stream, from_driver, thread_config, waker_tx)
+                {
                     log::error!("HMI runner thread setup failed: {:?}", e);
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }

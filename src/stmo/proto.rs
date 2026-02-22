@@ -735,9 +735,15 @@ impl TxPackets {
             }
             TxPackets::Stop(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
             TxPackets::Start(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
-            TxPackets::CommandPositionRequest(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
-            TxPackets::ThresholdTableRequest(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
-            TxPackets::VersionNumberRequest(ref pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
+            TxPackets::CommandPositionRequest(ref pkt) => {
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
+            }
+            TxPackets::ThresholdTableRequest(ref pkt) => {
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
+            }
+            TxPackets::VersionNumberRequest(ref pkt) => {
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
+            }
         };
         log::trace!("Encoded packet type {} with {} bytes of data", pkt_type, n);
         Ok(n + 8)

@@ -185,7 +185,11 @@ impl HmiDriver {
         handle.set_handle(join_handle);
         handle.set_waker_mio(waker);
         self.seq.store(0, Ordering::SeqCst);
-        self.connection = Some(HmiConnection { handle, to_runner, err_flag });
+        self.connection = Some(HmiConnection {
+            handle,
+            to_runner,
+            err_flag,
+        });
         let start = Instant::now();
         let ack = self.send_message(Message::INIT)?.wait_timeout(timeout)?;
         self.next_seq(); // INIT uses seq 0

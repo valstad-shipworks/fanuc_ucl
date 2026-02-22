@@ -1,7 +1,11 @@
 #![allow(clippy::unnecessary_map_on_constructor, clippy::useless_conversion)]
 
 use std::{
-    collections::VecDeque, io, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, sync::{Arc, atomic::AtomicBool}, time::{Duration, Instant}
+    collections::VecDeque,
+    io,
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    sync::{Arc, atomic::AtomicBool},
+    time::{Duration, Instant},
 };
 
 use cfg_mixin::cfg_mixin;
@@ -464,7 +468,9 @@ impl StreamMotionDriver {
     ) -> DriverResult<()> {
         if motions.len() == 1 {
             return self.command_motion(
-                motions.pop().ok_or(StreamMotionError::Other("Empty Batch".to_string()))?
+                motions
+                    .pop()
+                    .ok_or(StreamMotionError::Other("Empty Batch".to_string()))?,
             );
         }
         if self.connection.is_none() {
@@ -533,7 +539,8 @@ impl StreamMotionDriver {
                 }
             })?;
 
-        let thread_waker = waker_rx.recv()
+        let thread_waker = waker_rx
+            .recv()
             .map_err(|_| StreamMotionError::NotConnected)?;
         thread_handle.set_waker_mio(thread_waker);
         thread_handle.set_handle(thread);
@@ -647,7 +654,9 @@ impl StreamMotionDriver {
                                 deriv_idx as u32,
                             ));
                             match req {
-                                Ok(r) => self.send_packet(ToThreadMessage::ThresholdTableRequest(r)),
+                                Ok(r) => {
+                                    self.send_packet(ToThreadMessage::ThresholdTableRequest(r))
+                                }
                                 Err(e) => log::error!(
                                     "Invalid ThresholdTableRequestPacket parameters: {:?}",
                                     e

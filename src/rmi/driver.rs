@@ -666,11 +666,7 @@ impl RmiDriver {
                 "Packet did not serialize to a JSON object".to_string(),
             ));
         };
-        validate_gates(
-            &content,
-            conn.major_version,
-            &self.config.software_options,
-        )?;
+        validate_gates(&content, conn.major_version, &self.config.software_options)?;
 
         log::debug!(
             "Sending packet to runner: {}",

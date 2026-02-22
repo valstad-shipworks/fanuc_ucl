@@ -313,7 +313,11 @@ impl HspoReceiver {
         connection_timeout: Duration,
     ) -> Result<Self, HspoBrokerNotInitializedError> {
         if let Some(server) = HSPO_SERVER.lock().as_ref() {
-            server.add_robot(ip_of_interest.into(), packet_buffer_size, connection_timeout)
+            server.add_robot(
+                ip_of_interest.into(),
+                packet_buffer_size,
+                connection_timeout,
+            )
         } else {
             Err(HspoBrokerNotInitializedError)
         }
@@ -450,7 +454,7 @@ fn broker_runtime(
     listen_on: SocketAddr,
     thread_config: Option<ThreadConfig>,
     robot_receiver: Receiver<RobotSender>,
-    thread_kill_switch: Arc<AtomicBool>
+    thread_kill_switch: Arc<AtomicBool>,
 ) -> Result<(), GeneralThreadError> {
     if let Some(thread_config) = thread_config {
         thread_config.configure_this_thread_print_failure();
@@ -458,7 +462,8 @@ fn broker_runtime(
 
     let mut poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
     let mut events = Events::with_capacity(256);
-    let mut socket = MioUdpSocket::bind(listen_on).map_err(|_| GeneralThreadError::FailedSocketBinding)?;
+    let mut socket =
+        MioUdpSocket::bind(listen_on).map_err(|_| GeneralThreadError::FailedSocketBinding)?;
     poll.registry()
         .register(&mut socket, TOK_SOCKET, Interest::READABLE)
         .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
@@ -512,16 +517,15 @@ fn broker_runtime(
 
                         match pkt_type {
                             PacketType::TcpCartesianPosition => {
-                                if let Ok((p, _n)) = bincode::decode_from_slice::<
-                                    TcpCartesianPositionPacket,
-                                    _,
-                                >(
-                                    &buf[..n], config
-                                ) {
+                                if let Ok((p, _n)) =
+                                    bincode::decode_from_slice::<TcpCartesianPositionPacket, _>(
+                                        &buf[..n],
+                                        config,
+                                    )
+                                {
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
-                                        rs.connection_active
-                                            .store(true, Ordering::Relaxed);
+                                        rs.connection_active.store(true, Ordering::Relaxed);
                                         rs.update_clocks(p.clock);
                                         match rs.tcp_tx.try_send(p) {
                                             Ok(_) => {}
@@ -543,8 +547,7 @@ fn broker_runtime(
                                 {
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
-                                        rs.connection_active
-                                            .store(true, Ordering::Relaxed);
+                                        rs.connection_active.store(true, Ordering::Relaxed);
                                         rs.update_clocks(p.clock);
                                         match rs.joint_tx.try_send(p) {
                                             Ok(_) => {}
@@ -558,16 +561,13 @@ fn broker_runtime(
                                 }
                             }
                             PacketType::Variables => {
-                                if let Ok((p, _n)) =
-                                    bincode::decode_from_slice::<VariablesPacket, _>(
-                                        &buf[..n],
-                                        config,
-                                    )
-                                {
+                                if let Ok((p, _n)) = bincode::decode_from_slice::<VariablesPacket, _>(
+                                    &buf[..n],
+                                    config,
+                                ) {
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
-                                        rs.connection_active
-                                            .store(true, Ordering::Relaxed);
+                                        rs.connection_active.store(true, Ordering::Relaxed);
                                         rs.update_clocks(p.clock);
                                         match rs.var_tx.try_send(p) {
                                             Ok(_) => {}
@@ -676,7 +676,9 @@ impl HspoBroker {
         let _thread_handle = thread::Builder::new()
             .name("hspo_server".to_string())
             .spawn(move || {
-                if let Err(e) = broker_runtime(listen_on, thread_config, robot_receiver, thread_kill_switch) {
+                if let Err(e) =
+                    broker_runtime(listen_on, thread_config, robot_receiver, thread_kill_switch)
+                {
                     log::error!("HSPO broker thread exited with error: {}", e);
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }
@@ -730,7 +732,7 @@ pub fn initialize_broker(
 }
 
 /// Shuts down the global HSPO broker
-/// 
+///
 /// If `wait_for_thread` is `true`, this will block until the broker thread has fully exited.
 #[cfg_attr(feature = "py", pyo3::pyfunction)]
 #[cfg_attr(feature = "py", pyo3(signature=(wait_for_thread=true)))]
