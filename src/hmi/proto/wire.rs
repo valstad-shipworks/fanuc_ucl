@@ -545,7 +545,7 @@ impl Message {
         let data_count = T::item_count(index, data);
         let data_byte_cnt = T::size_of_array(index, data);
         if data_byte_cnt <= 6 {
-            tracing::trace!(
+            log::trace!(
                 "Packing write request for port {} at index {} and count {} with data {:?} into inline payload",
                 T::NAME,
                 index,
@@ -574,7 +574,7 @@ impl Message {
                 },
             }
         } else {
-            tracing::trace!(
+            log::trace!(
                 "Packing write request for port {} at index {} and count {} with data {:?} into extended payload",
                 T::NAME,
                 index,
@@ -582,7 +582,7 @@ impl Message {
                 data
             );
             let payload = T::pack_array(index, data);
-            tracing::debug!("Extended write payload size: {} bytes", payload.len());
+            log::debug!("Extended write payload size: {} bytes", payload.len());
             Message {
                 header: Header {
                     seq1: seq as u16,

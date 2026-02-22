@@ -1,11 +1,7 @@
 #![allow(clippy::unnecessary_map_on_constructor, clippy::useless_conversion)]
 
 use std::{
-    collections::VecDeque,
-    io,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::Arc,
-    time::{Duration, Instant},
+    collections::VecDeque, io, net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, sync::{Arc, atomic::AtomicBool}, time::{Duration, Instant}
 };
 
 use cfg_mixin::cfg_mixin;
@@ -22,7 +18,7 @@ use crate::{
         },
         types::{AxisMotionConstraint, JointMovementLimits, RxStorage, StreamMotionError},
     },
-    thread_util::{ThreadConfig, ThreadHandle},
+    thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
 };
 
 use mio::net::UdpSocket as MioUdpSocket;
@@ -75,39 +71,33 @@ impl StreamMotionContext {
         }
     }
 
-    /**
-     * Sends the packet or queues it if the socket is not ready.
-     */
     fn send(
         &mut self,
         tx: TxPackets,
         buf: &mut [u8],
         timeout: Option<Duration>,
         version_override: Option<u32>,
-    ) -> Option<String> {
-        let n = tx.encode_into(version_override.unwrap_or(self.protocol_version), buf);
+    ) -> Result<(), StreamMotionError> {
+        let n = tx.encode_into(version_override.unwrap_or(self.protocol_version), buf)?;
         match self.socket.send(&buf[..n]) {
-            Ok(_) => None,
+            Ok(_) => Ok(()),
             Err(ref e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::Interrupted =>
             {
                 if let Some(to) = timeout {
                     match self.retry_sending(tx, to, buf) {
-                        Ok(()) => None,
-                        Err(e) => Some(format!("Error sending packet with retry: {:?}", e)),
+                        Ok(()) => Ok(()),
+                        Err(e) => Err(e),
                     }
                 } else {
-                    Some("Socket busy, packet queued".into())
+                    Err(StreamMotionError::Timeout)
                 }
             }
-            Err(e) => Some(format!("Error sending packet: {:?}", e)),
+            Err(e) => Err(StreamMotionError::from(e)),
         }
     }
 
-    /**
-     * Try to send a packet, retrying until timeout if the socket is not ready.
-     */
     fn retry_sending(
         &mut self,
         tx: TxPackets,
@@ -116,7 +106,7 @@ impl StreamMotionContext {
     ) -> Result<(), StreamMotionError> {
         let start = Instant::now();
         let mut sent = false;
-        let n = tx.encode_into(self.protocol_version, buf);
+        let n = tx.encode_into(self.protocol_version, buf)?;
         let sleeper = spin_sleep::SpinSleeper::new(1_000_000);
         while !sent && start.elapsed() < timeout {
             match self.socket.send(&buf[..n]) {
@@ -128,8 +118,8 @@ impl StreamMotionContext {
                     sleeper.sleep(Duration::from_micros(500));
                 }
                 Err(e) => {
-                    tracing::error!("Error sending packet: {:?}", e);
-                    break;
+                    log::error!("Error sending packet: {:?}", e);
+                    return Err(StreamMotionError::from(e));
                 }
             }
         }
@@ -189,7 +179,7 @@ impl StreamMotionContext {
                                         let _ = self.to_driver.send(rx);
                                         if let RxPackets::VersionNumberResponse(vn) = &rx {
                                             self.protocol_version = vn.version;
-                                            tracing::info!(
+                                            log::info!(
                                                 "Detected Stream Motion protocol version {}",
                                                 self.protocol_version
                                             );
@@ -216,7 +206,7 @@ impl StreamMotionContext {
                                                 );
                                             } else if state.status_bits().command_received() {
                                                 if !last_motion_was_last {
-                                                    tracing::warn!(
+                                                    log::warn!(
                                                         "Motion command queue empty, last command was not marked last. Sending hold command."
                                                     );
                                                 }
@@ -232,7 +222,7 @@ impl StreamMotionContext {
                                             }
                                         }
                                     } else {
-                                        tracing::warn!(
+                                        log::warn!(
                                             "Received unknown packet: ({}) {:02X?}",
                                             n,
                                             &rx_buf[..n]
@@ -240,13 +230,13 @@ impl StreamMotionContext {
                                     }
                                 }
                                 Ok(_) => {
-                                    tracing::warn!("Received empty packet");
+                                    log::warn!("Received empty packet");
                                     break;
                                 }
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
                                 Err(e) => {
-                                    tracing::error!("Error receiving packet: {:?}", e);
+                                    log::error!("Error receiving packet: {:?}", e);
                                     break;
                                 }
                             }
@@ -302,7 +292,7 @@ impl StreamMotionContext {
                                         None,
                                         None,
                                     );
-                                    tracing::info!("Sent ThresholdTableRequest");
+                                    log::info!("Sent ThresholdTableRequest");
                                 }
                             }
                         }
@@ -317,7 +307,7 @@ impl StreamMotionContext {
         if thread_handle.should_live() {
             if self.protocol_version == 0 {
                 // never started, nothing to do
-                tracing::info!("StreamMotionContext exiting (never started)");
+                log::info!("StreamMotionContext exiting (never started)");
                 thread_handle.has_died();
                 return;
             }
@@ -327,12 +317,45 @@ impl StreamMotionContext {
                 &mut tx_buf,
             );
             if let Err(e) = stop_res {
-                tracing::error!("Error sending stop packet during shutdown: {e:?}");
+                log::error!("Error sending stop packet during shutdown: {e:?}");
             }
         }
-        tracing::info!("StreamMotionContext exited");
+        log::info!("StreamMotionContext exited");
         thread_handle.has_died();
     }
+}
+
+fn stream_motion_runtime(
+    mut thread_handle: ThreadHandle,
+    socket: std::net::UdpSocket,
+    thread_config: Option<ThreadConfig>,
+    to_driver: Sender<RxPackets>,
+    from_driver: Receiver<ToThreadMessage>,
+    waker_tx: Sender<Arc<Waker>>,
+) -> Result<(), GeneralThreadError> {
+    if let Some(cfg) = thread_config {
+        cfg.configure_this_thread_print_failure();
+    }
+
+    let mut socket = MioUdpSocket::from_std(socket);
+
+    let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+    poll.registry()
+        .register(&mut socket, TOK_SOCKET, Interest::READABLE)
+        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
+
+    let waker = Arc::new(
+        Waker::new(poll.registry(), TOK_WAKER)
+            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
+    );
+    // send a clone to the driver so API calls can wake the poller
+    waker_tx.send(waker.clone())?;
+    thread_handle.set_waker_mio(waker);
+
+    let context = StreamMotionContext::new(from_driver, to_driver, socket);
+    context.context_loop(thread_handle, poll);
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -341,6 +364,7 @@ struct StreamMotionConnection {
     to_thread: Sender<ToThreadMessage>,
     from_thread: Receiver<RxPackets>,
     is_started: bool,
+    err_flag: Arc<AtomicBool>,
 }
 
 #[cfg_attr(feature = "py", pyo3::pyclass(str))]
@@ -357,7 +381,7 @@ impl StreamMotionDriver {
     fn send_packet(&self, tx: ToThreadMessage) {
         if let Some(conn) = &self.connection {
             if let Err(e) = conn.to_thread.send(tx) {
-                tracing::error!("Error sending packet to thread: {:?}", e);
+                log::error!("Error sending packet to thread: {:?}", e);
             }
             let _ = conn.thread_handle.wake();
         }
@@ -439,7 +463,9 @@ impl StreamMotionDriver {
         mut motions: Vec<MotionCommandPacket>,
     ) -> DriverResult<()> {
         if motions.len() == 1 {
-            return self.command_motion(motions.pop().unwrap());
+            return self.command_motion(
+                motions.pop().ok_or(StreamMotionError::Other("Empty Batch".to_string()))?
+            );
         }
         if self.connection.is_none() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);
@@ -486,35 +512,29 @@ impl StreamMotionDriver {
         let mut thread_handle = ThreadHandle::new();
         let thread_handle_mv = thread_handle.to_pass_in();
 
+        let local_err_flag = Arc::new(AtomicBool::new(false));
+        let thread_err_flag = local_err_flag.clone();
+
         let (waker_tx, waker_rx) = flume::bounded(1);
 
         let thread = std::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
             .spawn(move || {
-                let mut thread_handle = thread_handle_mv;
-                if let Some(cfg) = thread_config {
-                    let _ = cfg.configure_this_thread();
+                if let Err(e) = stream_motion_runtime(
+                    thread_handle_mv,
+                    socket,
+                    thread_config,
+                    to_driver,
+                    from_driver,
+                    waker_tx,
+                ) {
+                    log::error!("Stream motion thread error: {:?}", e);
+                    thread_err_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
-
-                let mut socket = MioUdpSocket::from_std(socket);
-
-                let poll = Poll::new().expect("Poll creation failed");
-                poll.registry()
-                    .register(&mut socket, TOK_SOCKET, Interest::READABLE)
-                    .expect("Register UDP socket failed");
-
-                let waker = Arc::new(
-                    Waker::new(poll.registry(), TOK_WAKER).expect("Waker creation failed"),
-                );
-                // send a clone to the driver so API calls can wake the poller
-                let _ = waker_tx.send(waker.clone());
-                thread_handle.set_waker_mio(waker);
-
-                let context = StreamMotionContext::new(from_driver, to_driver, socket);
-                context.context_loop(thread_handle, poll);
             })?;
 
-        let thread_waker = waker_rx.recv().expect("Waker was not sent from thread");
+        let thread_waker = waker_rx.recv()
+            .map_err(|_| StreamMotionError::NotConnected)?;
         thread_handle.set_waker_mio(thread_waker);
         thread_handle.set_handle(thread);
 
@@ -523,9 +543,18 @@ impl StreamMotionDriver {
             to_thread,
             from_thread,
             is_started: false,
+            err_flag: local_err_flag,
         });
 
         Ok(())
+    }
+
+    pub fn has_connection_errored(&self) -> bool {
+        if let Some(conn) = &self.connection {
+            conn.err_flag.load(std::sync::atomic::Ordering::SeqCst)
+        } else {
+            false
+        }
     }
 
     #[on(pyo3(signature = (timeout_secs=2.0)))]
@@ -617,14 +646,13 @@ impl StreamMotionDriver {
                                 joint_idx as u32 + 1,
                                 deriv_idx as u32,
                             ));
-                            if let Err(e) = req {
-                                tracing::error!(
+                            match req {
+                                Ok(r) => self.send_packet(ToThreadMessage::ThresholdTableRequest(r)),
+                                Err(e) => log::error!(
                                     "Invalid ThresholdTableRequestPacket parameters: {:?}",
                                     e
-                                );
-                                continue;
+                                ),
                             }
-                            self.send_packet(ToThreadMessage::ThresholdTableRequest(req.unwrap()));
                             std::thread::sleep(Duration::from_millis(24));
                         }
                     }
@@ -635,7 +663,7 @@ impl StreamMotionDriver {
             self.refresh();
 
             while let Some(pkt) = self.rx_storage.threshold_table.pop_front() {
-                tracing::debug!(
+                log::debug!(
                     "Received movement limit: axis {}, type {}, vmax {}",
                     pkt.axis_number,
                     pkt.limit_type,
@@ -660,13 +688,14 @@ impl StreamMotionDriver {
                     if entry.is_none() {
                         *entry = Some(JointMovementLimit::default());
                     }
-                    let entry = entry.as_mut().unwrap();
 
-                    match deriv {
-                        0 => entry.velocity = cons,
-                        1 => entry.acceleration = cons,
-                        2 => entry.jerk = cons,
-                        _ => {}
+                    if let Some(entry) = entry {
+                        match deriv {
+                            0 => entry.velocity = cons,
+                            1 => entry.acceleration = cons,
+                            2 => entry.jerk = cons,
+                            _ => {}
+                        }
                     }
                     seen[axis][deriv] = true;
                 }

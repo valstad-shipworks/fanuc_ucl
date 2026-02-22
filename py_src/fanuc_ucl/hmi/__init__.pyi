@@ -142,6 +142,14 @@ class HmiDriver:
         """Connects to the HMI and performs the necessary handshake to establish communication."""
     def disconnect(self) -> None:
         """Disconnects from the HMI, shutting down the runner thread and cleaning up resources."""
+    def is_connected(self) -> bool:
+        """Returns ``True`` if the driver is currently connected to the HMI."""
+    def has_connection_errored(self) -> bool:
+        """Returns ``True`` if the background runner thread failed during setup.
+
+        When this returns ``True`` the connection is non-functional and should
+        be disconnected and re-established.
+        """
     def clear_alarms(self) -> HmiHandle[None]:
         """Sends a command to clear all active alarms on the controller."""
     def write(

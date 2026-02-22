@@ -333,6 +333,10 @@ pub enum StreamMotionError {
     JointDataTooSmall(#[from] JointDataSizeError),
     #[error("Invalid Joint Count: {0}")]
     InvalidJointCount(u8),
+    #[error("Encoding Error")]
+    EncodingError(#[from] bincode::error::EncodeError),
+    #[error("Decoding Error")]
+    DecodingError(#[from] bincode::error::DecodeError),
     #[error("Other Error: {0}")]
     Other(String),
 }

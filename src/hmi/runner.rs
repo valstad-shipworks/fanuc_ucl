@@ -1,15 +1,16 @@
-use flume::Receiver;
+use flume::{Receiver, Sender};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Error as IoError, ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use mio::{Interest, Poll, Token, Waker, net::TcpStream};
 
 use crate::hmi::proto::wire::{Body, Header, Message};
 use crate::hmi::{BINCODE_CFG, DriverResult, HmiError};
-use crate::thread_util::{ThreadConfig, ThreadHandle};
+use crate::thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle};
 
 use super::hmi_handle::{HmiHandleGeneric, HmiResult};
 
@@ -49,46 +50,31 @@ impl HmiRunner {
         handle: ThreadHandle,
         from_driver: Receiver<RunnerMessage>,
         thread_config: Option<ThreadConfig>,
-    ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>)> {
-        let mut tcp_stream = TcpStream::connect(addr)?;
-        tracing::trace!("HMI runner connected to {}", addr);
-        let (waker_tx, waker_rx) = std::sync::mpsc::channel();
+    ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
+        let tcp_stream = TcpStream::connect(addr)?;
+        log::trace!("HMI runner connected to {}", addr);
+        let (waker_tx, waker_rx) = flume::bounded(1);
+        let local_err_flag = Arc::new(AtomicBool::new(false));
+        let thread_err_flag = local_err_flag.clone();
         let join_handle = std::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
-                if let Some(cfg) = thread_config {
-                    let _ = cfg.configure_this_thread();
-                }
-                let poll = Poll::new().expect("Poll creation failed");
-                poll.registry()
-                    .register(
-                        &mut tcp_stream,
-                        HmiRunner::TOK_SOCKET,
-                        Interest::READABLE.add(Interest::WRITABLE),
-                    )
-                    .expect("Failed to register TCP stream");
-                let waker = Arc::new(
-                    Waker::new(poll.registry(), HmiRunner::TOK_WAKER)
-                        .expect("Failed to create waker"),
-                );
-                waker_tx.send(waker.clone()).expect("Failed to send waker");
-                let mut runner = HmiRunner {
+                if let Err(e) = hmi_runner_runtime(
                     handle,
                     tcp_stream,
                     from_driver,
-                    pending_responses: HashMap::new(),
-                    read_buffer: Vec::with_capacity(2048),
-                    shutting_down: false,
-                };
-                if let Err(e) = runner.run(poll) {
-                    tracing::error!("HMI runner terminated with error: {}", e);
+                    thread_config,
+                    waker_tx,
+                ) {
+                    log::error!("HMI runner thread setup failed: {:?}", e);
+                    thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })?;
         let waker = waker_rx
             .recv()
             .map_err(|e| HmiError::Io(IoError::other(e)))?;
-        tracing::trace!("HMI runner started");
-        Ok((join_handle, waker))
+        log::trace!("HMI runner started");
+        Ok((join_handle, waker, local_err_flag))
     }
 
     fn run(&mut self, mut poll: Poll) -> HmiResult<()> {
@@ -174,7 +160,7 @@ impl HmiRunner {
     }
 
     fn write_from_queue(&mut self, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
-        tracing::trace!("Writing to HMI tcp stream");
+        log::trace!("Writing to HMI tcp stream");
         while let Some(front) = queue.front_mut() {
             match self.tcp_stream.write(&front.buf[front.offset..]) {
                 Ok(0) => {
@@ -192,7 +178,7 @@ impl HmiRunner {
                 Err(e) => {
                     let handle = front.handle.clone();
                     queue.pop_front();
-                    tracing::trace!("Error while sending packet: {}", e);
+                    log::trace!("Error while sending packet: {}", e);
                     let _ = handle.set_error(HmiError::Io(e));
                 }
             }
@@ -253,4 +239,41 @@ impl HmiRunner {
             let _ = pending.handle.set_error(error.clone());
         }
     }
+}
+
+fn hmi_runner_runtime(
+    handle: ThreadHandle,
+    mut tcp_stream: TcpStream,
+    from_driver: Receiver<RunnerMessage>,
+    thread_config: Option<ThreadConfig>,
+    waker_tx: Sender<Arc<Waker>>,
+) -> Result<(), GeneralThreadError> {
+    if let Some(cfg) = thread_config {
+        cfg.configure_this_thread_print_failure();
+    }
+    let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+    poll.registry()
+        .register(
+            &mut tcp_stream,
+            HmiRunner::TOK_SOCKET,
+            Interest::READABLE.add(Interest::WRITABLE),
+        )
+        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
+    let waker = Arc::new(
+        Waker::new(poll.registry(), HmiRunner::TOK_WAKER)
+            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
+    );
+    waker_tx.send(waker.clone())?;
+    let mut runner = HmiRunner {
+        handle,
+        tcp_stream,
+        from_driver,
+        pending_responses: HashMap::new(),
+        read_buffer: Vec::with_capacity(2048),
+        shutting_down: false,
+    };
+    if let Err(e) = runner.run(poll) {
+        log::error!("HMI runner terminated with error: {}", e);
+    }
+    Ok(())
 }

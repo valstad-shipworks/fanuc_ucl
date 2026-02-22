@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{
         Arc,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -28,7 +28,7 @@ use crate::{
         },
         rmi_handle::*,
     },
-    thread_util::{ThreadConfig, ThreadHandle},
+    thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
 };
 
 type JsonObject = JsonMap<String, JsonValue>;
@@ -156,43 +156,30 @@ impl RmiRunner {
         from_driver: Receiver<RunnerMessage>,
         config: RmiDriverConfig,
         thread_config: Option<ThreadConfig>,
-    ) -> RmiResult<(JoinHandle<()>, Arc<Waker>)> {
-        let mut tcp_stream = TcpStream::connect(addr)?;
+    ) -> RmiResult<(JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
+        let tcp_stream = TcpStream::connect(addr)?;
         let (waker_tx, waker_rx) = flume::unbounded();
+        let local_err_flag = Arc::new(AtomicBool::new(false));
+        let thread_err_flag = local_err_flag.clone();
         let handle = std::thread::Builder::new()
             .name("fanuc-rmi-runner".to_string())
             .spawn(move || {
-                if let Some(cfg) = thread_config {
-                    let _ = cfg.configure_this_thread();
-                }
-                let poll = Poll::new().expect("Poll creation failed");
-                poll.registry()
-                    .register(
-                        &mut tcp_stream,
-                        RmiRunner::TOK_SOCKET,
-                        Interest::READABLE.add(Interest::WRITABLE),
-                    )
-                    .expect("Failed to register TCP stream");
-                let waker = Arc::new(
-                    Waker::new(poll.registry(), RmiRunner::TOK_WAKER)
-                        .expect("Failed to create waker"),
-                );
-                waker_tx.send(waker.clone()).expect("Failed to send waker");
-                let mut runner = RmiRunner {
+                if let Err(e) = rmi_runner_runtime(
                     handle,
                     tcp_stream,
                     from_driver,
-                    response_stack: VecDeque::with_capacity(config.buffer_cnt as usize),
                     config,
-                };
-                if let Err(e) = runner.run(poll) {
-                    tracing::warn!("RMI Runner encountered an error: {}", e);
+                    thread_config,
+                    waker_tx,
+                ) {
+                    log::error!("RMI runner thread setup failed: {:?}", e);
+                    thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })?;
         let waker = waker_rx
             .recv()
             .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
-        Ok((handle, waker))
+        Ok((handle, waker, local_err_flag))
     }
 
     fn fill_queue(&mut self, message_queue: &mut VecDeque<PendingWrite>) -> bool {
@@ -211,15 +198,15 @@ impl RmiRunner {
             match self.tcp_stream.read(buf) {
                 Ok(0) => return Err(RmiError::Disconnected),
                 Ok(n) => {
-                    tracing::trace!("Read {} bytes", n);
+                    log::trace!("Read {} bytes", n);
                     match rmi_string_reader(&buf[..n]) {
                         Ok(variadic) => {
-                            tracing::trace!("Variadic string has {} parts", variadic.len());
+                            log::trace!("Variadic string has {} parts", variadic.len());
                             for json_str in variadic.vec() {
                                 if json_str.trim().is_empty() {
                                     continue;
                                 }
-                                tracing::debug!("RMI Runner received response:\n{}", json_str);
+                                log::debug!("RMI Runner received response:\n{}", json_str);
                                 if let Some(resp_handle) = self.response_stack.front() {
                                     match serde_json::from_str(&json_str) {
                                         Ok(packet) => {
@@ -231,7 +218,7 @@ impl RmiRunner {
                                     }
                                     self.response_stack.pop_front();
                                 } else {
-                                    tracing::warn!(
+                                    log::warn!(
                                         "No response handle to match incoming response: {}",
                                         json_str
                                     );
@@ -240,7 +227,7 @@ impl RmiRunner {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to read RMI response: {}", e);
+                            log::warn!("Failed to read RMI response: {}", e);
                         }
                     }
                 }
@@ -255,7 +242,7 @@ impl RmiRunner {
             return false;
         }
         if !q.is_empty() {
-            tracing::trace!("Writing to RMI tcp stream");
+            log::trace!("Writing to RMI tcp stream");
         }
         while let Some(front) = q.front_mut() {
             let mut write_cnt = 0;
@@ -288,7 +275,7 @@ impl RmiRunner {
                     }
                 }
             }
-            tracing::trace!("Wrote {} times for one packet", write_cnt);
+            log::trace!("Wrote {} times for one packet", write_cnt);
             if self.response_stack.len() >= self.config.buffer_cnt as usize {
                 break;
             }
@@ -308,7 +295,8 @@ impl RmiRunner {
             } else {
                 Duration::from_millis(96)
             };
-            poll.poll(&mut events, Some(timeout)).expect("Poll failed");
+            poll.poll(&mut events, Some(timeout))
+                .map_err(RmiError::CommunicationError)?;
 
             for event in events.iter() {
                 if event.is_writable()
@@ -337,18 +325,55 @@ impl RmiRunner {
                 }
 
                 if connection_established && self.write_from_queue(&mut message_queue) {
-                    tracing::info!("Disconnect sent, terminating runner");
+                    log::info!("Disconnect sent, terminating runner");
                     break;
                 }
             }
 
             if !self.handle.is_alive() {
                 self.tcp_stream.shutdown(std::net::Shutdown::Both)?;
-                tracing::info!("RMI Runner thread terminating");
+                log::info!("RMI Runner thread terminating");
                 return Ok(());
             }
         }
     }
+}
+
+fn rmi_runner_runtime(
+    handle: ThreadHandle,
+    mut tcp_stream: TcpStream,
+    from_driver: Receiver<RunnerMessage>,
+    config: RmiDriverConfig,
+    thread_config: Option<ThreadConfig>,
+    waker_tx: Sender<Arc<Waker>>,
+) -> Result<(), GeneralThreadError> {
+    if let Some(cfg) = thread_config {
+        cfg.configure_this_thread_print_failure();
+    }
+    let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+    poll.registry()
+        .register(
+            &mut tcp_stream,
+            RmiRunner::TOK_SOCKET,
+            Interest::READABLE.add(Interest::WRITABLE),
+        )
+        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
+    let waker = Arc::new(
+        Waker::new(poll.registry(), RmiRunner::TOK_WAKER)
+            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
+    );
+    waker_tx.send(waker.clone())?;
+    let mut runner = RmiRunner {
+        handle,
+        tcp_stream,
+        from_driver,
+        response_stack: VecDeque::with_capacity(config.buffer_cnt as usize),
+        config,
+    };
+    if let Err(e) = runner.run(poll) {
+        log::warn!("RMI Runner encountered an error: {}", e);
+    }
+    Ok(())
 }
 
 #[cfg_mixin(feature = "py")]
@@ -478,6 +503,7 @@ struct RmiConnection {
     minor_version: u8,
     handle: ThreadHandle,
     to_runner: Sender<RunnerMessage>,
+    err_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -527,7 +553,7 @@ impl RmiDriver {
             buf
         };
         let response_str = rmi_string_reader(&response_bytes)?;
-        tracing::debug!("Connect response: {}", response_str);
+        log::debug!("Connect response: {}", response_str);
         let response = match response_str {
             VariadicString::Single(s) => serde_json::from_str::<FrcConnectResponse>(&s)?,
             other => {
@@ -551,7 +577,7 @@ impl RmiDriver {
         }
 
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker) = RmiRunner::start(
+        let (join_handle, waker, err_flag) = RmiRunner::start(
             SocketAddr::new(self.config.address, response.port_number),
             handle.to_pass_in(),
             from_driver,
@@ -567,6 +593,7 @@ impl RmiDriver {
             minor_version,
             handle,
             to_runner,
+            err_flag,
         });
 
         Ok(response)
@@ -598,6 +625,14 @@ impl RmiDriver {
 
     pub fn is_connected(&self) -> bool {
         self.get_connection().is_ok()
+    }
+
+    pub fn has_connection_errored(&self) -> bool {
+        if let Some(conn) = &self.connection {
+            conn.err_flag.load(Ordering::Relaxed)
+        } else {
+            false
+        }
     }
 
     pub fn update_connection(&mut self) -> RmiResult<()> {
@@ -633,11 +668,11 @@ impl RmiDriver {
         };
         validate_gates(
             &content,
-            self.connection.as_ref().unwrap().major_version,
+            conn.major_version,
             &self.config.software_options,
         )?;
 
-        tracing::debug!(
+        log::debug!(
             "Sending packet to runner: {}",
             serde_json::to_string_pretty(&content)?
         );
@@ -708,6 +743,9 @@ pub(super) mod py {
         }
         pub fn is_connected(&self) -> bool {
             self.inner.is_connected()
+        }
+        pub fn has_connection_errored(&self) -> bool {
+            self.inner.has_connection_errored()
         }
         pub fn version(&self) -> Option<(u8, u8)> {
             self.inner.version()

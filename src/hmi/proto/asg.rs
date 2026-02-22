@@ -55,7 +55,7 @@ pub trait HmiWireable: Sized + __private::Sealed {
         let mut filler = [0u8; N];
         let packed_size = self.pack(&mut filler);
         if view_size > packed_size || start_offset + view_size > N {
-            tracing::error!(
+            log::error!(
                 "Malformed response: cannot partial pack with view_size {} from packed size {} and start_offset {}",
                 view_size,
                 packed_size,
@@ -81,7 +81,7 @@ pub trait HmiWireable: Sized + __private::Sealed {
     ) -> Result<(Self, usize), HmiError> {
         let mut filler = [0u8; N];
         if view_size > src.len() || start_offset + view_size > Self::PACKED_SIZE {
-            tracing::error!(
+            log::error!(
                 "Malformed response: cannot partial unpack with view_size {} from src of size {} and start_offset {}",
                 view_size,
                 src.len(),
@@ -112,7 +112,7 @@ impl HmiWireable for f32 {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 4 {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 4 bytes for f32, got {} bytes",
                 src.len()
             );
@@ -134,7 +134,7 @@ impl HmiWireable for i32 {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 4 {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 4 bytes for i32, got {} bytes",
                 src.len()
             );
@@ -159,7 +159,7 @@ impl HmiWireable for i16 {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 2 {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 2 bytes for i16, got {} bytes",
                 src.len()
             );
@@ -188,7 +188,7 @@ impl HmiWireable for u16 {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 2 {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 2 bytes for u16, got {} bytes",
                 src.len()
             );
@@ -216,7 +216,7 @@ impl HmiWireable for i8 {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.is_empty() {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 1 byte for i8, got {} bytes",
                 src.len()
             );
@@ -242,7 +242,7 @@ impl HmiWireable for bool {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.is_empty() {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 1 byte for bool, got {} bytes",
                 src.len()
             );
@@ -271,7 +271,7 @@ impl HmiWireable for String {
     }
     fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
         if src.len() < 80 {
-            tracing::error!(
+            log::error!(
                 "Malformed response: expected at least 80 bytes for String, got {} bytes",
                 src.len()
             );
@@ -855,7 +855,7 @@ pub mod alarm_struct {
             offset += self
                 .severity_msg
                 .partial_pack::<80>(0, 18, &mut dst[offset..])
-                .expect("18 should never be greater than PACKED_SIZE");
+                .unwrap_or(18usize);
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
@@ -952,13 +952,13 @@ pub mod prog_status {
             offset += self
                 .name
                 .partial_pack::<80>(0, 16, &mut dst[offset..])
-                .expect("16 should never be greater than PACKED_SIZE");
+                .unwrap_or(16usize);
             offset += self.line_number.pack(&mut dst[offset..]);
             offset += (self.state as u16).pack(&mut dst[offset..]);
             offset += self
                 .parent_name
                 .partial_pack::<80>(0, 16, &mut dst[offset..])
-                .expect("16 should never be greater than PACKED_SIZE");
+                .unwrap_or(16usize);
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
@@ -1019,7 +1019,7 @@ pub trait AsgEncodableType:
     fn from_message(msg: Message, offset: u16, member_count: u16) -> HmiResult<Self> {
         let payload = msg.payload();
         let (value, _) = if 2 > offset {
-            tracing::debug!("Unpacking payload of size {} as full sysvar", payload.len());
+            log::debug!("Unpacking payload of size {} as full sysvar", payload.len());
             Self::unpack_sysvar(payload)?
         } else {
             Self::partial_unpack_sysvar::<80>(payload, offset as usize, member_count as usize)?
@@ -1035,7 +1035,7 @@ pub trait AsgEncodableType:
         let payload = msg.payload();
         let mut ret = Vec::with_capacity(item_count);
         let byte_count = member_count as usize * 2;
-        tracing::trace!(
+        log::trace!(
             "Decoding {} ASG items with {} members each",
             item_count,
             member_count
@@ -1051,7 +1051,7 @@ pub trait AsgEncodableType:
             ret.push(value);
         }
         ret.try_into().map_err(|_| {
-            tracing::error!("Failed to convert Vec to array of size {}", N);
+            log::error!("Failed to convert Vec to array of size {}", N);
             HmiError::MalformedResponse
         })
     }

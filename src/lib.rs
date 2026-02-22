@@ -4,44 +4,45 @@
 //     missing_copy_implementations,
 //     single_use_lifetimes,
 //     variant_size_differences,
-//     arithmetic_overflow,
-//     missing_debug_implementations,
 //     trivial_casts,
 //     trivial_numeric_casts,
 //     unused_import_braces,
 //     unused_lifetimes,
-//     unused_unsafe,
 //     useless_ptr_null_checks,
 //     while_true,
 //     unused_features,
 //     absolute_paths_not_starting_with_crate,
 //     unused_allocation,
-//     unreachable_code,
 //     unused_comparisons,
 //     unused_parens,
 //     asm_sub_register,
 //     break_with_label_and_loop,
 //     bindings_with_variant_name,
 //     anonymous_parameters,
-//     clippy::unwrap_used,
-//     clippy::panicking_unwrap,
 //     missing_abi,
-//     clippy::missing_safety_doc,
-//     clippy::missing_asserts_for_indexing,
 //     clippy::missing_assert_message,
 //     clippy::possible_missing_comma,
 //     deprecated
 // )]
-// #![allow(clippy::module_name_repetitions, clippy::option_if_let_else)]
-// #![cfg_attr(
-//     not(test),
-//     forbid(
-//         clippy::panic,
-//         clippy::todo,
-//         clippy::unimplemented,
-//         clippy::expect_used
-//     )
-// )]
+#![deny(
+    arithmetic_overflow,
+    missing_debug_implementations,
+    unused_unsafe,
+    unreachable_code,
+    clippy::panicking_unwrap,
+    clippy::missing_safety_doc
+)]
+#![allow(clippy::module_name_repetitions, clippy::option_if_let_else)]
+#![cfg_attr(
+    not(test),
+    forbid(
+        clippy::panic,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::expect_used,
+        clippy::unwrap_used
+    )
+)]
 // #![cfg_attr(not(test), warn(missing_docs))]
 
 #[cfg(feature = "hmi")]
@@ -64,79 +65,13 @@ pub use thread_util::ThreadConfig;
 pub mod py {
     use super::{hmi, hspo, joints, rmi, stmo, thread_util};
     use pyo3::prelude::*;
-    use std::sync::{Mutex, OnceLock};
-    use tracing::level_filters::LevelFilter;
-    use tracing_subscriber::{
-        EnvFilter, fmt, layer::SubscriberExt, registry::Registry, reload, util::SubscriberInitExt,
-    };
-
-    type LoggingHandle = reload::Handle<EnvFilter, Registry>;
-
-    static LOGGING_INIT_LOCK: OnceLock<Mutex<Option<LoggingHandle>>> = OnceLock::new();
-
-    fn logging_init_lock() -> &'static Mutex<Option<LoggingHandle>> {
-        LOGGING_INIT_LOCK.get_or_init(|| Mutex::new(None))
-    }
-
-    #[pyclass(from_py_object)]
-    #[derive(Debug, Clone, Copy)]
-    pub enum LoggingLevel {
-        Err,
-        Warn,
-        Info,
-        Debug,
-        Trace,
-    }
-
-    #[pyo3::pyfunction(signature = (level))]
-    pub fn config_logging(level: LoggingLevel) -> PyResult<()> {
-        let filter = match level {
-            LoggingLevel::Err => LevelFilter::ERROR,
-            LoggingLevel::Warn => LevelFilter::WARN,
-            LoggingLevel::Info => LevelFilter::INFO,
-            LoggingLevel::Debug => LevelFilter::DEBUG,
-            LoggingLevel::Trace => LevelFilter::TRACE,
-        };
-        let env_filter = EnvFilter::builder()
-            .with_default_directive(filter.into())
-            .from_env_lossy();
-
-        if let Some(handle) = logging_init_lock()
-            .lock()
-            .map_err(|_| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "fanuc logging init lock poisoned",
-                )
-            })?
-            .as_ref()
-        {
-            let _ = handle.reload(env_filter);
-            return Ok(());
-        }
-
-        let (reload_layer, reload_handle) = reload::Layer::new(env_filter);
-        let tracing_result = tracing_subscriber::registry()
-            .with(reload_layer)
-            .with(fmt::layer().with_thread_ids(true).with_thread_names(true))
-            .try_init();
-
-        if tracing_result.is_ok() {
-            *logging_init_lock().lock().map_err(|_| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "fanuc logging init lock poisoned",
-                )
-            })? = Some(reload_handle);
-        } else {
-            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "fanuc logging initialization failed",
-            ));
-        }
-
-        Ok(())
-    }
 
     #[pyo3::pymodule(name = "_fanuc_core")]
     fn py_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        pyo3_log::try_init().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to initialize logging: {}", e))
+        })?;
+
         hmi::py::register_child_module(m)?;
         stmo::py::register_child_module(m)?;
         hspo::py::register_child_module(m)?;
@@ -145,8 +80,6 @@ pub mod py {
         m.add_class::<joints::JointTemplate>()?;
         m.add_class::<joints::JointFormat>()?;
         m.add_class::<joints::JointType>()?;
-        m.add_class::<LoggingLevel>()?;
-        m.add_function(pyo3::wrap_pyfunction!(config_logging, m)?)?;
         Ok(())
     }
 }

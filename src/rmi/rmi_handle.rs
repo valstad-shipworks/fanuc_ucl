@@ -418,21 +418,30 @@ pub(super) mod py {
         fn packet_into_py(&self, py: Python<'_>, packet: ResponsePacket) -> PyResult<Py<PyAny>> {
             self.pytype
                 .as_ref()
-                .unwrap()
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Cannot convert packet to Python object without a known type",
+                    )
+                })?
                 .call_method1(py, "from_response_packet", (packet,))
         }
 
-        pub fn handles(&self, py: Python<'_>) -> Vec<PyRmiHandleGeneric> {
+        pub fn handles(&self, py: Python<'_>) -> PyResult<Vec<PyRmiHandleGeneric>> {
             if self.pytype.is_none() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             self.inner
                 .handles()
-                .map(|h| PyRmiHandleGeneric {
+                .map(|h| Ok(PyRmiHandleGeneric {
                     inner: h.clone(),
-                    pytype: self.pytype.as_ref().unwrap().clone_ref(py),
-                })
-                .collect()
+                    pytype: self.pytype.as_ref()
+                        .ok_or_else(|| {
+                            PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                                "Cannot convert packet to Python object without a known type",
+                            )
+                        }).map(|t| t.clone_ref(py))?
+                }))
+                .collect::<PyResult<Vec<_>>>()
         }
 
         pub fn responses(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
