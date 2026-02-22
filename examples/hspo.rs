@@ -10,9 +10,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     initialize_broker(
         SocketAddr::from(([0, 0, 0, 0], 15000)),
         Some(ThreadConfig::new(55, None)),
-    );
+    ).expect("Broker couldnt be started");
 
-    let receiver = HspoReceiver::try_new([10, 0, 0, 1], 128)?;
+    let receiver = HspoReceiver::try_new([10, 0, 0, 1], 128, Duration::from_millis(10))?;
 
     if let Some(joint_packet) = receiver.wait_for_joint_packet(Duration::from_millis(16)) {
         println!(
@@ -35,6 +35,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         var_packets
     );
 
-    destroy_broker();
+    destroy_broker(true);
     Ok(())
 }
