@@ -35,11 +35,10 @@ event-listener = { version = "5.4.1", optional = true, features = ["std"] }
 bincode = { version = "2.0.1", optional = true }
 impls = { version = "1.0.3", optional = true }
 inherent = { version = "1.0.13", optional = true }
-tracing-subscriber = { version = "0.3.*", features = ["env-filter"], optional = true}
 openport = { version = "0.1.1", optional = true }
 parking_lot = "0.12.5"
-log = { version = "0.4.29", features = ["std"] }
-pyo3-log = "0.13.3"
+log = { version = "0.4.29", features = ["release_max_level_debug", "std"] }
+pyo3-log = { version = "0.13.3", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.28.0", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
@@ -53,7 +52,7 @@ rmi=["joint_conv", "serde_json", "serde_repr", "monostate", "inventory", "int-en
 hspo=["joint_conv", "bincode", "libc"]
 hmi=["joint_conv", "bincode", "int-enum", "libc", "bitflags", "impls", "inherent"]
 joint_conv=["paste"]
-py=["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "tracing-subscriber"]
+py=["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "pyo3-log"]
 
 [profile.release]
 lto = true
