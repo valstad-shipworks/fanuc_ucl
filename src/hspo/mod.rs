@@ -1,3 +1,7 @@
+#[cfg(test)]
+mod test;
+
+use cfg_vis::{cfg_vis, cfg_vis_fields};
 use parking_lot::Mutex;
 use std::{
     collections::HashMap,
@@ -17,11 +21,11 @@ use crate::{
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
-use mio::net::UdpSocket as MioUdpSocket;
-use mio::{Events, Interest, Poll, Token};
+use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
 
 const TOK_SOCKET: Token = Token(0);
+const TOK_WAKER: Token = Token(1);
 
 static HSPO_SERVER: LazyLock<Mutex<Option<HspoBroker>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -105,6 +109,7 @@ impl std::fmt::Display for TcpCartesianPositionPacket {
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
+#[cfg_vis_fields]
 pub struct JointAnglesPacket {
     #[on(pyo3(get))]
     pub version: u32,
@@ -116,6 +121,7 @@ pub struct JointAnglesPacket {
     pub typ: u16,
     #[on(pyo3(get))]
     pub motion_group: u16,
+    #[cfg_vis(test, pub)]
     joints: [f32; 9],
     #[on(pyo3(get))]
     pub status: u32,
@@ -182,6 +188,7 @@ impl std::fmt::Display for VariablesPacket {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
+#[cfg_vis(test, pub)]
 enum PacketType {
     TcpCartesianPosition = 1,
     JointAngles = 4,
@@ -190,6 +197,7 @@ enum PacketType {
 }
 
 impl PacketType {
+    #[cfg_vis(test, pub)]
     fn from_bytes(bytes: &[u8], offset: usize) -> Self {
         if bytes.len() < offset + 2 {
             return PacketType::Unknown;
@@ -204,6 +212,7 @@ impl PacketType {
 }
 
 #[derive(Debug)]
+#[cfg_vis(test, pub)]
 struct ClockSpec {
     mutex: Mutex<(u64, u64)>,
 }
@@ -217,12 +226,14 @@ impl Default for ClockSpec {
 }
 
 impl ClockSpec {
+    #[cfg_vis(test, pub)]
     fn write(&self, hspo_add: u64, system: u64) {
         let mut guard = self.mutex.lock();
         guard.0 += hspo_add;
         guard.1 = system;
     }
 
+    #[cfg_vis(test, pub)]
     fn read(&self) -> (u64, u64) {
         let guard = self.mutex.lock();
         (guard.0, guard.1)
@@ -445,6 +456,7 @@ impl HspoReceiver {
 
 struct HspoBroker {
     robot_appender: Sender<RobotSender>,
+    waker: Arc<Waker>,
     err_flag: Arc<AtomicBool>,
     kill_switch: Arc<AtomicBool>,
     _thread_handle: std::thread::JoinHandle<()>,
@@ -455,7 +467,9 @@ fn broker_runtime(
     thread_config: Option<ThreadConfig>,
     robot_receiver: Receiver<RobotSender>,
     thread_kill_switch: Arc<AtomicBool>,
+    waker_tx: Sender<Arc<Waker>>,
 ) -> Result<(), GeneralThreadError> {
+
     if let Some(thread_config) = thread_config {
         thread_config.configure_this_thread_print_failure();
     }
@@ -467,6 +481,11 @@ fn broker_runtime(
     poll.registry()
         .register(&mut socket, TOK_SOCKET, Interest::READABLE)
         .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
+    let waker = Arc::new(
+        Waker::new(poll.registry(), TOK_WAKER)
+            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
+    );
+    waker_tx.send(waker)?;
 
     let mut robot_senders: HashMap<IpAddr, Vec<RobotSender>> = HashMap::new();
     let mut shortest_timeout = Duration::from_millis(256);
@@ -653,6 +672,7 @@ impl HspoBroker {
         self.robot_appender
             .send(robot_sender)
             .map_err(|_| HspoBrokerNotInitializedError)?;
+        let _ = self.waker.wake();
 
         Ok(HspoReceiver {
             connection_active,
@@ -670,23 +690,35 @@ impl HspoBroker {
         let local_kill_switch = Arc::new(AtomicBool::new(false));
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let (robot_appender, robot_receiver) = unbounded::<RobotSender>();
+        let (waker_tx, waker_rx) = bounded::<Arc<Waker>>(1);
 
         let thread_kill_switch = local_kill_switch.clone();
         let thread_err_flag = local_err_flag.clone();
+        let thread_id = std::thread::current().id();
         let _thread_handle = thread::Builder::new()
             .name("hspo_server".to_string())
             .spawn(move || {
-                if let Err(e) =
-                    broker_runtime(listen_on, thread_config, robot_receiver, thread_kill_switch)
-                {
+                snare::register_thread_child_of(thread_id);
+                if let Err(e) = broker_runtime(
+                    listen_on,
+                    thread_config,
+                    robot_receiver,
+                    thread_kill_switch,
+                    waker_tx,
+                ) {
                     log::error!("HSPO broker thread exited with error: {}", e);
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })
             .map_err(|_| HspoBrokerNotInitializedError)?;
 
+        let waker = waker_rx
+            .recv()
+            .map_err(|_| HspoBrokerNotInitializedError)?;
+
         Ok(HspoBroker {
             robot_appender,
+            waker,
             kill_switch: local_kill_switch,
             err_flag: local_err_flag,
             _thread_handle,

@@ -606,6 +606,60 @@ impl Message {
             }
         }
     }
+
+    #[cfg(test)]
+    pub fn new_test_resp(seq: u8, payload: [u8; 6], plc_status: PlcStatus) -> Message {
+        Message {
+            header: Header {
+                pkt_type: PktType::Receive,
+                seq1: seq as u16,
+                seq2: seq,
+                text_len: 0,
+                msg_type: MsgTyp::Resp,
+                operation1: OperationType::Reading,
+                operation2: OperationType::Reading,
+                mbox_src: 0x00000e10,
+                ..Header::TEMPLATE
+            },
+            body: Body::Resp {
+                unk1: 0,
+                payload,
+                plc_status,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_test_ext_resp(
+        seq: u8,
+        service_request: ServiceRequestCode,
+        segment: SegmentSelector,
+        payload: Vec<u8>,
+    ) -> Message {
+        Message {
+            header: Header {
+                pkt_type: PktType::Receive,
+                seq1: seq as u16,
+                seq2: seq,
+                text_len: payload.len() as u16,
+                msg_type: MsgTyp::ExtResp,
+                operation1: OperationType::Reading,
+                operation2: OperationType::Reading,
+                mbox_src: 0x00000e10,
+                ..Header::TEMPLATE
+            },
+            body: Body::ExtResp {
+                unk: [0u8; 6],
+                pkt_num: 1,
+                total_pkt_num: 1,
+                service_request,
+                segment,
+                unk2: 0,
+                plc_flags: PlcStatusFlags::empty(),
+                payload: payload.into_boxed_slice(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
