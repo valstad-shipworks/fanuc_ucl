@@ -93,8 +93,3 @@ lto = true
 [profile.python]
 inherits = "release"
 debug = "full"
-
-[[test]]
-name = "test_hspo"
-path = "tests/test_hspo.rs"
-test = true

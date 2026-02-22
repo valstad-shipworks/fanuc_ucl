@@ -3,7 +3,6 @@ use snare::{TesterAction, TimerState, connect_tester, run_testers};
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-
 #[derive(Debug, Clone)]
 struct RawPacket(Vec<u8>);
 impl snare::Packetable for RawPacket {
@@ -76,19 +75,31 @@ fn make_variables_packet(clock: u32) -> VariablesPacket {
 #[test]
 fn test_packet_type_from_bytes() {
     let tcp_bytes = encode_packet(&make_tcp_position_packet(1000));
-    assert_eq!(PacketType::from_bytes(&tcp_bytes, 12), PacketType::TcpCartesianPosition);
+    assert_eq!(
+        PacketType::from_bytes(&tcp_bytes, 12),
+        PacketType::TcpCartesianPosition
+    );
 
     let joint_bytes = encode_packet(&make_joint_angles_packet(1000));
-    assert_eq!(PacketType::from_bytes(&joint_bytes, 12), PacketType::JointAngles);
+    assert_eq!(
+        PacketType::from_bytes(&joint_bytes, 12),
+        PacketType::JointAngles
+    );
 
     let var_bytes = encode_packet(&make_variables_packet(1000));
-    assert_eq!(PacketType::from_bytes(&var_bytes, 12), PacketType::Variables);
+    assert_eq!(
+        PacketType::from_bytes(&var_bytes, 12),
+        PacketType::Variables
+    );
 
     // Unknown type value (typ = 99)
     let mut unknown_bytes = tcp_bytes.clone();
     unknown_bytes[12] = 0;
     unknown_bytes[13] = 99;
-    assert_eq!(PacketType::from_bytes(&unknown_bytes, 12), PacketType::Unknown);
+    assert_eq!(
+        PacketType::from_bytes(&unknown_bytes, 12),
+        PacketType::Unknown
+    );
 
     // Too short
     assert_eq!(PacketType::from_bytes(&[0; 13], 12), PacketType::Unknown);
@@ -108,14 +119,12 @@ fn test_packet_encode_decode_roundtrip() {
 
     let joint_pkt = make_joint_angles_packet(42);
     let bytes = encode_packet(&joint_pkt);
-    let (decoded, _): (JointAnglesPacket, _) =
-        bincode::decode_from_slice(&bytes, config).unwrap();
+    let (decoded, _): (JointAnglesPacket, _) = bincode::decode_from_slice(&bytes, config).unwrap();
     assert_eq!(decoded, joint_pkt);
 
     let var_pkt = make_variables_packet(42);
     let bytes = encode_packet(&var_pkt);
-    let (decoded, _): (VariablesPacket, _) =
-        bincode::decode_from_slice(&bytes, config).unwrap();
+    let (decoded, _): (VariablesPacket, _) = bincode::decode_from_slice(&bytes, config).unwrap();
     assert_eq!(decoded, var_pkt);
 }
 
@@ -135,13 +144,20 @@ const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 
 
 fn hspo_packet_sender(timer: &mut TimerState) -> Option<TesterAction<RawPacket>> {
     let time = timer.poll_elapsed().as_millis() as u32;
-    Some(
-        TesterAction::Multiple(vec![
-            TesterAction::Send(BROKER_ADDR, RawPacket(encode_packet(&make_variables_packet(time)))),
-            TesterAction::Send(BROKER_ADDR, RawPacket(encode_packet(&make_tcp_position_packet(time)))),
-            TesterAction::Send(BROKER_ADDR, RawPacket(encode_packet(&make_joint_angles_packet(time)))),
-        ])
-    )
+    Some(TesterAction::Multiple(vec![
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_variables_packet(time))),
+        ),
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_tcp_position_packet(time))),
+        ),
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_joint_angles_packet(time))),
+        ),
+    ]))
 }
 
 #[test]
@@ -166,8 +182,6 @@ fn test_all() {
     destroy_broker(false);
 }
 
-
-
 fn test_connection() {
     let addr = SocketAddr::from(([10, 0, 0, 2], 60000));
     snare::add_ip_addr(addr.ip());
@@ -183,7 +197,10 @@ fn test_connection() {
 
     run_testers!(tester);
 
-    assert!(receiver.is_connected(), "Receiver did not receive any packets.");
+    assert!(
+        receiver.is_connected(),
+        "Receiver did not receive any packets."
+    );
 }
 
 fn test_drain() {
@@ -203,10 +220,31 @@ fn test_drain() {
 
     thread::sleep(Duration::from_millis(50));
 
-    assert_eq!(receiver.recv_all_joint_packets().len(), 21, "Receiver did not receive any joint packets.");
-    assert!(receiver.recv_all_joint_packets().is_empty(), "Receiver did not drain joint packets.");
-    assert_eq!(receiver.recv_all_tcp_packets().len(), 21, "Receiver did not receive any TCP packets.");
-    assert!(receiver.recv_all_tcp_packets().is_empty(), "Receiver did not drain TCP packets.");
-    assert_eq!(receiver.recv_all_var_packets().len(), 21, "Receiver did not receive any variables packets.");
-    assert!(receiver.recv_all_var_packets().is_empty(), "Receiver did not drain variables packets.");
+    assert_eq!(
+        receiver.recv_all_joint_packets().len(),
+        21,
+        "Receiver did not receive any joint packets."
+    );
+    assert!(
+        receiver.recv_all_joint_packets().is_empty(),
+        "Receiver did not drain joint packets."
+    );
+    assert_eq!(
+        receiver.recv_all_tcp_packets().len(),
+        21,
+        "Receiver did not receive any TCP packets."
+    );
+    assert!(
+        receiver.recv_all_tcp_packets().is_empty(),
+        "Receiver did not drain TCP packets."
+    );
+    assert_eq!(
+        receiver.recv_all_var_packets().len(),
+        21,
+        "Receiver did not receive any variables packets."
+    );
+    assert!(
+        receiver.recv_all_var_packets().is_empty(),
+        "Receiver did not drain variables packets."
+    );
 }

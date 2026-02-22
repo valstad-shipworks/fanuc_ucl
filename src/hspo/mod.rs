@@ -21,8 +21,8 @@ use crate::{
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
-use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
+use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 
 const TOK_SOCKET: Token = Token(0);
 const TOK_WAKER: Token = Token(1);
@@ -469,7 +469,6 @@ fn broker_runtime(
     thread_kill_switch: Arc<AtomicBool>,
     waker_tx: Sender<Arc<Waker>>,
 ) -> Result<(), GeneralThreadError> {
-
     if let Some(thread_config) = thread_config {
         thread_config.configure_this_thread_print_failure();
     }
@@ -712,9 +711,7 @@ impl HspoBroker {
             })
             .map_err(|_| HspoBrokerNotInitializedError)?;
 
-        let waker = waker_rx
-            .recv()
-            .map_err(|_| HspoBrokerNotInitializedError)?;
+        let waker = waker_rx.recv().map_err(|_| HspoBrokerNotInitializedError)?;
 
         Ok(HspoBroker {
             robot_appender,

@@ -23,8 +23,7 @@ impl snare::Packetable for SnpxPacket {
         if data.len() < 42 {
             return None;
         }
-        let (header, _) =
-            bincode::decode_from_slice::<Header, _>(&data[..42], BINCODE_CFG).ok()?;
+        let (header, _) = bincode::decode_from_slice::<Header, _>(&data[..42], BINCODE_CFG).ok()?;
         let total = 56 + header.payload_len() as usize;
         if data.len() < total {
             return None;
@@ -185,21 +184,12 @@ fn handle_snpx_request(
                     resp_payload[..data.len()].copy_from_slice(&data);
                     TesterAction::Send(
                         src,
-                        encode_msg(Message::new_test_resp(
-                            seq,
-                            resp_payload,
-                            zero_plc_status(),
-                        )),
+                        encode_msg(Message::new_test_resp(seq, resp_payload, zero_plc_status())),
                     )
                 } else {
                     TesterAction::Send(
                         src,
-                        encode_msg(Message::new_test_ext_resp(
-                            seq,
-                            service_request,
-                            seg,
-                            data,
-                        )),
+                        encode_msg(Message::new_test_ext_resp(seq, service_request, seg, data)),
                     )
                 }
             }
@@ -279,9 +269,7 @@ fn test_write_read_digital_output() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write DO[1] = true
             driver
@@ -310,9 +298,7 @@ fn test_write_read_register() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write R[1] = 42
             driver
@@ -341,9 +327,7 @@ fn test_write_read_register_array() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write R[1..5] = [10, 20, 30, 40, 50]
             driver
@@ -377,9 +361,7 @@ fn test_read_digital_input() {
         },
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             let val = driver
                 .read::<DigitalInput>(0)
@@ -407,9 +389,7 @@ fn test_write_command() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Send CLRALM command
             driver
@@ -430,9 +410,7 @@ fn test_write_read_group_output() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write GO[1] = 100
             driver
@@ -465,9 +443,7 @@ fn test_read_group_input() {
         },
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             let val = driver
                 .read::<GroupInput>(0)
@@ -488,9 +464,7 @@ fn test_write_read_robot_output() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write RO[1] = true (offset 5000, one-indexed)
             driver
@@ -516,7 +490,10 @@ fn test_write_read_robot_output() {
 fn test_not_connected_error() {
     snare::register_test();
     let driver = HmiDriver::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 29)));
-    assert!(!driver.is_connected(), "Driver should not be connected initially");
+    assert!(
+        !driver.is_connected(),
+        "Driver should not be connected initially"
+    );
     assert!(
         driver.read::<Register>(1).is_err(),
         "Read should fail when not connected"
@@ -534,9 +511,7 @@ fn test_multiple_sequential_register_writes() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write several registers individually
             for i in 1..=5 {
@@ -569,9 +544,7 @@ fn test_write_read_analog_output() {
         noop_state_setup,
         |addr| {
             let mut driver = HmiDriver::new(addr.ip());
-            driver
-                .connect(Some(Duration::from_secs(2)), None)
-                .unwrap();
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
 
             // Write AO[1] = -500 (offset 1000, one-indexed)
             driver
