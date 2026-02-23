@@ -4,6 +4,9 @@ mod hmi_handle;
 mod proto;
 mod runner;
 
+#[cfg(test)]
+mod test;
+
 #[cfg(feature = "py")]
 pub mod py;
 
@@ -133,6 +136,10 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: f64 = 1.0;
 #[derive(Debug)]
 struct HmiConnection {
     handle: ThreadHandle,
+    #[cfg(test)]
+    waker: Arc<snare::mio::Waker>,
+    #[cfg(not(test))]
+    waker: Arc<mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
 }
@@ -183,10 +190,10 @@ impl HmiDriver {
         let (join_handle, waker, err_flag) =
             HmiRunner::start(addr, handle.to_pass_in(), from_driver, thread_config)?;
         handle.set_handle(join_handle);
-        handle.set_waker_mio(waker);
         self.seq.store(0, Ordering::SeqCst);
         self.connection = Some(HmiConnection {
             handle,
+            waker,
             to_runner,
             err_flag,
         });
@@ -209,7 +216,7 @@ impl HmiDriver {
     pub fn disconnect(&mut self, ignore_join: bool) -> DriverResult<()> {
         if let Some(conn) = self.connection.take() {
             let _ = conn.to_runner.send(RunnerMessage::Shutdown);
-            conn.handle.wake().map_err(HmiError::from)?;
+            let _ = conn.waker.wake();
             if !ignore_join {
                 conn.handle.join();
             }
@@ -260,8 +267,8 @@ impl HmiDriver {
             })
             .map_err(|e| HmiError::Io(IoError::new(ErrorKind::BrokenPipe, e)))?;
         log::trace!("Sent message");
-        conn.handle.wake().map_err(HmiError::from)?;
-        log::trace!("Woke wakere");
+        let _ = conn.waker.wake();
+        log::trace!("Woke waker");
         Ok(handle)
     }
 

@@ -1,5 +1,5 @@
 {
-    "name": "robot_assets",
+    "name": "fanuc_ucl",
     "runArgs": [
         "--platform=linux/amd64"
     ],

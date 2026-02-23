@@ -1,4 +1,4 @@
-#![doc = include_str!("../README.md")]
+#![cfg_attr(not(doctest), doc = include_str!("../README.md"))]
 // #![deny(clippy::all, clippy::pedantic, clippy::nursery)]
 // #![deny(
 //     missing_copy_implementations,

@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use mio::{Interest, Poll, Token, Waker, net::TcpStream};
+#[cfg(not(test))]
+use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
+#[cfg(test)]
+use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 
 use crate::hmi::proto::wire::{Body, Header, Message};
 use crate::hmi::{BINCODE_CFG, DriverResult, HmiError};
@@ -52,13 +55,19 @@ impl HmiRunner {
         thread_config: Option<ThreadConfig>,
     ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
         let tcp_stream = TcpStream::connect(addr)?;
+        #[cfg(test)]
+        {
+            tcp_stream.set_nonblocking(true)?;
+        }
         log::trace!("HMI runner connected to {}", addr);
         let (waker_tx, waker_rx) = flume::bounded(1);
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
+        let thread_id = std::thread::current().id();
         let join_handle = std::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
+                snare::register_thread_child_of(thread_id);
                 if let Err(e) =
                     hmi_runner_runtime(handle, tcp_stream, from_driver, thread_config, waker_tx)
                 {
@@ -74,7 +83,7 @@ impl HmiRunner {
     }
 
     fn run(&mut self, mut poll: Poll) -> HmiResult<()> {
-        let mut events = mio::Events::with_capacity(64);
+        let mut events = Events::with_capacity(64);
         let mut queue: VecDeque<PendingWrite> = VecDeque::new();
         let mut scratch = [0u8; 2048];
         let mut connection_established = false;
@@ -220,7 +229,7 @@ impl HmiRunner {
         if let Some(handle) = self.pending_responses.remove(&seq) {
             let _ = handle.set_generic(msg);
         } else if matches!(msg.body, Body::Resp { .. } | Body::ExtResp { .. }) {
-            println!(
+            log::error!(
                 "HMI runner received response with no awaiting handle: seq {}",
                 seq
             );

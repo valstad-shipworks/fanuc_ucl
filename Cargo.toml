@@ -15,12 +15,14 @@ name = "fanuc_ucl"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.28.0", optional = true, features = ["abi3-py310", "multiple-pymethods"] }
+pyo3 = { version = "0.28.0", optional = true, features = [
+    "abi3-py310",
+    "multiple-pymethods",
+] }
 serde = { version = "1.0", features = ["alloc", "derive", "std"] }
 flume = { version = "0.12", features = [], default-features = false }
 mio = { version = "1.1.1", features = ["os-poll", "os-ext", "net"] }
 thiserror = { version = "2.0" }
-tracing = { version = "0.1.*", features = [] }
 cfg_mixin = { version = "0.1.0" }
 int-enum = { version = "1.1.2", optional = true }
 bitflags = { version = "2.9.4", optional = true }
@@ -29,8 +31,10 @@ spin_sleep = { version = "1.3.3", optional = true }
 monostate = { version = "1.0.1", optional = true }
 inventory = { version = "0.3.21", optional = true }
 serde_repr = { version = "0.1.20", optional = true }
-paste = { version = "1.0.15", optional = true}
-serde_json = { version = "1.0.*", optional = true, features = ["preserve_order"] }
+paste = { version = "1.0.15", optional = true }
+serde_json = { version = "1.0.*", optional = true, features = [
+    "preserve_order",
+] }
 event-listener = { version = "5.4.1", optional = true, features = ["std"] }
 bincode = { version = "2.0.1", optional = true }
 impls = { version = "1.0.3", optional = true }
@@ -39,20 +43,50 @@ openport = { version = "0.1.1", optional = true }
 parking_lot = "0.12.5"
 log = { version = "0.4.29", features = ["release_max_level_debug", "std"] }
 pyo3-log = { version = "0.13.3", optional = true }
+snare = { version = "1.1.3", features = ["mio-compat"] }
+cfg-vis = "0.3.0"
+
+[dev-dependencies]
+snare = { version = "*", features = ["shim", "mio-compat"] }
 
 [target.'cfg(windows)'.dependencies]
-pyo3 = { version = "0.28.0", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
+pyo3 = { version = "0.28.0", optional = true, features = [
+    "extension-module",
+    "auto-initialize",
+    "multiple-pymethods",
+    "generate-import-lib",
+] }
 
 
 [features]
-default=["stmo", "rmi", "hspo", "hmi"]
-async=[]
-stmo=["joint_conv", "bincode", "spin_sleep", "libc", "bitflags", "openport"]
-rmi=["joint_conv", "serde_json", "serde_repr", "monostate", "inventory", "int-enum", "libc", "event-listener", "inherent"]
-hspo=["joint_conv", "bincode", "libc"]
-hmi=["joint_conv", "bincode", "int-enum", "libc", "bitflags", "impls", "inherent"]
-joint_conv=["paste"]
-py=["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "pyo3-log"]
+default = ["stmo", "rmi", "hspo", "hmi"]
+async = []
+stmo = ["joint_conv", "bincode", "spin_sleep", "libc", "bitflags", "openport"]
+rmi = [
+    "joint_conv",
+    "serde_json",
+    "serde_repr",
+    "monostate",
+    "inventory",
+    "int-enum",
+    "libc",
+    "event-listener",
+    "inherent",
+]
+hspo = ["joint_conv", "bincode", "libc"]
+hmi = [
+    "joint_conv",
+    "bincode",
+    "int-enum",
+    "libc",
+    "bitflags",
+    "impls",
+    "inherent",
+]
+joint_conv = ["paste"]
+py = ["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "pyo3-log"]
+# testing = ["snare/shim"]
+
 
 [profile.release]
 lto = true

@@ -840,8 +840,8 @@ pub mod alarm_struct {
     }
 
     impl HmiWireable for AlarmData {
-        const PACKED_SIZE: usize = 128;
-        const SYS_VAR_SIZE: usize = 128;
+        const PACKED_SIZE: usize = 200;
+        const SYS_VAR_SIZE: usize = 200;
         fn pack(&self, dst: &mut [u8]) -> usize {
             let mut offset = 0;
             offset += self.id.pack(&mut dst[offset..]);
