@@ -480,6 +480,10 @@ fn broker_runtime(
     let mut events = Events::with_capacity(256);
     let mut socket =
         MioUdpSocket::bind(listen_on).map_err(|_| GeneralThreadError::FailedSocketBinding)?;
+    #[cfg(test)]
+    {
+        let _ = socket.set_nonblocking(true);
+    }
     poll.registry()
         .register(&mut socket, TOK_SOCKET, Interest::READABLE)
         .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
