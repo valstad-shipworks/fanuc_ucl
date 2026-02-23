@@ -21,11 +21,11 @@ use crate::{
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
+#[cfg(not(test))]
+use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
 #[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 
 const TOK_SOCKET: Token = Token(0);
 const TOK_WAKER: Token = Token(1);
