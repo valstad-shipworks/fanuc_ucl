@@ -7,10 +7,7 @@ use std::{
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
-use crate::{
-    ResponseHandle, ResponseNotFulfilled,
-    stmo::types::StreamMotionError,
-};
+use crate::{ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError};
 
 #[cfg_attr(feature = "py", pyo3::pyclass(str))]
 #[derive(Debug, Clone)]
@@ -90,11 +87,7 @@ impl Future for StmoHandle {
 
 impl std::fmt::Display for StmoHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "StmoHandle(fulfilled={})",
-            self.is_set()
-        )
+        write!(f, "StmoHandle(fulfilled={})", self.is_set())
     }
 }
 

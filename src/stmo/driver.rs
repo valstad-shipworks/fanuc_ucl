@@ -217,7 +217,9 @@ impl StreamMotionContext {
                                             //     continue;
                                             // }
                                             // status_cycle_count = 0;
-                                            if let Some((mut cmd, handle)) = self.next_motion_command() {
+                                            if let Some((mut cmd, handle)) =
+                                                self.next_motion_command()
+                                            {
                                                 cmd.seq = state.seq;
                                                 last_motion_was_last = cmd.last_command;
                                                 let _ = self.send(
@@ -504,14 +506,20 @@ impl StreamMotionDriver {
         Ok(handle)
     }
 
-    pub(crate) fn command_motion_single(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
+    pub(crate) fn command_motion_single(
+        &mut self,
+        motion: MotionCommandPacket,
+    ) -> DriverResult<()> {
         if self.connection.is_none() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);
         }
         if !self.is_started() {
             return Err(StreamMotionError::NotStarted).map_err(Into::into);
         }
-        self.send_packet(ToThreadMessage::MotionCommandDouble(MaybeMany::One(motion), None));
+        self.send_packet(ToThreadMessage::MotionCommandDouble(
+            MaybeMany::One(motion),
+            None,
+        ));
         self.refresh();
         Ok(())
     }
@@ -836,7 +844,9 @@ impl<'a> StmoControlLoop<'a> {
 
     #[inline]
     pub fn send_command(&mut self, motion: MotionCommandPacket) -> Result<(), StreamMotionError> {
-        self.driver.command_motion_single(motion).map_err(Into::into)
+        self.driver
+            .command_motion_single(motion)
+            .map_err(Into::into)
     }
 }
 
