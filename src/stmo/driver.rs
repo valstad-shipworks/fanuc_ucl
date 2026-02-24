@@ -24,6 +24,7 @@ use crate::{
             RobotStatusPacket, RxPackets, StartPacket, StopPacket, ThresholdTableRequestPacket,
             TxPackets, VersionNumberRequestPacket,
         },
+        stmo_handle::StmoHandle,
         types::{AxisMotionConstraint, JointMovementLimits, RxStorage, StreamMotionError},
     },
     thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
@@ -48,7 +49,7 @@ enum ToThreadMessage {
     Start(StartPacket),
     Stop(StopPacket),
     ThresholdTableRequest(ThresholdTableRequestPacket),
-    MotionCommandDouble(MaybeMany<MotionCommandPacket>),
+    MotionCommandDouble(MaybeMany<MotionCommandPacket>, Option<StmoHandle>),
 }
 
 #[derive(Debug)]
@@ -58,7 +59,7 @@ struct StreamMotionContext {
     to_driver: Sender<RxPackets>,
     protocol_version: u32,
     last_command_position_request_time: Instant,
-    motion_command_queue: VecDeque<MaybeMany<MotionCommandPacket>>,
+    motion_command_queue: VecDeque<(MaybeMany<MotionCommandPacket>, Option<StmoHandle>)>,
     itl: Arc<(Event, AtomicBool)>,
 }
 
@@ -141,27 +142,37 @@ impl StreamMotionContext {
         }
     }
 
-    fn next_motion_command(&mut self) -> Option<MotionCommandPacket> {
-        let front_is_many = match self.motion_command_queue.front()? {
-            MaybeMany::Many(_) => true,
-            MaybeMany::One(_) => false,
-        };
-        if front_is_many {
-            if let Some(MaybeMany::Many(vec)) = self.motion_command_queue.front_mut() {
-                if !vec.is_empty() {
-                    return vec.pop();
-                } else {
-                    let _ = self.motion_command_queue.pop_front();
-                    return self.next_motion_command();
+    fn next_motion_command(&mut self) -> Option<(MotionCommandPacket, Option<StmoHandle>)> {
+        loop {
+            let should_pop_entry = match self.motion_command_queue.front()? {
+                (MaybeMany::One(_), _) => true,
+                (MaybeMany::Many(vec), _) => vec.len() <= 1,
+            };
+
+            if should_pop_entry {
+                let (cmds, handle) = self.motion_command_queue.pop_front()?;
+                match cmds {
+                    MaybeMany::One(cmd) => return Some((cmd, handle)),
+                    MaybeMany::Many(mut vec) => {
+                        if let Some(cmd) = vec.pop() {
+                            return Some((cmd, handle));
+                        } else {
+                            // empty batch — fulfill handle and try next entry
+                            if let Some(h) = handle {
+                                h.set();
+                            }
+                            continue;
+                        }
+                    }
                 }
+            } else {
+                // Many with >1 element — pop one without consuming the handle yet
+                if let Some((MaybeMany::Many(vec), _)) = self.motion_command_queue.front_mut() {
+                    return vec.pop().map(|c| (c, None));
+                }
+                return None;
             }
-        } else {
-            return self.motion_command_queue.pop_front().map(|m| match m {
-                MaybeMany::One(c) => c,
-                _ => unreachable!("Checked variant"),
-            });
         }
-        None
     }
 
     pub fn context_loop(mut self, thread_handle: ThreadHandle, mut poll: Poll) {
@@ -206,7 +217,7 @@ impl StreamMotionContext {
                                             //     continue;
                                             // }
                                             // status_cycle_count = 0;
-                                            if let Some(mut cmd) = self.next_motion_command() {
+                                            if let Some((mut cmd, handle)) = self.next_motion_command() {
                                                 cmd.seq = state.seq;
                                                 last_motion_was_last = cmd.last_command;
                                                 let _ = self.send(
@@ -215,6 +226,9 @@ impl StreamMotionContext {
                                                     Some(Duration::from_millis(6)),
                                                     None,
                                                 );
+                                                if let Some(h) = handle {
+                                                    h.set();
+                                                }
                                             } else if state.status_bits().command_received()
                                                 && !self.itl.1.load(Ordering::SeqCst)
                                             {
@@ -292,8 +306,8 @@ impl StreamMotionContext {
                                         Some(3),
                                     );
                                 }
-                                ToThreadMessage::MotionCommandDouble(pkt) => {
-                                    self.motion_command_queue.push_back(pkt);
+                                ToThreadMessage::MotionCommandDouble(pkt, handle) => {
+                                    self.motion_command_queue.push_back((pkt, handle));
                                 }
                                 ToThreadMessage::Stop(pkt) => {
                                     let _ = self.send(
@@ -466,42 +480,38 @@ impl StreamMotionDriver {
         self.rx_storage.prune();
     }
 
-    pub fn command_motion(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
-        if self.connection.is_none() {
-            return Err(StreamMotionError::NotConnected).map_err(Into::into);
-        }
-        if !self.is_started() {
-            return Err(StreamMotionError::NotStarted).map_err(Into::into);
-        }
-        self.send_packet(ToThreadMessage::MotionCommandDouble(MaybeMany::One(motion)));
-        self.refresh();
-        Ok(())
-    }
-
-    pub fn command_motion_batch(
+    pub fn command_motion(
         &mut self,
         mut motions: Vec<MotionCommandPacket>,
-    ) -> DriverResult<()> {
-        if motions.len() == 1 {
-            return self.command_motion(
-                motions
-                    .pop()
-                    .ok_or(StreamMotionError::Other("Empty Batch".to_string()))?,
-            );
-        }
+    ) -> DriverResult<StmoHandle> {
         if self.connection.is_none() {
             return Err(StreamMotionError::NotConnected).map_err(Into::into);
         }
         if !self.is_started() {
             return Err(StreamMotionError::NotStarted).map_err(Into::into);
         }
+        let handle = StmoHandle::new();
         if motions.is_empty() {
-            return Ok(());
+            handle.set();
+            return Ok(handle);
         }
         motions.reverse();
-        self.send_packet(ToThreadMessage::MotionCommandDouble(MaybeMany::Many(
-            motions,
-        )));
+        self.send_packet(ToThreadMessage::MotionCommandDouble(
+            MaybeMany::Many(motions),
+            Some(handle.clone()),
+        ));
+        self.refresh();
+        Ok(handle)
+    }
+
+    pub(crate) fn command_motion_single(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
+        if self.connection.is_none() {
+            return Err(StreamMotionError::NotConnected).map_err(Into::into);
+        }
+        if !self.is_started() {
+            return Err(StreamMotionError::NotStarted).map_err(Into::into);
+        }
+        self.send_packet(ToThreadMessage::MotionCommandDouble(MaybeMany::One(motion), None));
         self.refresh();
         Ok(())
     }
@@ -826,7 +836,7 @@ impl<'a> StmoControlLoop<'a> {
 
     #[inline]
     pub fn send_command(&mut self, motion: MotionCommandPacket) -> Result<(), StreamMotionError> {
-        self.driver.command_motion(motion).map_err(Into::into)
+        self.driver.command_motion_single(motion).map_err(Into::into)
     }
 }
 
@@ -912,7 +922,7 @@ pub mod py {
                 if !cnx.itl.1.load(Ordering::SeqCst) {
                     return Err(StreamMotionError::NotStarted.into());
                 }
-                driver.command_motion(motion)
+                driver.command_motion_single(motion)
             } else {
                 Err(StreamMotionError::NotConnected.into())
             }

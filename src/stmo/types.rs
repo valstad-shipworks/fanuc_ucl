@@ -4,6 +4,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ResponseNotFulfilled,
     joints::JointDataSizeError,
     stmo::proto::{
         self, CommandPositionResponsePacket, RobotStatusPacket, ThresholdTableResponsePacket,
@@ -337,6 +338,8 @@ pub enum StreamMotionError {
     EncodingError(#[from] bincode::error::EncodeError),
     #[error("Decoding Error")]
     DecodingError(#[from] bincode::error::DecodeError),
+    #[error("{0}")]
+    ResponseNotFulfilled(#[from] ResponseNotFulfilled),
     #[error("Other Error: {0}")]
     Other(String),
 }
