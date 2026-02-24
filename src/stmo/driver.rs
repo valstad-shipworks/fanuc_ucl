@@ -4,7 +4,10 @@ use std::{
     collections::VecDeque,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -212,7 +215,9 @@ impl StreamMotionContext {
                                                     Some(Duration::from_millis(6)),
                                                     None,
                                                 );
-                                            } else if state.status_bits().command_received() && !self.itl.1.load(Ordering::SeqCst) {
+                                            } else if state.status_bits().command_received()
+                                                && !self.itl.1.load(Ordering::SeqCst)
+                                            {
                                                 if !last_motion_was_last {
                                                     log::warn!(
                                                         "Motion command queue empty, last command was not marked last. Sending hold command."
@@ -800,7 +805,10 @@ impl<'a> StmoControlLoop<'a> {
         }
     }
 
-    pub fn wait_for_status(&mut self, timeout: Duration) -> Result<RobotStatusPacket, StreamMotionError> {
+    pub fn wait_for_status(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<RobotStatusPacket, StreamMotionError> {
         self.driver.refresh();
         if let Some(cnx) = &mut self.driver.connection {
             let listener = cnx.itl.0.listen();
@@ -842,7 +850,7 @@ pub mod py {
 
     use super::*;
 
-    #[pyclass]
+    #[pyclass(name = "StmoControlLoop")]
     pub struct PyStmoControlLoop {
         inner: Py<StreamMotionDriver>,
     }
@@ -871,7 +879,11 @@ pub mod py {
             Ok(())
         }
 
-        pub fn wait_for_status(&mut self, py: Python<'_>, timeout_secs: f32) -> PyResult<RobotStatusPacket> {
+        pub fn wait_for_status(
+            &mut self,
+            py: Python<'_>,
+            timeout_secs: f32,
+        ) -> PyResult<RobotStatusPacket> {
             let timeout = Duration::from_secs_f32(timeout_secs);
             if let Some(cnx) = &mut self.inner.borrow_mut(py).connection {
                 if !cnx.itl.1.load(Ordering::SeqCst) {
@@ -890,7 +902,11 @@ pub mod py {
             }
         }
 
-        pub fn send_command(&mut self, py: Python<'_>, motion: MotionCommandPacket) -> PyResult<()> {
+        pub fn send_command(
+            &mut self,
+            py: Python<'_>,
+            motion: MotionCommandPacket,
+        ) -> PyResult<()> {
             let mut driver = self.inner.borrow_mut(py);
             if let Some(cnx) = &mut driver.connection {
                 if !cnx.itl.1.load(Ordering::SeqCst) {

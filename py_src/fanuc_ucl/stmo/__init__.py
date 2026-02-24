@@ -9,4 +9,5 @@ CommandPositionResponsePacket = __stmo.CommandPositionResponsePacket
 AxisMotionConstraint = __stmo.AxisMotionConstraint
 JointMovementLimit = __stmo.JointMovementLimit
 JointMovementLimits = __stmo.JointMovementLimits
+StmoControlLoop = __stmo.StmoControlLoop
 StreamMotionDriver = __stmo.StreamMotionDriver
