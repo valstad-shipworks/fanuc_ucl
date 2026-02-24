@@ -1,9 +1,11 @@
 mod driver;
 pub mod proto;
+pub(crate) mod stmo_handle;
 mod types;
 
 pub use self::{
     driver::StreamMotionDriver,
+    stmo_handle::StmoHandle,
     types::{AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StreamMotionError},
 };
 
@@ -16,6 +18,7 @@ pub mod py {
         let child_module = PyModule::new(parent_module.py(), "stmo")?;
         proto::py::register(&child_module)?;
         driver::py::register(&child_module)?;
+        stmo_handle::py::register(&child_module)?;
 
         parent_module.add_submodule(&child_module)
     }

@@ -4,6 +4,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ResponseNotFulfilled,
     joints::JointDataSizeError,
     stmo::proto::{
         self, CommandPositionResponsePacket, RobotStatusPacket, ThresholdTableResponsePacket,
@@ -286,7 +287,7 @@ impl std::fmt::Display for JointMovementLimits {
 
 #[derive(Debug)]
 pub(crate) struct RxStorage {
-    pub state: VecDeque<RobotStatusPacket>,
+    pub status: VecDeque<RobotStatusPacket>,
     pub command_position: VecDeque<CommandPositionResponsePacket>,
     pub threshold_table: VecDeque<ThresholdTableResponsePacket>,
 }
@@ -294,15 +295,15 @@ pub(crate) struct RxStorage {
 impl RxStorage {
     pub fn new() -> Self {
         Self {
-            state: VecDeque::with_capacity(64),
+            status: VecDeque::with_capacity(64),
             command_position: VecDeque::with_capacity(16),
             threshold_table: VecDeque::with_capacity(32),
         }
     }
 
     pub fn prune(&mut self) {
-        while self.state.len() > 50 {
-            let _ = self.state.pop_front();
+        while self.status.len() > 50 {
+            let _ = self.status.pop_front();
         }
         while self.command_position.len() > 10 {
             let _ = self.command_position.pop_front();
@@ -313,7 +314,7 @@ impl RxStorage {
     }
 
     pub fn clear(&mut self) {
-        self.state.clear();
+        self.status.clear();
         self.command_position.clear();
         self.threshold_table.clear();
     }
@@ -330,13 +331,15 @@ pub enum StreamMotionError {
     #[error("I/O Error: {0}")]
     Io(std::io::Error),
     #[error("{0}")]
-    JointDataTooSmall(#[from] JointDataSizeError),
+    JointDataSizeError(#[from] JointDataSizeError),
     #[error("Invalid Joint Count: {0}")]
     InvalidJointCount(u8),
     #[error("Encoding Error")]
     EncodingError(#[from] bincode::error::EncodeError),
     #[error("Decoding Error")]
     DecodingError(#[from] bincode::error::DecodeError),
+    #[error("{0}")]
+    ResponseNotFulfilled(#[from] ResponseNotFulfilled),
     #[error("Other Error: {0}")]
     Other(String),
 }
