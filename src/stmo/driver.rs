@@ -843,7 +843,7 @@ impl<'a> StmoControlLoop<'a> {
     }
 
     #[inline]
-    pub fn send_command(&mut self, motion: MotionCommandPacket) -> Result<(), StreamMotionError> {
+    pub fn send_command(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
         self.driver
             .command_motion_single(motion)
             .map_err(Into::into)
@@ -870,6 +870,7 @@ pub mod py {
 
     use super::*;
 
+    #[derive(Debug)]
     #[pyclass(name = "StmoControlLoop")]
     pub struct PyStmoControlLoop {
         inner: Py<StreamMotionDriver>,

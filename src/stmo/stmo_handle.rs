@@ -9,7 +9,7 @@ use inherent::inherent;
 
 use crate::{ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError};
 
-#[cfg_attr(feature = "py", pyo3::pyclass(str))]
+#[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone)]
 pub struct StmoHandle {
     resp: Arc<(OnceLock<SystemTime>, Event)>,
@@ -94,7 +94,8 @@ impl std::fmt::Display for StmoHandle {
 #[cfg(feature = "py")]
 #[pyo3::pymethods]
 impl StmoHandle {
-    pub fn is_set(&self) -> bool {
+    #[pyo3(name = "is_set")]
+    pub fn py_is_set(&self) -> bool {
         self.resp.0.get().is_some()
     }
 
@@ -103,8 +104,8 @@ impl StmoHandle {
         ResponseHandle::get(self).map_err(Into::into)
     }
 
-    #[pyo3(signature = (timeout_secs = 10.0))]
-    pub fn wait_timeout(&self, timeout_secs: f64) -> pyo3::PyResult<()> {
+    #[pyo3(name = "wait_timeout", signature = (timeout_secs = 10.0))]
+    pub fn py_wait_timeout(&self, timeout_secs: f64) -> pyo3::PyResult<()> {
         let timeout = Duration::from_secs_f64(timeout_secs);
         ResponseHandle::wait_timeout(self, timeout).map_err(Into::into)
     }
