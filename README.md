@@ -311,12 +311,12 @@ TODO: The api is "done" and fully functional but I don't want to write examples 
 
 ## Roadmap
 - Pydocs and Rustdocs for all public APIs
-- Switch python terminal logging to pylog instead of tracing
-- Implement an "In The Loop" interface for the `StreamMotionDriver` to make using feedback from sensors easier.
+- ~Switch python terminal logging to pylog instead of tracing~
+- ~Implement an "In The Loop" interface for the `StreamMotionDriver` to make using feedback from sensors easier.~
 - Implement a unit-safe api for working with Cartesian poses.
 - Update docs to show the usage of async rmi/hmi response handles
 - Add async to hspo
 - Add support for async to python
-- Removing all possible panic locations and have graceful error handling for all failure modes.
-- Extensive unit testing, I wrote a special network testing library for this I just need to write the actual tests using it
+- ~Removing all possible panic locations and have graceful error handling for all failure modes.~
+- ~Extensive unit testing, I wrote a special network testing library for this I just need to write the actual tests using it~
 - A C api for the library, to allow usage from other languages like c#. The main issue is the extensive usage of rust style enums and traits in the API, so this will require some careful design to make a clean and safe C api. This is a long term goal and will likely be a separate crate that depends on this one.
