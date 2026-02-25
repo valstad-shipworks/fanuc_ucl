@@ -21,5 +21,3 @@ def __dir__() -> list[str]:
 
 
 import fanuc_ucl._fanuc_core  # noqa: E402
-
-fanuc_ucl._fanuc_core.config_logging(fanuc_ucl._fanuc_core.LoggingLevel.Err)
