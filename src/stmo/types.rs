@@ -66,40 +66,35 @@ impl AxisMotionConstraint {
     }
 
     pub fn calculate(&self, tcp_speed: f64, payload: f64, vmax: f64, max_payload: f64) -> f64 {
-        let speed_percent = (tcp_speed / vmax).clamp(0.0, 1.0);
-        let payload_percent = (payload / max_payload).clamp(0.0, 1.0);
-        let mut above_index = proto::THRESHOLD_TABLE_LENGTH - 1;
-        let mut below_index = 0;
-        let mut t = 1.0;
-        for i in 0..proto::THRESHOLD_TABLE_LENGTH {
-            let threshold = (i as f64 * 0.05) + 0.05;
-            if speed_percent < threshold {
-                above_index = i + 1;
-                below_index = i;
-                let v_past_below = (speed_percent - (below_index as f64 * 0.05)).clamp(0.0, 0.05);
-                t = v_past_below / 0.05;
-                break;
-            }
-        }
-        let no_payload_value = {
-            if above_index >= proto::THRESHOLD_TABLE_LENGTH {
-                self.no_payload[proto::THRESHOLD_TABLE_LENGTH - 1] as f64
+        let n = proto::THRESHOLD_TABLE_LENGTH;
+        let step = 1.0 / n as f64;
+
+        let speed_ratio = if vmax > 0.0 { tcp_speed / vmax } else { 0.0 };
+        let payload_ratio = if max_payload > 0.0 {
+            (payload / max_payload).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let lookup = |table: &[f32; proto::THRESHOLD_TABLE_LENGTH]| -> f64 {
+            if speed_ratio <= step {
+                table[0] as f64
+            } else if speed_ratio > 1.0 {
+                let slope = (table[n - 1] as f64 - table[n - 2] as f64) / step;
+                table[n - 1] as f64 + slope * (speed_ratio - 1.0)
             } else {
-                let below_value = self.no_payload[below_index] as f64;
-                let above_value = self.no_payload[above_index] as f64;
-                below_value + ((above_value - below_value) * t)
+                let ci = speed_ratio / step - 1.0;
+                let below = (ci.floor() as usize).min(n - 2);
+                let above = below + 1;
+                let t = ci - below as f64;
+                table[below] as f64 + (table[above] as f64 - table[below] as f64) * t
             }
         };
-        let max_payload_value = {
-            if above_index >= proto::THRESHOLD_TABLE_LENGTH {
-                self.max_payload[proto::THRESHOLD_TABLE_LENGTH - 1] as f64
-            } else {
-                let below_value = self.max_payload[below_index] as f64;
-                let above_value = self.max_payload[above_index] as f64;
-                below_value + ((above_value - below_value) * t)
-            }
-        };
-        no_payload_value + ((max_payload_value - no_payload_value) * payload_percent)
+
+        let no_payload_value = lookup(&self.no_payload);
+        let max_payload_value = lookup(&self.max_payload);
+
+        no_payload_value + (max_payload_value - no_payload_value) * payload_ratio
     }
 }
 
@@ -138,10 +133,7 @@ impl std::fmt::Display for AxisMotionConstraint {
     }
 }
 
-/**
- * Movement limits for a single joint axis.
- * Includes velocity, acceleration, and jerk constraints.
- */
+
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -200,10 +192,6 @@ impl std::fmt::Display for JointMovementLimit {
     }
 }
 
-/**
- * Movement limits for all 6 joint axes.
- * vmax is the maximum TCP speed in mm/s that these limits apply to.
- */
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimits {
