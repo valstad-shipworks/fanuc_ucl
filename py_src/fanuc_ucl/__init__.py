@@ -1,3 +1,4 @@
+from fanuc_ucl import _fanuc_core as _fanuc_core  # type: ignore
 from importlib.metadata import PackageNotFoundError, version
 
 try:
@@ -18,8 +19,3 @@ def __getattr__(name: str):
 def __dir__() -> list[str]:
     core = import_module(f"{__name__}._fanuc_core")
     return sorted(set(globals().keys()) | set(dir(core)))
-
-
-import fanuc_ucl._fanuc_core  # noqa: E402
-
-fanuc_ucl._fanuc_core.config_logging(fanuc_ucl._fanuc_core.LoggingLevel.Err)
