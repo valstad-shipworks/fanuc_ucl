@@ -133,7 +133,6 @@ impl std::fmt::Display for AxisMotionConstraint {
     }
 }
 
-
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
