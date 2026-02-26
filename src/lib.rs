@@ -63,12 +63,13 @@ pub use thread_util::ThreadConfig;
 
 #[cfg(feature = "py")]
 pub mod py {
+
     use super::{hmi, hspo, joints, rmi, stmo, thread_util};
     use pyo3::prelude::*;
 
     #[pyo3::pymodule(name = "_fanuc_core")]
     fn py_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        pyo3_log::try_init().map_err(|e| {
+        env_logger::try_init().map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                 "Failed to initialize logging: {}",
                 e

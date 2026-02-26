@@ -42,9 +42,9 @@ inherent = { version = "1.0.13", optional = true }
 openport = { version = "0.1.1", optional = true }
 parking_lot = "0.12.5"
 log = { version = "0.4.29", features = ["release_max_level_debug", "std"] }
-pyo3-log = { version = "0.13.3", optional = true }
 snare = { version = "1.1.3", features = ["mio-compat"] }
 cfg-vis = "0.3.0"
+env_logger = { version = "0.11.9", optional = true}
 
 [dev-dependencies]
 snare = { version = "1.1.3", features = ["shim", "mio-compat"] }
@@ -84,7 +84,7 @@ hmi = [
     "inherent",
 ]
 joint_conv = ["paste"]
-py = ["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "pyo3-log"]
+py = ["pyo3", "stmo", "rmi", "hspo", "hmi", "serde_json", "env_logger"]
 # testing = ["snare/shim"]
 
 

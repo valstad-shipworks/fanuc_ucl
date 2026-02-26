@@ -64,16 +64,3 @@ class JointFormat(Enum):
         joints: list[float],
     ) -> list[float]:
         """Converts joint data from ``format`` into ``self``, using the given template to determine per-joint conversions."""
-
-class LoggingLevel(Enum):
-    Err = "ERR"
-    Warn = "WARN"
-    Info = "INFO"
-    Debug = "DEBUG"
-    Trace = "TRACE"
-
-def config_logging(level: LoggingLevel) -> None:
-    """Configure logging level for the Fanuc driver.
-
-    :param LoggingLevel level: The desired logging level.
-    """
