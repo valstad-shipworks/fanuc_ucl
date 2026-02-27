@@ -176,6 +176,7 @@ impl HmiDriver {
         timeout: Option<Duration>,
         thread_config: Option<ThreadConfig>,
     ) -> DriverResult<()> {
+        log::info!("Attempting to connect HmiDriver to {}", self.remote_addr);
         let timeout =
             timeout.unwrap_or_else(|| Duration::from_secs_f64(DEFAULT_CONNECT_TIMEOUT_SECS));
         if timeout.is_zero() {
@@ -206,8 +207,13 @@ impl HmiDriver {
             self.next_seq(); // magic uses seq 1
             self.write::<ports::Command>(0, "CLRASG".to_string())?
                 .wait_timeout(timeout.saturating_sub(start.elapsed()))?;
+            log::info!("HmiDriver connected to {}", self.remote_addr);
             Ok(())
         } else {
+            log::error!(
+                "Failed to connect HmiDriver to {}: did not receive expected ACKs",
+                self.remote_addr
+            );
             Err(HmiError::Other("Failed to receive ACK for INIT".into()).into())
         }
     }
@@ -215,11 +221,13 @@ impl HmiDriver {
     /// Disconnects from the HMI, shutting down the runner thread and cleaning up resources.
     pub fn disconnect(&mut self, ignore_join: bool) -> DriverResult<()> {
         if let Some(conn) = self.connection.take() {
+            log::info!("HmiDriver disconnecting from {}", self.remote_addr);
             let _ = conn.to_runner.send(RunnerMessage::Shutdown);
             let _ = conn.waker.wake();
             if !ignore_join {
                 conn.handle.join();
             }
+            log::info!("HmiDriver disconnected from {}", self.remote_addr);
             Ok(())
         } else {
             Err(HmiError::NotConnected.into())
@@ -247,10 +255,17 @@ impl HmiDriver {
     }
 
     fn get_connection(&self) -> DriverResult<&HmiConnection> {
-        self.connection
-            .as_ref()
-            .filter(|conn| conn.handle.is_alive())
-            .ok_or_else(|| HmiError::NotConnected.into())
+        match self.connection.as_ref() {
+            Some(conn) if conn.handle.is_alive() => Ok(conn),
+            Some(_) => {
+                log::error!(
+                    "HMI runner thread is dead, connection to {} lost",
+                    self.remote_addr
+                );
+                Err(HmiError::NotConnected.into())
+            }
+            None => Err(HmiError::NotConnected.into()),
+        }
     }
 
     fn send_message(&self, msg: Message) -> DriverResult<HmiHandleGeneric> {

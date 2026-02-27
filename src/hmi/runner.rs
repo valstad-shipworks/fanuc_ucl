@@ -169,6 +169,7 @@ impl HmiRunner {
         while let Some(front) = queue.front_mut() {
             match self.tcp_stream.write(&front.buf[front.offset..]) {
                 Ok(0) => {
+                    log::error!("HMI TCP write returned 0, peer closed connection");
                     return Err(HmiError::NotConnected);
                 }
                 Ok(n) => {
@@ -183,7 +184,7 @@ impl HmiRunner {
                 Err(e) => {
                     let handle = front.handle.clone();
                     queue.pop_front();
-                    log::trace!("Error while sending packet: {}", e);
+                    log::error!("HMI TCP write error: {}", e);
                     let _ = handle.set_error(HmiError::Io(e));
                 }
             }
@@ -194,13 +195,19 @@ impl HmiRunner {
     fn read_stream(&mut self, scratch: &mut [u8]) -> HmiResult<()> {
         loop {
             match self.tcp_stream.read(scratch) {
-                Ok(0) => return Err(HmiError::NotConnected),
+                Ok(0) => {
+                    log::error!("HMI TCP read returned 0, connection lost");
+                    return Err(HmiError::NotConnected);
+                }
                 Ok(n) => {
                     self.read_buffer.extend_from_slice(&scratch[..n]);
                     self.process_buffer()?;
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
-                Err(e) => return Err(HmiError::Io(e)),
+                Err(e) => {
+                    log::error!("HMI TCP read error: {}", e);
+                    return Err(HmiError::Io(e));
+                }
             }
         }
     }
@@ -237,6 +244,14 @@ impl HmiRunner {
     }
 
     fn fail_all(&mut self, queue: &mut VecDeque<PendingWrite>, error: HmiError) {
+        let pending_count = self.pending_responses.len() + queue.len();
+        if pending_count > 0 {
+            log::warn!(
+                "HMI runner failing {} pending requests: {}",
+                pending_count,
+                error
+            );
+        }
         for (_, handle) in self.pending_responses.drain() {
             let _ = handle.set_error(error.clone());
         }

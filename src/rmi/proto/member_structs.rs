@@ -14,6 +14,7 @@ pub type OnOnly = monostate::MustBe!("ON");
 pub type OffOnly = monostate::MustBe!("OFF");
 
 #[macro_export]
+#[doc(hidden)]
 macro_rules! impl_monostate_member {
     ($strct:ident.$name:ident = $value:expr) => {
         ::paste::paste! {

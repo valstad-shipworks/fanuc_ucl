@@ -103,10 +103,14 @@ impl StreamMotionContext {
                         Err(e) => Err(e),
                     }
                 } else {
+                    log::warn!("STMO send would block and no timeout configured");
                     Err(StreamMotionError::Timeout)
                 }
             }
-            Err(e) => Err(StreamMotionError::from(e)),
+            Err(e) => {
+                log::error!("STMO UDP send error: {}", e);
+                Err(StreamMotionError::from(e))
+            }
         }
     }
 
@@ -187,6 +191,7 @@ impl StreamMotionContext {
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
+                log::error!("STMO poll error, breaking event loop: {}", e);
                 break;
             }
 
@@ -199,6 +204,7 @@ impl StreamMotionContext {
                                 Ok(n) if n > 0 => {
                                     if let Some(rx) = RxPackets::decode_from(&rx_buf[..n]) {
                                         let _ = self.to_driver.send(rx);
+                                        log::trace!("Received packet: {:?}", rx);
                                         if let RxPackets::VersionNumberResponse(vn) = &rx {
                                             self.protocol_version = vn.version;
                                             log::info!(
@@ -212,10 +218,12 @@ impl StreamMotionContext {
                                                 continue;
                                             }
                                             // status_cycle_count = status_cycle_count.wrapping_add(1);
-                                            // if status_cycle_count < state.status_bits().packet_rate() as u32
-                                            // {
-                                            //     continue;
-                                            // }
+                                            if state.status_bits().packet_rate() as u32 != 0 {
+                                                log::debug!(
+                                                    "Robot status packet rate: {}",
+                                                    state.status_bits().packet_rate()
+                                                );
+                                            }
                                             // status_cycle_count = 0;
                                             if let Some((mut cmd, handle)) =
                                                 self.next_motion_command()
@@ -387,6 +395,8 @@ fn stream_motion_runtime(
     waker_tx.send(waker.clone())?;
     thread_handle.set_waker_mio(waker);
 
+    log::debug!("Stream motion thread started, entering context loop");
+
     let context = StreamMotionContext::new(from_driver, to_driver, socket, itl);
     context.context_loop(thread_handle, poll);
 
@@ -531,6 +541,10 @@ impl StreamMotionDriver {
 
     #[on(pyo3(signature = (thread_config=None)))]
     pub fn connect(&mut self, thread_config: Option<ThreadConfig>) -> DriverResult<()> {
+        log::info!(
+            "Attempting to connect StreamMotionDriver to {}",
+            self.remote_addr
+        );
         if let Some(conn) = &self.connection
             && conn.thread_handle.is_alive()
         {
@@ -592,6 +606,8 @@ impl StreamMotionDriver {
             itl,
         });
 
+        log::info!("StreamMotionDriver connected to {}", self.remote_addr);
+
         Ok(())
     }
 
@@ -620,6 +636,10 @@ impl StreamMotionDriver {
                 }
             }
             if !started {
+                log::error!(
+                    "STMO start timed out after {:.1}s waiting for version response",
+                    timeout.as_secs_f32()
+                );
                 Err(StreamMotionError::Timeout)?;
             }
         } else {
@@ -628,13 +648,16 @@ impl StreamMotionDriver {
         if let Some(conn) = &mut self.connection {
             conn.is_started = true;
         }
+        log::info!("StreamMotionDriver started on {}", self.remote_addr);
         Ok(())
     }
 
     pub fn disconnect(&mut self) {
         if let Some(conn) = self.connection.take() {
+            log::info!("StreamMotionDriver disconnecting from {}", self.remote_addr);
             let _ = conn.to_thread.send(ToThreadMessage::Stop(StopPacket {}));
             conn.thread_handle.join();
+            log::info!("StreamMotionDriver disconnected from {}", self.remote_addr);
         }
         self.rx_storage.clear();
     }
