@@ -76,6 +76,8 @@ pub mod py {
             ))
         })?;
 
+        log::trace!("Initializing Python module fanuc_ucl._fanuc_core");
+
         hmi::py::register_child_module(m)?;
         stmo::py::register_child_module(m)?;
         hspo::py::register_child_module(m)?;

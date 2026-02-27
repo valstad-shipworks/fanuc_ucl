@@ -614,8 +614,8 @@ fn broker_runtime(
                         // No more datagrams right now.
                         break;
                     }
-                    Err(_e) => {
-                        // Socket error: continue loop and let poll wake us again.
+                    Err(e) => {
+                        log::error!("HSPO broker socket recv error: {}", e);
                         break;
                     }
                 }
@@ -675,6 +675,11 @@ impl HspoBroker {
             tracked_clock: tracked_clock.clone(),
         };
 
+        log::info!(
+            "HSPO registering receiver for {} (buffer_size={})",
+            ip_of_interest,
+            packet_buffer_size
+        );
         self.robot_appender
             .send(robot_sender)
             .map_err(|_| HspoBrokerNotInitializedError)?;
@@ -740,8 +745,10 @@ pub fn initialize_broker(
 ) -> Result<(), HspoBrokerNotInitializedError> {
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
+        log::info!("Initializing HSPO broker on {}", listen_on);
         let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
+        log::info!("HSPO broker initialized");
     }
     Ok(())
 }
@@ -761,8 +768,10 @@ pub fn initialize_broker(
     })?;
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
+        log::info!("Initializing HSPO broker on {}", listen_on);
         let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
+        log::info!("HSPO broker initialized");
     }
     Ok(())
 }
@@ -775,11 +784,12 @@ pub fn initialize_broker(
 pub fn destroy_broker(wait_for_thread: bool) {
     let mut guard = HSPO_SERVER.lock();
     if let Some(broker) = guard.take() {
+        log::info!("Destroying HSPO broker");
         broker.kill_switch.store(true, Ordering::Relaxed);
         if wait_for_thread {
             match broker._thread_handle.join() {
-                Ok(()) => {}
-                Err(e) => log::error!("HSPO broker thread was panicked: {:?}", e),
+                Ok(()) => log::info!("HSPO broker thread exited cleanly"),
+                Err(e) => log::error!("HSPO broker thread panicked: {:?}", e),
             }
         }
     }

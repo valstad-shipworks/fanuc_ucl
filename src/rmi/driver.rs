@@ -196,7 +196,10 @@ impl RmiRunner {
     fn read_stream(&mut self, buf: &mut [u8]) -> RmiResult<()> {
         loop {
             match self.tcp_stream.read(buf) {
-                Ok(0) => return Err(RmiError::Disconnected),
+                Ok(0) => {
+                    log::error!("RMI TCP stream read returned 0 bytes, connection lost");
+                    return Err(RmiError::Disconnected);
+                }
                 Ok(n) => {
                     log::trace!("Read {} bytes", n);
                     match rmi_string_reader(&buf[..n]) {
@@ -232,7 +235,10 @@ impl RmiRunner {
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
-                Err(e) => return Err(RmiError::CommunicationError(e)),
+                Err(e) => {
+                    log::error!("RMI TCP stream read error: {}", e);
+                    return Err(RmiError::CommunicationError(e));
+                }
             }
         }
     }
@@ -248,7 +254,10 @@ impl RmiRunner {
             let mut write_cnt = 0;
             loop {
                 match self.tcp_stream.write(&front.buf[front.offset..]) {
-                    Ok(0) => return true, // peer closed
+                    Ok(0) => {
+                        log::error!("RMI TCP stream write returned 0, peer closed connection");
+                        return true; // peer closed
+                    }
                     Ok(n) => {
                         write_cnt += 1;
                         front.offset += n;
@@ -269,6 +278,7 @@ impl RmiRunner {
                         return false; // wait for next WRITABLE
                     }
                     Err(e) => {
+                        log::error!("RMI TCP stream write error: {}", e);
                         let _ = front.handle.set_error(RmiError::CommunicationError(e));
                         q.pop_front();
                         break;
@@ -371,7 +381,7 @@ fn rmi_runner_runtime(
         config,
     };
     if let Err(e) = runner.run(poll) {
-        log::warn!("RMI Runner encountered an error: {}", e);
+        log::error!("RMI runner terminated with error: {}", e);
     }
     Ok(())
 }
@@ -532,7 +542,12 @@ impl RmiDriver {
         &mut self,
         thread_config: Option<ThreadConfig>,
     ) -> RmiResult<FrcConnectResponse> {
+        log::info!("Attempting to connect RmiDriver to {}", self.config.address);
         if self.connection.is_some() {
+            log::warn!(
+                "RmiDriver::connect called but already connected to {}",
+                self.config.address
+            );
             return Err(RmiError::Structure("Driver already started".to_string()));
         }
 
@@ -565,11 +580,18 @@ impl RmiDriver {
         };
         if response.error_id != 0 {
             let ec = RmiProtocolError::try_from(response.error_id).unwrap_or(Default::default());
+            log::error!("RMI connect rejected by robot: {}", ec);
             return Err(RmiError::FanucErrorCode(ec));
         }
         let major_version = response.major_version as u8;
         let minor_version = response.minor_version as u8;
         if major_version < self.config.expected_major_version {
+            log::error!(
+                "RMI version mismatch: robot v{}.{} < expected v{}",
+                major_version,
+                minor_version,
+                self.config.expected_major_version
+            );
             return Err(RmiError::Initialization(format!(
                 "Robot major version {} is lower than expected {}",
                 major_version, self.config.expected_major_version
@@ -596,11 +618,14 @@ impl RmiDriver {
             err_flag,
         });
 
+        log::info!("RmiDriver connected to {}", self.config.address);
+
         Ok(response)
     }
 
     pub fn disconnect(&mut self) -> RmiResult<RmiHandle<FrcDisconnectResponse>> {
         if let Some(conn) = self.connection.take() {
+            log::info!("RmiDriver disconnecting from {}", self.config.address);
             let data = rmi_string_writer(disconnect_json())?;
             let resp_handle = RmiHandleGeneric::new("FRC_Disconnect", 0);
             let specific_handle = RmiHandle::new_from_generic(&resp_handle);
@@ -608,6 +633,7 @@ impl RmiDriver {
                 .send(RunnerMessage::Disconnect(data, resp_handle, true))
                 .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
             conn.handle.join();
+            log::info!("RmiDriver disconnected from {}", self.config.address);
             Ok(specific_handle)
         } else {
             Err(RmiError::Disconnected)
@@ -619,6 +645,10 @@ impl RmiDriver {
         if cnx.handle.is_alive() {
             Ok(cnx)
         } else {
+            log::error!(
+                "RMI runner thread is dead, connection to {} lost",
+                self.config.address
+            );
             Err(RmiError::Disconnected)
         }
     }

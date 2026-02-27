@@ -12,8 +12,8 @@ pub use instructions::*;
 #[cfg(not(feature = "py"))]
 pub use member_structs::*;
 
-#[doc(hidden)]
 #[macro_export]
+#[doc(hidden)]
 macro_rules! zst_filler {
     ($name:ident) => {
         #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
