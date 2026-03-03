@@ -220,7 +220,10 @@ impl MotionCommandPacket {
         })
     }
 
-    pub(crate) fn filler(status: &RobotStatusPacket, previous_command: &MotionCommandPacket) -> Self {
+    pub(crate) fn filler(
+        status: &RobotStatusPacket,
+        previous_command: &MotionCommandPacket,
+    ) -> Self {
         Self {
             seq: status.seq,
             last_command: true,
@@ -233,7 +236,7 @@ impl MotionCommandPacket {
             write_io_mask: 0,
             write_io_value: 0,
             unused: [0xFFFF, 0x3333, 0x3333],
-            position: previous_command.position
+            position: previous_command.position,
         }
     }
 

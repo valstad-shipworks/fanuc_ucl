@@ -243,9 +243,13 @@ impl StreamMotionContext {
                                                 && state.status_bits().ready_for_commands()
                                                 && !self.itl.1.load(Ordering::SeqCst)
                                             {
-                                                if let Some(prev_motion_packet) = &prev_motion_packet {
-                                                    let mut cmd =
-                                                        MotionCommandPacket::filler(state, prev_motion_packet);
+                                                if let Some(prev_motion_packet) =
+                                                    &prev_motion_packet
+                                                {
+                                                    let mut cmd = MotionCommandPacket::filler(
+                                                        state,
+                                                        prev_motion_packet,
+                                                    );
                                                     cmd.seq = state.seq;
                                                     let _ = self.send(
                                                         TxPackets::MotionCommand(cmd),
