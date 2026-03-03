@@ -183,7 +183,7 @@ impl StreamMotionContext {
         let mut events = Events::with_capacity(64);
         let mut rx_buf = [0u8; 2048];
         let mut tx_buf = [0u8; 1024];
-        let mut last_motion_was_last = false;
+        let mut prev_motion_packet: Option<MotionCommandPacket> = None;
         // let mut status_cycle_count: u32 = 0;
 
         while thread_handle.should_live() {
@@ -229,7 +229,7 @@ impl StreamMotionContext {
                                                 self.next_motion_command()
                                             {
                                                 cmd.seq = state.seq;
-                                                last_motion_was_last = cmd.last_command;
+                                                prev_motion_packet = Some(cmd);
                                                 let _ = self.send(
                                                     TxPackets::MotionCommand(cmd),
                                                     &mut tx_buf,
@@ -240,22 +240,20 @@ impl StreamMotionContext {
                                                     h.set();
                                                 }
                                             } else if state.status_bits().command_received()
+                                                && state.status_bits().ready_for_commands()
                                                 && !self.itl.1.load(Ordering::SeqCst)
                                             {
-                                                if !last_motion_was_last {
-                                                    log::warn!(
-                                                        "Motion command queue empty, last command was not marked last. Sending hold command."
+                                                if let Some(prev_motion_packet) = &prev_motion_packet {
+                                                    let mut cmd =
+                                                        MotionCommandPacket::filler(state, prev_motion_packet);
+                                                    cmd.seq = state.seq;
+                                                    let _ = self.send(
+                                                        TxPackets::MotionCommand(cmd),
+                                                        &mut tx_buf,
+                                                        Some(Duration::from_millis(6)),
+                                                        None,
                                                     );
                                                 }
-                                                let mut cmd =
-                                                    MotionCommandPacket::from_status(state, false);
-                                                cmd.seq = state.seq;
-                                                let _ = self.send(
-                                                    TxPackets::MotionCommand(cmd),
-                                                    &mut tx_buf,
-                                                    Some(Duration::from_millis(6)),
-                                                    None,
-                                                );
                                             } else if self.itl.1.load(Ordering::SeqCst) {
                                                 log::trace!(
                                                     "Notifying in the loop that we got a new status"
