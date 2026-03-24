@@ -522,10 +522,6 @@ struct RmiConnection {
     major_version: u8,
     minor_version: u8,
     handle: ThreadHandle,
-    #[cfg(not(test))]
-    waker: Arc<mio::Waker>,
-    #[cfg(test)]
-    waker: Arc<snare::mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
 }
@@ -621,13 +617,19 @@ impl RmiDriver {
             thread_config,
         )?;
         handle.set_handle(join_handle);
+        cfg_if::cfg_if!(
+            if #[cfg(test)] {
+                handle.set_waker_snare(waker);
+            } else {
+                handle.set_waker_mio(waker);
+            }
+        );
 
         self.seq.store(0, Ordering::Relaxed);
         self.connection = Some(RmiConnection {
             major_version,
             minor_version,
             handle,
-            waker,
             to_runner,
             err_flag,
         });
@@ -722,7 +724,7 @@ impl RmiDriver {
                 generic_handle.clone(),
             ))
             .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
-        conn.waker.wake()?;
+        conn.handle.wake()?;
         Ok(generic_handle)
     }
 
