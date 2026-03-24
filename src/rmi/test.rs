@@ -211,8 +211,7 @@ fn handle_command(
             if let (Some(num), Some(frame)) = (
                 json.get("FrameNumber").and_then(|v| v.as_i64()),
                 json.get("Frame"),
-            )
-                && let Ok(f) = serde_json::from_value::<FrameData>(frame.clone())
+            ) && let Ok(f) = serde_json::from_value::<FrameData>(frame.clone())
             {
                 state.u_frame_data.insert(num as i8, f);
             }
@@ -223,18 +222,14 @@ fn handle_command(
                 .get("FrameNumber")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(1) as i8;
-            let frame = state
-                .u_frame_data
-                .get(&num)
-                .copied()
-                .unwrap_or(FrameData {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    w: 0.0,
-                    p: 0.0,
-                    r: 0.0,
-                });
+            let frame = state.u_frame_data.get(&num).copied().unwrap_or(FrameData {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+                p: 0.0,
+                r: 0.0,
+            });
             serde_json::json!({
                 "Command": "FRC_ReadUFrameData",
                 "ErrorID": 0,
@@ -249,8 +244,7 @@ fn handle_command(
             if let (Some(num), Some(frame)) = (
                 json.get("ToolNumber").and_then(|v| v.as_i64()),
                 json.get("Frame"),
-            )
-                && let Ok(f) = serde_json::from_value::<FrameData>(frame.clone())
+            ) && let Ok(f) = serde_json::from_value::<FrameData>(frame.clone())
             {
                 state.u_tool_data.insert(num as i8, f);
             }
@@ -261,18 +255,14 @@ fn handle_command(
                 .get("FrameNumber")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(1) as i8;
-            let frame = state
-                .u_tool_data
-                .get(&num)
-                .copied()
-                .unwrap_or(FrameData {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                    w: 0.0,
-                    p: 0.0,
-                    r: 0.0,
-                });
+            let frame = state.u_tool_data.get(&num).copied().unwrap_or(FrameData {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+                p: 0.0,
+                r: 0.0,
+            });
             serde_json::json!({
                 "Command": "FRC_ReadUToolData",
                 "ErrorID": 0,
@@ -288,12 +278,10 @@ fn handle_command(
                 json.get("RegisterNumber").and_then(|v| v.as_u64()),
                 json.get("Configuration"),
                 json.get("Position"),
-            )
-                && let (Ok(c), Ok(p)) = (
-                    serde_json::from_value::<Configuration>(cfg.clone()),
-                    serde_json::from_value::<Position>(pos.clone()),
-                )
-            {
+            ) && let (Ok(c), Ok(p)) = (
+                serde_json::from_value::<Configuration>(cfg.clone()),
+                serde_json::from_value::<Position>(pos.clone()),
+            ) {
                 state.position_registers.insert(reg as u16, (c, p));
             }
             serde_json::json!({ "Command": "FRC_WritePositionRegister", "ErrorID": 0 })
@@ -317,10 +305,7 @@ fn handle_command(
             })
         }
         "FRC_ReadDIN" => {
-            let port = json
-                .get("PortNumber")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1) as u16;
+            let port = json.get("PortNumber").and_then(|v| v.as_u64()).unwrap_or(1) as u16;
             let val = state.din_values.get(&port).copied().unwrap_or(0);
             serde_json::json!({
                 "Command": "FRC_ReadDIN",
@@ -376,10 +361,7 @@ fn handle_instruction(
     json: &serde_json::Value,
     src: SocketAddr,
 ) -> TesterAction<RmiPacket> {
-    let seq_id = json
-        .get("SequenceID")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let seq_id = json.get("SequenceID").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let resp = serde_json::json!({
         "Instruction": name,
         "ErrorID": 0,
@@ -454,27 +436,23 @@ fn default_joint_angles() -> JointAngles {
 
 #[test]
 fn test_connect_disconnect() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 1),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            let resp = driver.connect(None).expect("connect failed");
-            assert_eq!(resp.error_id, 0);
-            assert_eq!(resp.major_version, 7);
-            assert_eq!(resp.minor_version, 1);
-            assert!(driver.is_connected());
-            driver.disconnect().expect("disconnect failed");
-        },
-    );
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 1), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        let resp = driver.connect(None).expect("connect failed");
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.major_version, 7);
+        assert_eq!(resp.minor_version, 1);
+        assert!(driver.is_connected());
+        driver.disconnect().expect("disconnect failed");
+    });
 }
 
 #[test]
 fn test_not_connected_error() {
     snare::register_test();
-    let driver = RmiDriver::new(RmiDriverConfig::default_with_ip(
-        IpAddr::V4(Ipv4Addr::new(10, 0, 1, 2)),
-    ));
+    let driver = RmiDriver::new(RmiDriverConfig::default_with_ip(IpAddr::V4(Ipv4Addr::new(
+        10, 0, 1, 2,
+    ))));
     assert!(!driver.is_connected());
     assert!(driver.send(FrcGetStatus).is_err());
 }
@@ -485,128 +463,104 @@ fn test_not_connected_error() {
 
 #[test]
 fn test_initialize() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 3),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 3), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcInitialize::default())
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcInitialize::default())
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_abort() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 4),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 4), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcAbort)
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcAbort)
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_pause() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 5),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 5), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcPause)
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcPause)
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_continue() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 6),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 6), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcContinue)
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcContinue)
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_reset() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 7),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 7), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcReset)
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcReset)
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_read_error() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 8),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 8), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcReadError::default())
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error, 0);
+        let resp = driver
+            .send(FrcReadError::default())
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 // =====================================================================
@@ -615,23 +569,19 @@ fn test_read_error() {
 
 #[test]
 fn test_set_override() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 10),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 10), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcSetOverRide::new(50))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcSetOverRide::new(50))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
@@ -666,164 +616,148 @@ fn test_get_status() {
 
 #[test]
 fn test_set_get_uframe_utool() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 12),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 12), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            // Set UFrame=3, UTool=5
-            let resp = driver
-                .send(FrcSetUFrameUTool::new(5, 3, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        // Set UFrame=3, UTool=5
+        let resp = driver
+            .send(FrcSetUFrameUTool::new(5, 3, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            // Read back
-            let resp = driver
-                .send(FrcGetUFrameUTool::new(None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert_eq!(resp.u_frame_number, 3);
-            assert_eq!(resp.u_tool_number, 5);
+        // Read back
+        let resp = driver
+            .send(FrcGetUFrameUTool::new(None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.u_frame_number, 3);
+        assert_eq!(resp.u_tool_number, 5);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_write_read_uframe_data() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 13),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 13), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let frame = FrameData {
-                x: 100.0,
-                y: 200.0,
-                z: 300.0,
-                w: 10.0,
-                p: 20.0,
-                r: 30.0,
-            };
+        let frame = FrameData {
+            x: 100.0,
+            y: 200.0,
+            z: 300.0,
+            w: 10.0,
+            p: 20.0,
+            r: 30.0,
+        };
 
-            // Write UFrame 2
-            let resp = driver
-                .send(FrcWriteUFrameData::new(2, frame, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        // Write UFrame 2
+        let resp = driver
+            .send(FrcWriteUFrameData::new(2, frame, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            // Read UFrame 2
-            let resp = driver
-                .send(FrcReadUFrameData::new(2, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert_eq!(resp.frame.x, 100.0);
-            assert_eq!(resp.frame.y, 200.0);
-            assert_eq!(resp.frame.z, 300.0);
+        // Read UFrame 2
+        let resp = driver
+            .send(FrcReadUFrameData::new(2, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.frame.x, 100.0);
+        assert_eq!(resp.frame.y, 200.0);
+        assert_eq!(resp.frame.z, 300.0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_write_read_utool_data() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 14),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 14), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let frame = FrameData {
-                x: 50.0,
-                y: 60.0,
-                z: 70.0,
-                w: 1.0,
-                p: 2.0,
-                r: 3.0,
-            };
+        let frame = FrameData {
+            x: 50.0,
+            y: 60.0,
+            z: 70.0,
+            w: 1.0,
+            p: 2.0,
+            r: 3.0,
+        };
 
-            // Write UTool 3
-            let resp = driver
-                .send(FrcWriteUToolData::new(3, frame, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        // Write UTool 3
+        let resp = driver
+            .send(FrcWriteUToolData::new(3, frame, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            // Read UTool 3
-            let resp = driver
-                .send(FrcReadUToolData::new(3, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert_eq!(resp.frame.x, 50.0);
-            assert_eq!(resp.frame.y, 60.0);
-            assert_eq!(resp.frame.z, 70.0);
+        // Read UTool 3
+        let resp = driver
+            .send(FrcReadUToolData::new(3, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.frame.x, 50.0);
+        assert_eq!(resp.frame.y, 60.0);
+        assert_eq!(resp.frame.z, 70.0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_write_read_position_register() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 15),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 15), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let config = default_config();
-            let position = Position {
-                x: 500.0,
-                y: 600.0,
-                z: 700.0,
-                w: 0.0,
-                p: 0.0,
-                r: 0.0,
-                ext1: 0.0,
-                ext2: 0.0,
-                ext3: 0.0,
-            };
+        let config = default_config();
+        let position = Position {
+            x: 500.0,
+            y: 600.0,
+            z: 700.0,
+            w: 0.0,
+            p: 0.0,
+            r: 0.0,
+            ext1: 0.0,
+            ext2: 0.0,
+            ext3: 0.0,
+        };
 
-            // Write PR[5]
-            let resp = driver
-                .send(FrcWritePositionRegister::new(5, config, position, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        // Write PR[5]
+        let resp = driver
+            .send(FrcWritePositionRegister::new(5, config, position, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            // Read PR[5]
-            let resp = driver
-                .send(FrcReadPositionRegister::new(5, None))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert_eq!(resp.position.x, 500.0);
-            assert_eq!(resp.position.y, 600.0);
-            assert_eq!(resp.position.z, 700.0);
+        // Read PR[5]
+        let resp = driver
+            .send(FrcReadPositionRegister::new(5, None))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert_eq!(resp.position.x, 500.0);
+        assert_eq!(resp.position.y, 600.0);
+        assert_eq!(resp.position.z, 700.0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
@@ -861,23 +795,19 @@ fn test_read_din() {
 
 #[test]
 fn test_write_dout() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 17),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 17), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcWriteDOUT::new(3, OnOff::ON))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send(FrcWriteDOUT::new(3, OnOff::ON))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
@@ -976,424 +906,360 @@ fn test_read_tcp_speed() {
 
 #[test]
 fn test_wait_time() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 30),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 30), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcWaitTime::new(Duration::from_secs_f32(1.5)))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0, "SequenceID should be set");
+        let resp = driver
+            .send(FrcWaitTime::new(Duration::from_secs_f32(1.5)))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0, "SequenceID should be set");
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_wait_din() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 31),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 31), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcWaitDIN::new(1, OnOff::ON))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcWaitDIN::new(1, OnOff::ON))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_set_uframe_instruction() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 32),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 32), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcSetUFrame::new(3))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcSetUFrame::new(3))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_set_utool_instruction() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 33),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 33), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcSetUTool::new(2))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcSetUTool::new(2))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_set_payload() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 34),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 34), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcSetPayLoad::new(1))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcSetPayLoad::new(1))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_call() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 35),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 35), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcCall::new("TEST_PROG".to_string()))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcCall::new("TEST_PROG".to_string()))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_linear_motion() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 36),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 36), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcLinearMotion::new(
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcLinearMotion::new(
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_joint_motion() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 37),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 37), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcJointMotion::new(
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    50,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcJointMotion::new(
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                50,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_linear_relative() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 38),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 38), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcLinearRelative::new(
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcLinearRelative::new(
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_linear_motion_jrep() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 39),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 39), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcLinearMotionJRep::new(
-                    default_joint_angles(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcLinearMotionJRep::new(
+                default_joint_angles(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_linear_relative_jrep() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 40),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 40), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcLinearRelativeJRep::new(
-                    default_joint_angles(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcLinearRelativeJRep::new(
+                default_joint_angles(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_joint_relative() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 41),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 41), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcJointRelative::new(
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    50,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcJointRelative::new(
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                50,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_joint_motion_jrep() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 42),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 42), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcJointMotionJRep::new(
-                    default_joint_angles(),
-                    SpeedType::MMSec,
-                    50,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcJointMotionJRep::new(
+                default_joint_angles(),
+                SpeedType::MMSec,
+                50,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_joint_relative_jrep() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 43),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 43), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcJointRelativeJRep::new(
-                    default_joint_angles(),
-                    SpeedType::MMSec,
-                    50,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcJointRelativeJRep::new(
+                default_joint_angles(),
+                SpeedType::MMSec,
+                50,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_circular_motion() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 44),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 44), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcCircularMotion::new(
-                    default_config(),
-                    default_position(),
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcCircularMotion::new(
+                default_config(),
+                default_position(),
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 #[test]
 fn test_circular_relative() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 45),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 45), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send(FrcCircularRelative::new(
-                    default_config(),
-                    default_position(),
-                    default_config(),
-                    default_position(),
-                    SpeedType::MMSec,
-                    100,
-                    TermType::FINE,
-                    100,
-                ))
-                .unwrap()
-                .wait_timeout(Duration::from_secs(2))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
-            assert!(resp.sequence_id > 0);
+        let resp = driver
+            .send(FrcCircularRelative::new(
+                default_config(),
+                default_position(),
+                default_config(),
+                default_position(),
+                SpeedType::MMSec,
+                100,
+                TermType::FINE,
+                100,
+            ))
+            .unwrap()
+            .wait_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
+        assert!(resp.sequence_id > 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }
 
 // =====================================================================
@@ -1402,21 +1268,17 @@ fn test_circular_relative() {
 
 #[test]
 fn test_full_reset() {
-    run_rmi_test(
-        Ipv4Addr::new(10, 0, 1, 50),
-        noop_state_setup,
-        |addr| {
-            let mut driver = RmiDriver::new(make_config(addr));
-            driver.connect(None).unwrap();
+    run_rmi_test(Ipv4Addr::new(10, 0, 1, 50), noop_state_setup, |addr| {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).unwrap();
 
-            let resp = driver
-                .send_full_reset()
-                .unwrap()
-                .wait_timeout(Duration::from_secs(5))
-                .unwrap();
-            assert_eq!(resp.error_id, 0);
+        let resp = driver
+            .send_full_reset()
+            .unwrap()
+            .wait_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(resp.error_id, 0);
 
-            driver.disconnect().ok();
-        },
-    );
+        driver.disconnect().ok();
+    });
 }

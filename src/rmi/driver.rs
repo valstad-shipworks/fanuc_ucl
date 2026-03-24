@@ -14,13 +14,13 @@ use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender};
 #[cfg(not(test))]
 use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
-#[cfg(test)]
-use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-#[cfg(not(test))]
-use std::net::TcpStream as StdTcpStream;
 #[cfg(test)]
 use snare::TcpStream as StdTcpStream;
+#[cfg(test)]
+use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
+#[cfg(not(test))]
+use std::net::TcpStream as StdTcpStream;
 
 use crate::{
     rmi::{

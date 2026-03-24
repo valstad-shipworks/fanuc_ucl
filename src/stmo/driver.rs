@@ -252,7 +252,7 @@ impl StreamMotionContext {
                                                     let mut cmd = MotionCommandPacket::filler(
                                                         state,
                                                         prev_motion_packet,
-                                                        self.send_last_command
+                                                        self.send_last_command,
                                                     );
                                                     cmd.seq = state.seq;
                                                     let _ = self.send(
