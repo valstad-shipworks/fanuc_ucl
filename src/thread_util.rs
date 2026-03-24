@@ -121,6 +121,8 @@ pub(crate) enum WakerVariant {
     #[allow(dead_code)]
     Std(Arc<std::task::Waker>),
     Mio(Arc<mio::Waker>),
+    #[cfg(test)]
+    Snare(Arc<snare::mio::Waker>),
 }
 
 #[derive(Debug)]
@@ -156,6 +158,11 @@ impl ThreadHandle {
         self.waker = Some(WakerVariant::Mio(waker));
     }
 
+    #[cfg(test)]
+    pub fn set_waker_snare(&mut self, waker: Arc<snare::mio::Waker>) {
+        self.waker = Some(WakerVariant::Snare(waker));
+    }
+
     pub fn wake(&self) -> io::Result<()> {
         if let Some(waker) = &self.waker {
             match waker {
@@ -164,6 +171,8 @@ impl ThreadHandle {
                     Ok(())
                 }
                 WakerVariant::Mio(w) => w.wake(),
+                #[cfg(test)]
+                WakerVariant::Snare(w) => w.wake(),
             }
         } else {
             Ok(())
