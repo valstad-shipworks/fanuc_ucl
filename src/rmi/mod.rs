@@ -3,6 +3,9 @@ pub mod errors;
 pub mod proto;
 pub mod rmi_handle;
 
+#[cfg(test)]
+mod test;
+
 use serde::{Deserialize, Serialize};
 
 use proto::{

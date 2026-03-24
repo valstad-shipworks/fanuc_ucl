@@ -221,30 +221,30 @@ fn test_drain() {
     thread::sleep(Duration::from_millis(50));
 
     assert_eq!(
-        receiver.recv_all_joint_packets().len(),
+        receiver.joint.recv_all().len(),
         21,
         "Receiver did not receive any joint packets."
     );
     assert!(
-        receiver.recv_all_joint_packets().is_empty(),
+        receiver.joint.recv_all().is_empty(),
         "Receiver did not drain joint packets."
     );
     assert_eq!(
-        receiver.recv_all_tcp_packets().len(),
+        receiver.tcp.recv_all().len(),
         21,
         "Receiver did not receive any TCP packets."
     );
     assert!(
-        receiver.recv_all_tcp_packets().is_empty(),
+        receiver.tcp.recv_all().is_empty(),
         "Receiver did not drain TCP packets."
     );
     assert_eq!(
-        receiver.recv_all_var_packets().len(),
+        receiver.var.recv_all().len(),
         21,
         "Receiver did not receive any variables packets."
     );
     assert!(
-        receiver.recv_all_var_packets().is_empty(),
+        receiver.var.recv_all().is_empty(),
         "Receiver did not drain variables packets."
     );
 }

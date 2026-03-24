@@ -58,6 +58,7 @@ struct StreamMotionContext {
     from_driver: Receiver<ToThreadMessage>,
     to_driver: Sender<RxPackets>,
     protocol_version: u32,
+    send_last_command: bool,
     last_command_position_request_time: Instant,
     motion_command_queue: VecDeque<(MaybeMany<MotionCommandPacket>, Option<StmoHandle>)>,
     itl: Arc<(Event, AtomicBool)>,
@@ -71,6 +72,7 @@ impl StreamMotionContext {
         to_driver: Sender<RxPackets>,
         socket: MioUdpSocket,
         itl: Arc<(Event, AtomicBool)>,
+        send_last_command: bool,
     ) -> Self {
         Self {
             from_driver,
@@ -80,6 +82,7 @@ impl StreamMotionContext {
             last_command_position_request_time: Instant::now() - Self::COMMAND_POSITION_RATE,
             motion_command_queue: VecDeque::new(),
             itl,
+            send_last_command,
         }
     }
 
@@ -249,6 +252,7 @@ impl StreamMotionContext {
                                                     let mut cmd = MotionCommandPacket::filler(
                                                         state,
                                                         prev_motion_packet,
+                                                        self.send_last_command
                                                     );
                                                     cmd.seq = state.seq;
                                                     let _ = self.send(
@@ -369,6 +373,7 @@ impl StreamMotionContext {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_motion_runtime(
     mut thread_handle: ThreadHandle,
     socket: std::net::UdpSocket,
@@ -377,6 +382,7 @@ fn stream_motion_runtime(
     from_driver: Receiver<ToThreadMessage>,
     waker_tx: Sender<Arc<Waker>>,
     itl: Arc<(Event, AtomicBool)>,
+    send_last_command: bool,
 ) -> Result<(), GeneralThreadError> {
     if let Some(cfg) = thread_config {
         cfg.configure_this_thread_print_failure();
@@ -399,7 +405,7 @@ fn stream_motion_runtime(
 
     log::debug!("Stream motion thread started, entering context loop");
 
-    let context = StreamMotionContext::new(from_driver, to_driver, socket, itl);
+    let context = StreamMotionContext::new(from_driver, to_driver, socket, itl, send_last_command);
     context.context_loop(thread_handle, poll);
 
     Ok(())
@@ -419,6 +425,7 @@ struct StreamMotionConnection {
 #[derive(Debug)]
 pub struct StreamMotionDriver {
     remote_addr: IpAddr,
+    send_last_command: bool,
     connection: Option<StreamMotionConnection>,
     cached_movement_limits: Option<JointMovementLimits>,
     rx_storage: RxStorage,
@@ -445,13 +452,14 @@ type DriverResult<T> = Result<T, StreamMotionError>;
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl StreamMotionDriver {
     #[cfg(on)]
-    #[on(pyo3(signature = (addr)))]
+    #[on(pyo3(signature = (addr, send_last_command = false)))]
     #[on(new)]
-    pub fn new(addr: Bound<PyAny>) -> DriverResult<Self> {
+    pub fn new(addr: Bound<PyAny>, send_last_command: bool) -> DriverResult<Self> {
         let addr = addr.extract::<IpAddr>()?;
 
         Ok(Self {
             remote_addr: addr,
+            send_last_command,
             connection: None,
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
@@ -459,10 +467,11 @@ impl StreamMotionDriver {
     }
 
     #[cfg(off)]
-    pub fn new<T: Into<IpAddr>>(remote_addr: T) -> Self {
+    pub fn new<T: Into<IpAddr>>(remote_addr: T, send_last_command: bool) -> Self {
         let remote_addr = remote_addr.into();
         Self {
             remote_addr,
+            send_last_command,
             connection: None,
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
@@ -576,6 +585,8 @@ impl StreamMotionDriver {
 
         let (waker_tx, waker_rx) = flume::bounded(1);
 
+        let send_last_command = self.send_last_command;
+
         let thread = std::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
             .spawn(move || {
@@ -587,6 +598,7 @@ impl StreamMotionDriver {
                     from_driver,
                     waker_tx,
                     thread_itl,
+                    send_last_command,
                 ) {
                     log::error!("Stream motion thread error: {:?}", e);
                     thread_err_flag.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -795,13 +807,13 @@ impl StreamMotionDriver {
         self.rx_storage.command_position.drain(..).collect()
     }
 
-    #[on(pyo3(signature = (timeout_ms = 200)))]
+    #[on(pyo3(signature = (timeout_secs = 0.2)))]
     pub fn wait_for_command_position(
         &mut self,
-        timeout_ms: u32,
+        timeout_secs: f64,
     ) -> Option<CommandPositionResponsePacket> {
         let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(timeout_ms.into()) {
+        while start.elapsed() < Duration::from_secs_f64(timeout_secs) {
             self.refresh();
             if let Some(pkt) = self.rx_storage.command_position.pop_front() {
                 return Some(pkt);

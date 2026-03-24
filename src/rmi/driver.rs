@@ -12,9 +12,15 @@ use std::{
 
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender};
-use mio::{Interest, Poll, Token, Waker, net::TcpStream};
+#[cfg(not(test))]
+use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
+#[cfg(test)]
+use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use serde_json::{Map as JsonMap, Value as JsonValue};
+#[cfg(not(test))]
 use std::net::TcpStream as StdTcpStream;
+#[cfg(test)]
+use snare::TcpStream as StdTcpStream;
 
 use crate::{
     rmi::{
@@ -158,12 +164,16 @@ impl RmiRunner {
         thread_config: Option<ThreadConfig>,
     ) -> RmiResult<(JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
         let tcp_stream = TcpStream::connect(addr)?;
+        #[cfg(test)]
+        tcp_stream.set_nonblocking(true)?;
         let (waker_tx, waker_rx) = flume::unbounded();
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
+        let thread_id = std::thread::current().id();
         let handle = std::thread::Builder::new()
             .name("fanuc-rmi-runner".to_string())
             .spawn(move || {
+                snare::register_thread_child_of(thread_id);
                 if let Err(e) = rmi_runner_runtime(
                     handle,
                     tcp_stream,
@@ -294,7 +304,7 @@ impl RmiRunner {
     }
 
     fn run(&mut self, mut poll: Poll) -> RmiResult<()> {
-        let mut events = mio::Events::with_capacity(128);
+        let mut events = Events::with_capacity(128);
         let mut read_buf = vec![0u8; 8192];
         let mut message_queue: VecDeque<PendingWrite> = VecDeque::new();
         let mut connection_established = false;
@@ -512,6 +522,10 @@ struct RmiConnection {
     major_version: u8,
     minor_version: u8,
     handle: ThreadHandle,
+    #[cfg(not(test))]
+    waker: Arc<mio::Waker>,
+    #[cfg(test)]
+    waker: Arc<snare::mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
 }
@@ -607,13 +621,13 @@ impl RmiDriver {
             thread_config,
         )?;
         handle.set_handle(join_handle);
-        handle.set_waker_mio(waker);
 
         self.seq.store(0, Ordering::Relaxed);
         self.connection = Some(RmiConnection {
             major_version,
             minor_version,
             handle,
+            waker,
             to_runner,
             err_flag,
         });
@@ -708,7 +722,7 @@ impl RmiDriver {
                 generic_handle.clone(),
             ))
             .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
-        conn.handle.wake()?;
+        conn.waker.wake()?;
         Ok(generic_handle)
     }
 

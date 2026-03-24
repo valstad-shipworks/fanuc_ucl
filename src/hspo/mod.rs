@@ -280,18 +280,173 @@ impl RobotSender {
     }
 }
 
+/// A channel for receiving HSPO packets of a specific type.
+///
+/// Wraps an internal bounded buffer and provides blocking, non-blocking, and drain operations.
+#[derive(Debug)]
+pub struct HspoChannel<T> {
+    rx: Receiver<T>,
+}
+
+impl<T> HspoChannel<T> {
+    fn new(rx: Receiver<T>) -> Self {
+        Self { rx }
+    }
+
+    /// Blocks until a packet is received or the timeout elapses.
+    pub fn wait_for(&self, timeout: Duration) -> Option<T> {
+        self.rx.recv_timeout(timeout).ok()
+    }
+
+    /// Returns the next buffered packet without blocking, or `None` if the buffer is empty.
+    pub fn try_recv(&self) -> Option<T> {
+        self.rx.try_recv().ok()
+    }
+
+    /// Drains and returns all buffered packets.
+    pub fn recv_all(&self) -> Vec<T> {
+        let mut packets = Vec::new();
+        while let Ok(p) = self.rx.try_recv() {
+            packets.push(p);
+        }
+        packets
+    }
+
+    /// Discards all buffered packets.
+    pub fn clear(&self) {
+        while self.rx.try_recv().is_ok() {}
+    }
+
+    pub(crate) fn clone_rx(&self) -> Receiver<T> {
+        self.rx.clone()
+    }
+}
+
+#[cfg(feature = "py")]
+mod py_channel {
+    use super::*;
+    use pyo3::{prelude::*, pyclass, pymethods};
+
+    #[derive(Debug)]
+    enum InnerChannel {
+        Tcp(HspoChannel<TcpCartesianPositionPacket>),
+        Joint(HspoChannel<JointAnglesPacket>),
+        Var(HspoChannel<VariablesPacket>),
+    }
+
+    /// A channel for receiving HSPO packets of a specific type.
+    #[pyclass(name = "HspoChannel", generic)]
+    #[derive(Debug)]
+    pub struct PyHspoChannel {
+        inner: InnerChannel,
+    }
+
+    impl PyHspoChannel {
+        pub fn from_tcp(channel: &HspoChannel<TcpCartesianPositionPacket>) -> Self {
+            Self {
+                inner: InnerChannel::Tcp(HspoChannel::new(channel.clone_rx())),
+            }
+        }
+
+        pub fn from_joint(channel: &HspoChannel<JointAnglesPacket>) -> Self {
+            Self {
+                inner: InnerChannel::Joint(HspoChannel::new(channel.clone_rx())),
+            }
+        }
+
+        pub fn from_var(channel: &HspoChannel<VariablesPacket>) -> Self {
+            Self {
+                inner: InnerChannel::Var(HspoChannel::new(channel.clone_rx())),
+            }
+        }
+    }
+
+    macro_rules! dispatch_channel {
+        ($self:expr, $method:ident $(, $arg:expr)*) => {
+            match &$self.inner {
+                InnerChannel::Tcp(ch) => ch.$method($($arg),*),
+                InnerChannel::Joint(ch) => ch.$method($($arg),*),
+                InnerChannel::Var(ch) => ch.$method($($arg),*),
+            }
+        };
+    }
+
+    #[pymethods]
+    impl PyHspoChannel {
+        /// Blocks until a packet is received or the timeout elapses.
+        fn wait_for(&self, py: Python<'_>, timeout_secs: f64) -> Option<Py<PyAny>> {
+            let timeout = Duration::from_secs_f64(timeout_secs);
+            match &self.inner {
+                InnerChannel::Tcp(ch) => ch
+                    .wait_for(timeout)
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+                InnerChannel::Joint(ch) => ch
+                    .wait_for(timeout)
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+                InnerChannel::Var(ch) => ch
+                    .wait_for(timeout)
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+            }
+        }
+
+        /// Returns the next buffered packet without blocking, or `None` if the buffer is empty.
+        fn try_recv(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+            match &self.inner {
+                InnerChannel::Tcp(ch) => ch
+                    .try_recv()
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+                InnerChannel::Joint(ch) => ch
+                    .try_recv()
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+                InnerChannel::Var(ch) => ch
+                    .try_recv()
+                    .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
+            }
+        }
+
+        /// Drains and returns all buffered packets.
+        fn recv_all(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+            match &self.inner {
+                InnerChannel::Tcp(ch) => ch
+                    .recv_all()
+                    .into_iter()
+                    .filter_map(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind()))
+                    .collect(),
+                InnerChannel::Joint(ch) => ch
+                    .recv_all()
+                    .into_iter()
+                    .filter_map(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind()))
+                    .collect(),
+                InnerChannel::Var(ch) => ch
+                    .recv_all()
+                    .into_iter()
+                    .filter_map(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind()))
+                    .collect(),
+            }
+        }
+
+        /// Discards all buffered packets.
+        fn clear(&self) {
+            dispatch_channel!(self, clear);
+        }
+    }
+}
+
 /// Receives HSPO (High Speed Position Output) packets from a specific FANUC controller.
 ///
 /// Created via [`initialize_broker`] followed by [`try_new`](Self::try_new). Packets are buffered internally
-/// and can be consumed with blocking or non-blocking methods.
+/// and can be consumed via the [`tcp`](Self::tcp), [`joint`](Self::joint), and [`var`](Self::var) channels.
 #[cfg_attr(feature = "py", pyo3::pyclass)]
 #[derive(Debug)]
 pub struct HspoReceiver {
     connection_active: Arc<AtomicBool>,
     tracked_clock: Arc<ClockSpec>,
-    tcp_rx: Receiver<TcpCartesianPositionPacket>,
-    joint_rx: Receiver<JointAnglesPacket>,
-    var_rx: Receiver<VariablesPacket>,
+    /// Channel for TCP cartesian position packets.
+    pub tcp: HspoChannel<TcpCartesianPositionPacket>,
+    /// Channel for joint angles packets.
+    pub joint: HspoChannel<JointAnglesPacket>,
+    /// Channel for variables packets.
+    pub var: HspoChannel<VariablesPacket>,
 }
 
 #[cfg_mixin(feature = "py")]
@@ -357,103 +512,25 @@ impl HspoReceiver {
         self.tracked_clock.read()
     }
 
-    /// Blocks until a TCP cartesian position packet is received or the timeout elapses.
-    #[cfg(off)]
-    pub fn wait_for_tcp_packet(&self, timeout: Duration) -> Option<TcpCartesianPositionPacket> {
-        self.tcp_rx.recv_timeout(timeout).ok()
-    }
-
-    /// Blocks until a TCP cartesian position packet is received or the timeout elapses.
+    /// Returns the TCP cartesian position channel.
     #[cfg(on)]
-    pub fn wait_for_tcp_packet(&self, timeout_secs: f64) -> Option<TcpCartesianPositionPacket> {
-        self.tcp_rx
-            .recv_timeout(Duration::from_secs_f64(timeout_secs))
-            .ok()
+    #[getter]
+    pub fn tcp(&self) -> py_channel::PyHspoChannel {
+        py_channel::PyHspoChannel::from_tcp(&self.tcp)
     }
 
-    /// Blocks until a joint angles packet is received or the timeout elapses.
-    #[cfg(off)]
-    pub fn wait_for_joint_packet(&self, timeout: Duration) -> Option<JointAnglesPacket> {
-        self.joint_rx.recv_timeout(timeout).ok()
-    }
-
-    /// Blocks until a joint angles packet is received or the timeout elapses.
+    /// Returns the joint angles channel.
     #[cfg(on)]
-    pub fn wait_for_joint_packet(&self, timeout_secs: f64) -> Option<JointAnglesPacket> {
-        self.joint_rx
-            .recv_timeout(Duration::from_secs_f64(timeout_secs))
-            .ok()
+    #[getter]
+    pub fn joint(&self) -> py_channel::PyHspoChannel {
+        py_channel::PyHspoChannel::from_joint(&self.joint)
     }
 
-    /// Blocks until a variables packet is received or the timeout elapses.
-    #[cfg(off)]
-    pub fn wait_for_var_packet(&self, timeout: Duration) -> Option<VariablesPacket> {
-        self.var_rx.recv_timeout(timeout).ok()
-    }
-
-    /// Blocks until a variables packet is received or the timeout elapses.
+    /// Returns the variables channel.
     #[cfg(on)]
-    pub fn wait_for_var_packet(&self, timeout_secs: f64) -> Option<VariablesPacket> {
-        self.var_rx
-            .recv_timeout(Duration::from_secs_f64(timeout_secs))
-            .ok()
-    }
-
-    /// Returns the next buffered TCP cartesian position packet without blocking, or `None` if the buffer is empty.
-    pub fn try_recv_tcp_packet(&self) -> Option<TcpCartesianPositionPacket> {
-        self.tcp_rx.try_recv().ok()
-    }
-
-    /// Returns the next buffered joint angles packet without blocking, or `None` if the buffer is empty.
-    pub fn try_recv_joint_packet(&self) -> Option<JointAnglesPacket> {
-        self.joint_rx.try_recv().ok()
-    }
-
-    /// Returns the next buffered variables packet without blocking, or `None` if the buffer is empty.
-    pub fn try_recv_var_packet(&self) -> Option<VariablesPacket> {
-        self.var_rx.try_recv().ok()
-    }
-
-    /// Drains and returns all buffered TCP cartesian position packets.
-    pub fn recv_all_tcp_packets(&self) -> Vec<TcpCartesianPositionPacket> {
-        let mut packets = Vec::new();
-        while let Ok(w) = self.tcp_rx.try_recv() {
-            packets.push(w);
-        }
-        packets
-    }
-
-    /// Drains and returns all buffered joint angles packets.
-    pub fn recv_all_joint_packets(&self) -> Vec<JointAnglesPacket> {
-        let mut packets = Vec::new();
-        while let Ok(w) = self.joint_rx.try_recv() {
-            packets.push(w);
-        }
-        packets
-    }
-
-    /// Drains and returns all buffered variables packets.
-    pub fn recv_all_var_packets(&self) -> Vec<VariablesPacket> {
-        let mut packets = Vec::new();
-        while let Ok(w) = self.var_rx.try_recv() {
-            packets.push(w);
-        }
-        packets
-    }
-
-    /// Discards all buffered joint angles packets.
-    pub fn clear_joint_packet_buffer(&self) {
-        while self.joint_rx.try_recv().is_ok() {}
-    }
-
-    /// Discards all buffered TCP cartesian position packets.
-    pub fn clear_tcp_packet_buffer(&self) {
-        while self.tcp_rx.try_recv().is_ok() {}
-    }
-
-    /// Discards all buffered variables packets.
-    pub fn clear_var_packet_buffer(&self) {
-        while self.var_rx.try_recv().is_ok() {}
+    #[getter]
+    pub fn var(&self) -> py_channel::PyHspoChannel {
+        py_channel::PyHspoChannel::from_var(&self.var)
     }
 }
 
@@ -660,6 +737,10 @@ impl HspoBroker {
         let connection_active = Arc::new(AtomicBool::new(false));
         let tracked_clock = Arc::new(ClockSpec::default());
 
+        let tcp = HspoChannel::new(tcp_rx);
+        let joint = HspoChannel::new(joint_rx);
+        let var = HspoChannel::new(var_rx);
+
         let robot_sender = RobotSender {
             ip_of_interest,
             last_packet_time: None,
@@ -668,9 +749,9 @@ impl HspoBroker {
             tcp_tx,
             joint_tx,
             var_tx,
-            tcp_dropper: tcp_rx.clone(),
-            joint_dropper: joint_rx.clone(),
-            var_dropper: var_rx.clone(),
+            tcp_dropper: tcp.clone_rx(),
+            joint_dropper: joint.clone_rx(),
+            var_dropper: var.clone_rx(),
             raw_clock: AtomicU32::new(0),
             tracked_clock: tracked_clock.clone(),
         };
@@ -688,9 +769,9 @@ impl HspoBroker {
         Ok(HspoReceiver {
             connection_active,
             tracked_clock,
-            tcp_rx,
-            joint_rx,
-            var_rx,
+            tcp,
+            joint,
+            var,
         })
     }
 
@@ -814,6 +895,7 @@ pub mod py {
     pub fn register_child_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
         let child_module = PyModule::new(parent_module.py(), "hspo")?;
         child_module.add_class::<HspoReceiver>()?;
+        child_module.add_class::<py_channel::PyHspoChannel>()?;
         child_module.add_function(wrap_pyfunction!(initialize_broker, &child_module)?)?;
         child_module.add_function(wrap_pyfunction!(destroy_broker, &child_module)?)?;
         child_module.add_function(wrap_pyfunction!(has_broker_errored, &child_module)?)?;
