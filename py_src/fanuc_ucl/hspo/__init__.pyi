@@ -1,6 +1,9 @@
 from ipaddress import IPv4Address, IPv6Address
+from typing import Generic, TypeVar
 
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig
+
+_T = TypeVar("_T")
 
 all = [
     "TcpCartesianPositionPacket",
@@ -9,6 +12,7 @@ all = [
     "initialize_broker",
     "destroy_broker",
     "HspoReceiver",
+    "HspoChannel",
 ]
 
 class TcpCartesianPositionPacket:
@@ -47,6 +51,18 @@ class VariablesPacket:
     clock: int
     data: list[float]
 
+class HspoChannel(Generic[_T]):
+    """A channel for receiving HSPO packets of a specific type."""
+
+    def wait_for(self, timeout_secs: float) -> _T | None:
+        """Blocks until a packet is received or the timeout elapses."""
+    def try_recv(self) -> _T | None:
+        """Returns the next buffered packet without blocking, or ``None`` if the buffer is empty."""
+    def recv_all(self) -> list[_T]:
+        """Drains and returns all buffered packets."""
+    def clear(self) -> None:
+        """Discards all buffered packets."""
+
 def initialize_broker(listen_on: str, thread_config: ThreadConfig) -> None:
     """Initializes the global HSPO broker, binding a socket to ``listen_on`` and spawning a background listener thread.
 
@@ -69,7 +85,7 @@ def has_broker_errored() -> bool:
 class HspoReceiver:
     """Receives HSPO (High Speed Position Output) packets from a specific FANUC controller.
 
-    Packets are buffered internally and can be consumed with blocking or non-blocking methods.
+    Packets are buffered internally and can be consumed via the ``tcp``, ``joint``, and ``var`` channels.
     """
 
     def __init__(
@@ -87,27 +103,12 @@ class HspoReceiver:
         """Returns the cumulative HSPO clock in milliseconds."""
     def clock_pair_micros(self) -> tuple[int, int]:
         """Returns a pair of ``(hspo_clock_micros, system_time_micros)`` for correlating controller time with system time."""
-    def wait_for_tcp_packet(self, timeout_secs: float) -> TcpCartesianPositionPacket:
-        """Blocks until a TCP cartesian position packet is received or the timeout elapses."""
-    def try_recv_tcp_packet(self) -> TcpCartesianPositionPacket | None:
-        """Returns the next buffered TCP cartesian position packet without blocking, or ``None`` if the buffer is empty."""
-    def recv_all_tcp_packets(self) -> list[TcpCartesianPositionPacket]:
-        """Drains and returns all buffered TCP cartesian position packets."""
-    def clear_tcp_packet_buffer(self) -> None:
-        """Discards all buffered TCP cartesian position packets."""
-    def wait_for_joint_packet(self, timeout_secs: float) -> JointAnglesPacket:
-        """Blocks until a joint angles packet is received or the timeout elapses."""
-    def try_recv_joint_packet(self) -> JointAnglesPacket | None:
-        """Returns the next buffered joint angles packet without blocking, or ``None`` if the buffer is empty."""
-    def recv_all_joint_packets(self) -> list[JointAnglesPacket]:
-        """Drains and returns all buffered joint angles packets."""
-    def clear_joint_packet_buffer(self) -> None:
-        """Discards all buffered joint angles packets."""
-    def wait_for_var_packet(self, timeout_secs: float) -> VariablesPacket:
-        """Blocks until a variables packet is received or the timeout elapses."""
-    def try_recv_var_packet(self) -> VariablesPacket | None:
-        """Returns the next buffered variables packet without blocking, or ``None`` if the buffer is empty."""
-    def recv_all_var_packets(self) -> list[VariablesPacket]:
-        """Drains and returns all buffered variables packets."""
-    def clear_var_packet_buffer(self) -> None:
-        """Discards all buffered variables packets."""
+    @property
+    def tcp(self) -> HspoChannel[TcpCartesianPositionPacket]:
+        """Channel for TCP cartesian position packets."""
+    @property
+    def joint(self) -> HspoChannel[JointAnglesPacket]:
+        """Channel for joint angles packets."""
+    @property
+    def var(self) -> HspoChannel[VariablesPacket]:
+        """Channel for variables packets."""

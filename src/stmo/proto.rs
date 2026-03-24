@@ -223,10 +223,11 @@ impl MotionCommandPacket {
     pub(crate) fn filler(
         status: &RobotStatusPacket,
         previous_command: &MotionCommandPacket,
+        is_last_command: bool,
     ) -> Self {
         Self {
             seq: status.seq,
-            last_command: true,
+            last_command: is_last_command,
             read_io_type: IoType::None,
             read_io_index: 0,
             read_io_mask: 0,
