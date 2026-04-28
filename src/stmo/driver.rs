@@ -943,21 +943,39 @@ pub mod py {
             timeout_secs: f32,
         ) -> PyResult<RobotStatusPacket> {
             let timeout = Duration::from_secs_f32(timeout_secs);
-            if let Some(cnx) = &mut self.inner.borrow_mut(py).connection {
-                if !cnx.itl.1.load(Ordering::SeqCst) {
-                    return Err(StreamMotionError::NotStarted.into());
-                }
-                let listener = cnx.itl.0.listen();
-                if listener.wait_timeout(timeout).is_some() {
-                    self.inner.borrow_mut(py).refresh();
-                    if let Some(pkt) = self.inner.borrow_mut(py).rx_storage.status.pop_back() {
-                        return Ok(pkt);
+
+            // Pre-listen refresh + clone of the shared itl Arc, then drop the
+            // borrow before blocking. Otherwise notifications fired before a
+            // listener was registered are silently lost (event_listener doesn't
+            // buffer for unsubscribed listeners), and the borrow would block
+            // any other access to stmo_driver during the timeout window.
+            let itl = {
+                let mut driver = self.inner.borrow_mut(py);
+                driver.refresh();
+                match &driver.connection {
+                    Some(cnx) => {
+                        if !cnx.itl.1.load(Ordering::SeqCst) {
+                            return Err(StreamMotionError::NotStarted.into());
+                        }
+                        cnx.itl.clone()
                     }
+                    None => return Err(StreamMotionError::NotConnected.into()),
                 }
-                Err(StreamMotionError::Timeout.into())
-            } else {
-                Err(StreamMotionError::NotConnected.into())
+            };
+
+            // Wait for the next status notification with the GIL released so
+            // other Python threads (and other stmo_driver methods) can run.
+            let listener = itl.0.listen();
+            let woke = py.allow_threads(|| listener.wait_timeout(timeout).is_some());
+
+            if woke {
+                let mut driver = self.inner.borrow_mut(py);
+                driver.refresh();
+                if let Some(pkt) = driver.rx_storage.status.pop_back() {
+                    return Ok(pkt);
+                }
             }
+            Err(StreamMotionError::Timeout.into())
         }
 
         pub fn send_command(
