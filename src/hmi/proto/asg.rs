@@ -284,13 +284,11 @@ impl HmiWireable for String {
     }
 }
 
-pub(crate) fn bytes_to_i16(bytes: &[u8]) -> &[i16] {
-    unsafe {
-        std::slice::from_raw_parts(
-            bytes.as_ptr() as *const i16,
-            bytes.len() / std::mem::size_of::<i16>(),
-        )
-    }
+pub(crate) fn bytes_to_i16(bytes: &[u8]) -> Vec<i16> {
+    bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .collect()
 }
 
 pub mod position_struct {

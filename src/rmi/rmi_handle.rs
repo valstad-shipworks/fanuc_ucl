@@ -111,11 +111,14 @@ impl ResponseHandle for RmiHandleGeneric {
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
+        // Register the listener before checking state so we can't miss a
+        // notify() that fires between the check and listen() (event_listener
+        // only wakes listeners registered at notify time).
+        let listener = self.resp.1.listen();
         if self.is_set() {
             return self.get();
         }
-        let listener = self.resp.1.listen();
-        if listener.wait_timeout(timeout).is_some() {
+        if listener.wait_timeout(timeout).is_some() || self.is_set() {
             self.get()
         } else {
             Err(RmiError::Timeout)
@@ -134,12 +137,21 @@ impl Future for RmiHandleGeneric {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
+        // Register before checking, mirroring `wait_timeout`'s race fix.
+        let listener = self.resp.1.listen();
         if self.is_set() {
-            std::task::Poll::Ready(self.get())
-        } else {
-            let listener = self.resp.1.listen();
-            let mut pinned = std::pin::pin!(listener);
-            pinned.as_mut().poll(cx).map(|_| self.get())
+            return std::task::Poll::Ready(self.get());
+        }
+        let mut pinned = std::pin::pin!(listener);
+        match pinned.as_mut().poll(cx) {
+            std::task::Poll::Ready(()) => std::task::Poll::Ready(self.get()),
+            std::task::Poll::Pending => {
+                if self.is_set() {
+                    std::task::Poll::Ready(self.get())
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
         }
     }
 }
@@ -270,12 +282,9 @@ impl RmiQueueGeneric {
 
     #[cfg(feature = "async")]
     pub async fn wait_all_async(&self) -> RmiResult<Vec<ResponsePacket>> {
-        let mut outcome = Vec::new();
-        let mut start = Instant::now();
-        let end = start + timeout;
+        let mut outcome = Vec::with_capacity(self.queue.len());
         for handle in &self.queue {
-            outcome.push(handle.wait_async(end - start).await?);
-            start = Instant::now();
+            outcome.push(handle.clone().await?);
         }
         Ok(outcome)
     }

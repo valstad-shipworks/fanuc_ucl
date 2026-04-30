@@ -864,19 +864,29 @@ impl<'a> StmoControlLoop<'a> {
         &mut self,
         timeout: Duration,
     ) -> Result<RobotStatusPacket, StreamMotionError> {
-        self.driver.refresh();
-        if let Some(cnx) = &mut self.driver.connection {
-            let listener = cnx.itl.0.listen();
-            if listener.wait_timeout(timeout).is_some() {
-                self.driver.refresh();
-                if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
-                    return Ok(pkt);
+        // Register the listener and verify ITL state before draining pending
+        // packets — otherwise a status that arrives between refresh() and
+        // listen() fires notify() with no listeners and is silently lost.
+        let listener = match &self.driver.connection {
+            Some(cnx) => {
+                if !cnx.itl.1.load(Ordering::SeqCst) {
+                    return Err(StreamMotionError::NotStarted);
                 }
+                cnx.itl.0.listen()
             }
-            Err(StreamMotionError::Timeout)
-        } else {
-            Err(StreamMotionError::NotConnected)
+            None => return Err(StreamMotionError::NotConnected),
+        };
+        self.driver.refresh();
+        if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
+            return Ok(pkt);
         }
+        if listener.wait_timeout(timeout).is_some() {
+            self.driver.refresh();
+            if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
+                return Ok(pkt);
+            }
+        }
+        Err(StreamMotionError::Timeout)
     }
 
     #[inline]
@@ -944,29 +954,37 @@ pub mod py {
         ) -> PyResult<RobotStatusPacket> {
             let timeout = Duration::from_secs_f32(timeout_secs);
 
-            // Pre-listen refresh + clone of the shared itl Arc, then drop the
-            // borrow before blocking. Otherwise notifications fired before a
-            // listener was registered are silently lost (event_listener doesn't
-            // buffer for unsubscribed listeners), and the borrow would block
-            // any other access to stmo_driver during the timeout window.
-            let itl = {
-                let mut driver = self.inner.borrow_mut(py);
-                driver.refresh();
+            // Clone the shared itl Arc and register the listener BEFORE
+            // refresh()/drain — otherwise a status that arrives between
+            // refresh() and listen() fires notify() with no listeners and is
+            // silently lost (event_listener doesn't buffer for unsubscribed
+            // listeners). The borrow is also dropped before blocking so other
+            // stmo_driver methods can run during the timeout window.
+            let listener = {
+                let driver = self.inner.borrow(py);
                 match &driver.connection {
                     Some(cnx) => {
                         if !cnx.itl.1.load(Ordering::SeqCst) {
                             return Err(StreamMotionError::NotStarted.into());
                         }
-                        cnx.itl.clone()
+                        cnx.itl.0.listen()
                     }
                     None => return Err(StreamMotionError::NotConnected.into()),
                 }
             };
 
+            // Drain any status that arrived before we registered the listener.
+            {
+                let mut driver = self.inner.borrow_mut(py);
+                driver.refresh();
+                if let Some(pkt) = driver.rx_storage.status.pop_back() {
+                    return Ok(pkt);
+                }
+            }
+
             // Wait for the next status notification with the GIL released so
             // other Python threads (and other stmo_driver methods) can run.
-            let listener = itl.0.listen();
-            let woke = py.allow_threads(|| listener.wait_timeout(timeout).is_some());
+            let woke = py.detach(|| listener.wait_timeout(timeout).is_some());
 
             if woke {
                 let mut driver = self.inner.borrow_mut(py);
