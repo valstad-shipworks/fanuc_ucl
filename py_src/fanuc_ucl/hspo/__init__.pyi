@@ -1,7 +1,7 @@
 from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, TypeVar
 
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig
+from fanuc_ucl._common import JointFormat, JointTemplate, ThreadConfig
 
 _T = TypeVar("_T")
 
@@ -63,10 +63,14 @@ class HspoChannel(Generic[_T]):
     def clear(self) -> None:
         """Discards all buffered packets."""
 
-def initialize_broker(listen_on: str, thread_config: ThreadConfig) -> None:
+def initialize_broker(
+    listen_on: str, thread_config: ThreadConfig | None = None
+) -> None:
     """Initializes the global HSPO broker, binding a socket to ``listen_on`` and spawning a background listener thread.
 
     This must be called before creating any ``HspoReceiver``. Calling it again after initialization is a no-op.
+
+    Pass ``thread_config=None`` (the default) to leave the broker thread on the default scheduler with no priority or affinity adjustments.
     """
 
 def destroy_broker(wait_for_thread: bool = True) -> None:

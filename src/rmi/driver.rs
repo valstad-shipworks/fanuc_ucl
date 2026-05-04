@@ -12,15 +12,9 @@ use std::{
 
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender};
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-#[cfg(test)]
-use snare::TcpStream as StdTcpStream;
-#[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
-#[cfg(not(test))]
-use std::net::TcpStream as StdTcpStream;
+use snare::net::TcpStream as StdTcpStream;
 
 use crate::{
     rmi::{
@@ -169,11 +163,9 @@ impl RmiRunner {
         let (waker_tx, waker_rx) = flume::unbounded();
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
-        let thread_id = std::thread::current().id();
-        let handle = std::thread::Builder::new()
+        let handle = snare::thread::Builder::new()
             .name("fanuc-rmi-runner".to_string())
             .spawn(move || {
-                snare::register_thread_child_of(thread_id);
                 if let Err(e) = rmi_runner_runtime(
                     handle,
                     tcp_stream,
@@ -617,13 +609,7 @@ impl RmiDriver {
             thread_config,
         )?;
         handle.set_handle(join_handle);
-        cfg_if::cfg_if!(
-            if #[cfg(test)] {
-                handle.set_waker_snare(waker);
-            } else {
-                handle.set_waker_mio(waker);
-            }
-        );
+        handle.set_waker_mio(waker);
 
         self.seq.store(0, Ordering::Relaxed);
         self.connection = Some(RmiConnection {

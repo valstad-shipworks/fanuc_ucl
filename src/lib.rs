@@ -67,14 +67,81 @@ pub mod py {
     use super::{hmi, hspo, joints, rmi, stmo, thread_util};
     use pyo3::prelude::*;
 
+    /// Logging level surfaced to Python as an enum (no string parsing on the
+    /// caller side). Maps 1:1 to [`log::LevelFilter`].
+    #[pyo3::pyclass(eq, eq_int, from_py_object)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub enum LogLevel {
+        Off,
+        Error,
+        Warn,
+        Info,
+        Debug,
+        Trace,
+    }
+
+    impl From<LogLevel> for log::LevelFilter {
+        fn from(l: LogLevel) -> Self {
+            match l {
+                LogLevel::Off => log::LevelFilter::Off,
+                LogLevel::Error => log::LevelFilter::Error,
+                LogLevel::Warn => log::LevelFilter::Warn,
+                LogLevel::Info => log::LevelFilter::Info,
+                LogLevel::Debug => log::LevelFilter::Debug,
+                LogLevel::Trace => log::LevelFilter::Trace,
+            }
+        }
+    }
+
+    /// Parse the simple form of `RUST_LOG` (just a level name) so we can use
+    /// it as a baseline. Per-module directives are not supported here — the
+    /// expected use of `set_log_level` is "give me everything at level X",
+    /// not selective per-target filtering.
+    fn parse_rust_log_baseline() -> log::LevelFilter {
+        use log::LevelFilter::*;
+        let raw = std::env::var("RUST_LOG").ok();
+        match raw.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("off") => Off,
+            Some("error") => Error,
+            Some("warn") | Some("warning") => Warn,
+            Some("info") => Info,
+            Some("debug") => Debug,
+            Some("trace") => Trace,
+            _ => Warn,
+        }
+    }
+
+    /// Set the runtime log level for the fanuc_ucl Rust core. The effective
+    /// level is `max(current, requested)` — i.e. only ever raises verbosity,
+    /// never lowers it below what `RUST_LOG` already established. Returns the
+    /// effective level after the call.
+    #[pyo3::pyfunction]
+    fn set_log_level(level: LogLevel) -> LogLevel {
+        let requested: log::LevelFilter = level.into();
+        let current = log::max_level();
+        let effective = if requested > current { requested } else { current };
+        log::set_max_level(effective);
+        match effective {
+            log::LevelFilter::Off => LogLevel::Off,
+            log::LevelFilter::Error => LogLevel::Error,
+            log::LevelFilter::Warn => LogLevel::Warn,
+            log::LevelFilter::Info => LogLevel::Info,
+            log::LevelFilter::Debug => LogLevel::Debug,
+            log::LevelFilter::Trace => LogLevel::Trace,
+        }
+    }
+
     #[pyo3::pymodule(name = "_fanuc_core")]
     fn py_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        env_logger::try_init().map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to initialize logging: {}",
-                e
-            ))
-        })?;
+        // Configure env_logger to pass every record through (no internal
+        // filter) so `log::max_level()` is the single runtime gate. Otherwise
+        // env_logger's parsed filter would clamp verbosity below whatever
+        // `set_log_level` later asks for.
+        let env_baseline = parse_rust_log_baseline();
+        let _ = env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Trace)
+            .try_init();
+        log::set_max_level(env_baseline);
 
         log::trace!("Initializing Python module fanuc_ucl._fanuc_core");
 
@@ -86,6 +153,8 @@ pub mod py {
         m.add_class::<joints::JointTemplate>()?;
         m.add_class::<joints::JointFormat>()?;
         m.add_class::<joints::JointType>()?;
+        m.add_class::<LogLevel>()?;
+        m.add_function(pyo3::wrap_pyfunction!(set_log_level, m)?)?;
         Ok(())
     }
 }

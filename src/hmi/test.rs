@@ -236,11 +236,7 @@ where
         .then_stateful_action::<RobotState>(handle_snpx_request)
         .until_stateful_condition::<TimerState>(|t| t.poll_elapsed() >= Duration::from_secs(5));
 
-    let thread_id = std::thread::current().id();
-    let client_handle = std::thread::spawn(move || {
-        snare::register_thread_child_of(thread_id);
-        client_fn(addr);
-    });
+    let client_handle = snare::thread::spawn(move || client_fn(addr));
 
     run_testers!(tester);
     client_handle.join().unwrap();

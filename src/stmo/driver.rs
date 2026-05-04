@@ -30,8 +30,8 @@ use crate::{
     thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
 };
 
-use mio::net::UdpSocket as MioUdpSocket;
-use mio::{Events, Interest, Poll, Token, Waker};
+use snare::mio::net::UdpSocket as MioUdpSocket;
+use snare::mio::{Events, Interest, Poll, Token, Waker};
 
 #[cfg(feature = "py")]
 use pyo3::prelude::*;
@@ -198,7 +198,7 @@ impl StreamMotionContext {
                 break;
             }
 
-            for ev in &events {
+            for ev in events.iter() {
                 match ev.token() {
                     TOK_SOCKET => {
                         // drain UDP
@@ -376,7 +376,7 @@ impl StreamMotionContext {
 #[allow(clippy::too_many_arguments)]
 fn stream_motion_runtime(
     mut thread_handle: ThreadHandle,
-    socket: std::net::UdpSocket,
+    socket: snare::net::UdpSocket,
     thread_config: Option<ThreadConfig>,
     to_driver: Sender<RxPackets>,
     from_driver: Receiver<ToThreadMessage>,
@@ -563,7 +563,7 @@ impl StreamMotionDriver {
         }
         let port = openport::pick_unused_port(57000..60000).unwrap_or(60000);
         let local_addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
-        let socket = std::net::UdpSocket::bind(local_addr).map_err(StreamMotionError::from)?;
+        let socket = snare::net::UdpSocket::bind(local_addr).map_err(StreamMotionError::from)?;
         socket
             .connect(SocketAddr::new(self.remote_addr, 60015))
             .map_err(StreamMotionError::from)?;
@@ -587,7 +587,7 @@ impl StreamMotionDriver {
 
         let send_last_command = self.send_last_command;
 
-        let thread = std::thread::Builder::new()
+        let thread = snare::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
             .spawn(move || {
                 if let Err(e) = stream_motion_runtime(

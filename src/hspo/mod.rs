@@ -10,9 +10,9 @@ use std::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
-    thread,
     time::{Duration, SystemTime},
 };
+use snare::thread;
 
 use crate::{
     joints::{JointFormat, JointTemplate},
@@ -21,10 +21,7 @@ use crate::{
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
-#[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 
 const TOK_SOCKET: Token = Token(0);
@@ -786,11 +783,9 @@ impl HspoBroker {
 
         let thread_kill_switch = local_kill_switch.clone();
         let thread_err_flag = local_err_flag.clone();
-        let thread_id = std::thread::current().id();
         let _thread_handle = thread::Builder::new()
             .name("hspo_server".to_string())
             .spawn(move || {
-                snare::register_thread_child_of(thread_id);
                 if let Err(e) = broker_runtime(
                     listen_on,
                     thread_config,

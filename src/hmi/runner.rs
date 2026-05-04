@@ -6,9 +6,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
-#[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 
 use crate::hmi::proto::wire::{Body, Header, Message};
@@ -63,11 +60,9 @@ impl HmiRunner {
         let (waker_tx, waker_rx) = flume::bounded(1);
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
-        let thread_id = std::thread::current().id();
-        let join_handle = std::thread::Builder::new()
+        let join_handle = snare::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
-                snare::register_thread_child_of(thread_id);
                 if let Err(e) =
                     hmi_runner_runtime(handle, tcp_stream, from_driver, thread_config, waker_tx)
                 {

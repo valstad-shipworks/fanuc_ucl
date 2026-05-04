@@ -160,6 +160,38 @@ fn hspo_packet_sender(timer: &mut TimerState) -> Option<TesterAction<RawPacket>>
     ]))
 }
 
+/// Stateful sender that emits at most `TARGET_PACKET_COUNT` triplets of
+/// (var, tcp, joint) packets and then stops. Used by `test_drain` so the
+/// expected packet count is deterministic regardless of CI timing.
+#[derive(Default)]
+struct CountedSender {
+    sent: usize,
+}
+
+const TARGET_PACKET_COUNT: usize = 21;
+
+fn counted_packet_sender(state: &mut CountedSender) -> Option<TesterAction<RawPacket>> {
+    if state.sent >= TARGET_PACKET_COUNT {
+        return None;
+    }
+    let clock = state.sent as u32;
+    state.sent += 1;
+    Some(TesterAction::Multiple(vec![
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_variables_packet(clock))),
+        ),
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_tcp_position_packet(clock))),
+        ),
+        TesterAction::Send(
+            BROKER_ADDR,
+            RawPacket(encode_packet(&make_joint_angles_packet(clock))),
+        ),
+    ]))
+}
+
 #[test]
 fn test_all() {
     snare::register_test();
@@ -210,11 +242,15 @@ fn test_drain() {
     let receiver = HspoReceiver::try_new(addr.ip(), 128, Duration::from_millis(16))
         .expect("Failed to initialize receiver.");
 
+    // Send exactly TARGET_PACKET_COUNT triplets, terminated by counter not
+    // wall-clock — the previous wall-clock-bounded version flaked on slow
+    // CI runners that didn't fire all 21 cycles within the 40ms window.
     let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<TimerState>(Duration::from_millis(2), hspo_packet_sender)
-        .until_stateful_condition::<TimerState>(|state| {
-            state.poll_elapsed() >= Duration::from_millis(40)
-        });
+        .with_stateful_cyclic_action::<CountedSender>(
+            Duration::from_millis(2),
+            counted_packet_sender,
+        )
+        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
 
     run_testers!(tester);
 
@@ -222,8 +258,8 @@ fn test_drain() {
 
     assert_eq!(
         receiver.joint.recv_all().len(),
-        21,
-        "Receiver did not receive any joint packets."
+        TARGET_PACKET_COUNT,
+        "Receiver did not receive expected joint packet count."
     );
     assert!(
         receiver.joint.recv_all().is_empty(),
@@ -231,8 +267,8 @@ fn test_drain() {
     );
     assert_eq!(
         receiver.tcp.recv_all().len(),
-        21,
-        "Receiver did not receive any TCP packets."
+        TARGET_PACKET_COUNT,
+        "Receiver did not receive expected TCP packet count."
     );
     assert!(
         receiver.tcp.recv_all().is_empty(),
@@ -240,8 +276,8 @@ fn test_drain() {
     );
     assert_eq!(
         receiver.var.recv_all().len(),
-        21,
-        "Receiver did not receive any variables packets."
+        TARGET_PACKET_COUNT,
+        "Receiver did not receive expected variables packet count."
     );
     assert!(
         receiver.var.recv_all().is_empty(),

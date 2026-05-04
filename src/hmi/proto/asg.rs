@@ -1331,4 +1331,50 @@ mod tests {
         let (unp_prog_ref, _) = ProgramStatus::unpack_sysvar(&bytes).unwrap();
         assert_eq!(prog_ref.line_number, unp_prog_ref.line_number);
     }
+
+    #[test]
+    fn bytes_to_i16_empty_input_yields_empty_output() {
+        let out = bytes_to_i16(&[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn bytes_to_i16_decodes_little_endian() {
+        // Little-endian: 0x01 0x00 -> 1, 0xFF 0xFF -> -1, 0x80 0x00 -> 128.
+        let bytes = [0x01, 0x00, 0xFF, 0xFF, 0x80, 0x00];
+        let out = bytes_to_i16(&bytes);
+        assert_eq!(out, vec![1i16, -1, 128]);
+    }
+
+    #[test]
+    fn bytes_to_i16_drops_unpaired_trailing_byte() {
+        // chunks_exact(2) discards the dangling last byte rather than
+        // panicking — the encode side is expected to always be even-aligned,
+        // and dropping is preferable to UB on misaligned reads (the original
+        // unsafe `from_raw_parts` had no such guard).
+        let bytes = [0x01, 0x00, 0xFE]; // 3 bytes
+        let out = bytes_to_i16(&bytes);
+        assert_eq!(out, vec![1i16]);
+    }
+
+    #[test]
+    fn bytes_to_i16_round_trips_against_to_le_bytes() {
+        let values: Vec<i16> = vec![0, 1, -1, 32767, -32768, 256, -256, 1234, -4321];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let out = bytes_to_i16(&bytes);
+        assert_eq!(out, values);
+    }
+
+    #[test]
+    fn bytes_to_i16_works_on_unaligned_slice() {
+        // The original unsafe impl required the source pointer to be 2-byte
+        // aligned to satisfy `slice::from_raw_parts`'s contract, otherwise
+        // the read of `i16` was UB. A `&[u8]` from a sub-slice starting at
+        // an odd offset is NOT guaranteed aligned for `*const i16`; the
+        // safe `from_le_bytes` impl must handle this without UB or panic.
+        let owned = vec![0xAA, 0x01, 0x00, 0xFF, 0xFF];
+        let unaligned = &owned[1..]; // starts at offset 1, length 4
+        let out = bytes_to_i16(unaligned);
+        assert_eq!(out, vec![1i16, -1]);
+    }
 }

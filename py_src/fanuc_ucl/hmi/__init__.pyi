@@ -3,7 +3,7 @@ from typing import Generic, Literal, Protocol, Sequence, TypeVar, overload
 
 from typing_extensions import TypeAlias
 
-from fanuc_ucl import ThreadConfig
+from fanuc_ucl._common import ThreadConfig
 
 from .asg import *
 

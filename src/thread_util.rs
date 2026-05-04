@@ -120,9 +120,7 @@ fn configure_thread_scheduling(_prio: i32, _cpu_affinity: Option<usize>) -> io::
 pub(crate) enum WakerVariant {
     #[allow(dead_code)]
     Std(Arc<std::task::Waker>),
-    Mio(Arc<mio::Waker>),
-    #[cfg(test)]
-    Snare(Arc<snare::mio::Waker>),
+    Mio(Arc<snare::mio::Waker>),
 }
 
 #[derive(Debug)]
@@ -154,13 +152,8 @@ impl ThreadHandle {
         self.waker = Some(WakerVariant::Std(waker));
     }
 
-    pub fn set_waker_mio(&mut self, waker: Arc<mio::Waker>) {
+    pub fn set_waker_mio(&mut self, waker: Arc<snare::mio::Waker>) {
         self.waker = Some(WakerVariant::Mio(waker));
-    }
-
-    #[cfg(test)]
-    pub fn set_waker_snare(&mut self, waker: Arc<snare::mio::Waker>) {
-        self.waker = Some(WakerVariant::Snare(waker));
     }
 
     pub fn wake(&self) -> io::Result<()> {
@@ -171,8 +164,6 @@ impl ThreadHandle {
                     Ok(())
                 }
                 WakerVariant::Mio(w) => w.wake(),
-                #[cfg(test)]
-                WakerVariant::Snare(w) => w.wake(),
             }
         } else {
             Ok(())
