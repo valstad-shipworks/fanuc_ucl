@@ -49,10 +49,10 @@ pub(super) fn caster_array<T: ReadableDataPort>(
     count: u16,
 ) -> HmiResult<Box<[T::ValueType]>> {
     let payload = msg.payload();
-    if payload.len() < T::expected_size(target, count) {
+    if payload.len() < T::expected_array_size(target, count) {
         log::error!(
             "Malformed response: expected at least {} bytes, got {} bytes",
-            T::expected_size(target, count),
+            T::expected_array_size(target, count),
             payload.len()
         );
         return Err(HmiError::MalformedResponse);

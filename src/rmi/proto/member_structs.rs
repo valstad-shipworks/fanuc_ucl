@@ -184,7 +184,7 @@ impl JointAngles {
             j8,
             j9,
         };
-        JointFormat::FanucDeg.convert_from(format, template, slf)
+        JointFormat::FanucDeg.convert_from(format, &template, slf)
     }
 
     #[cfg(off)]
@@ -210,7 +210,7 @@ impl JointAngles {
             j8: 0.0,
             j9: 0.0,
         };
-        JointFormat::FanucDeg.convert_from(format, template, slf)
+        JointFormat::FanucDeg.convert_from(format, &template, slf)
     }
 
     pub fn as_array(&self) -> [f32; 9] {

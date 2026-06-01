@@ -80,7 +80,10 @@ pub trait HmiWireable: Sized + __private::Sealed {
         view_size: usize,
     ) -> Result<(Self, usize), HmiError> {
         let mut filler = [0u8; N];
-        if view_size > src.len() || start_offset + view_size > Self::PACKED_SIZE {
+        if view_size > src.len()
+            || start_offset + view_size > N
+            || start_offset + view_size > Self::PACKED_SIZE
+        {
             log::error!(
                 "Malformed response: cannot partial unpack with view_size {} from src of size {} and start_offset {}",
                 view_size,
@@ -1038,6 +1041,16 @@ pub trait AsgEncodableType:
             item_count,
             member_count
         );
+        let required = item_count.saturating_mul(byte_count);
+        if payload.len() < required {
+            log::error!(
+                "Malformed response: expected at least {} bytes for {} ASG items, got {}",
+                required,
+                item_count,
+                payload.len()
+            );
+            return Err(HmiError::MalformedResponse);
+        }
         for i in 0..item_count {
             let item_start = i * byte_count;
             let item_payload = &payload[item_start..item_start + byte_count];

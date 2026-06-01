@@ -243,12 +243,14 @@ impl RmiQueueGeneric {
     }
 
     pub fn wait_all_timeout(&self, timeout: Duration) -> RmiResult<Vec<ResponsePacket>> {
-        let mut outcome = Vec::new();
-        let mut start = Instant::now();
-        let end = start + timeout;
+        let mut outcome = Vec::with_capacity(self.queue.len());
+        let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
-            outcome.push(handle.wait_timeout(end - start)?);
-            start = Instant::now();
+            let remaining = match deadline {
+                Some(end) => end.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            outcome.push(handle.wait_timeout(remaining)?);
         }
         Ok(outcome)
     }
@@ -258,11 +260,14 @@ impl RmiQueueGeneric {
     }
 
     pub fn wait_next_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
-        let start = Instant::now();
-        let end = start + timeout;
+        let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
             if !handle.is_set() {
-                return handle.wait_timeout(end - start);
+                let remaining = match deadline {
+                    Some(end) => end.saturating_duration_since(Instant::now()),
+                    None => Duration::MAX,
+                };
+                return handle.wait_timeout(remaining);
             }
         }
         Err(RmiError::ResponseNotFulfilled(ResponseNotFulfilled))
@@ -379,7 +384,7 @@ pub(super) mod py {
         }
 
         pub fn wait_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
@@ -476,7 +481,7 @@ pub(super) mod py {
             py: Python<'_>,
             timeout_secs: f64,
         ) -> PyResult<Vec<Py<PyAny>>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_all_timeout(timeout)
                 .map_err(Into::into)
@@ -493,7 +498,7 @@ pub(super) mod py {
         }
 
         pub fn wait_next_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_next_timeout(timeout)
                 .map_err(Into::into)

@@ -162,9 +162,9 @@ impl MotionCommandPacket {
         template: JointTemplate,
         joints: impl JointRepr,
     ) -> Result<Self, StreamMotionError> {
-        let joints = JointFormat::FanucDeg.convert_from(format, template, joints);
-        let mut full_joints = [0.0; 9];
         let axis_cnt = template.axis.len();
+        let joints = JointFormat::FanucDeg.convert_from(format, &template, joints);
+        let mut full_joints = [0.0; 9];
         match axis_cnt {
             4 => full_joints[..axis_cnt].copy_from_slice(&joints.to_array::<4, f64>(false)?),
             5 => full_joints[..axis_cnt].copy_from_slice(&joints.to_array::<5, f64>(false)?),
@@ -560,7 +560,7 @@ impl RobotStatusPacket {
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl RobotStatusPacket {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucDeg, template, self.joints)
+        format.convert_from(JointFormat::FanucDeg, &template, self.joints)
     }
 }
 
@@ -627,7 +627,7 @@ pub struct CommandPositionResponsePacket {
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl CommandPositionResponsePacket {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucDeg, template, self.joints)
+        format.convert_from(JointFormat::FanucDeg, &template, self.joints)
     }
 }
 

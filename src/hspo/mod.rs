@@ -133,7 +133,7 @@ pub struct JointAnglesPacket {
 impl JointAnglesPacket {
     /// Returns the joint angles converted from the internal FANUC radian format to the specified format and template.
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucRad, template, self.joints)
+        format.convert_from(JointFormat::FanucRad, &template, self.joints)
     }
 }
 

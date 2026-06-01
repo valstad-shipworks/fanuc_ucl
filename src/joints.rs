@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 /// A trait to be implemented on a scalar value that can be used to represent a joint value in a variety of datastructures.
 pub trait JointValue: Copy {
     fn to_f64(self) -> f64;
@@ -352,9 +354,9 @@ impl std::error::Error for JointDataSizeError {}
 /// - [JointTemplate::FIVE]: A 5-axis robot with all rotary joints.
 /// - [JointTemplate::FIVE_LINEAR_TRACK]: A 6-axis robot with 5 rotary joints and a linear track.
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct JointTemplate {
-    pub axis: &'static [JointType],
+    pub axis: Cow<'static, [JointType]>,
 }
 
 use JointType::*;
@@ -365,38 +367,40 @@ impl JointTemplate {
     #[on(new)]
     pub fn new(axis: Vec<JointType>) -> Self {
         Self {
-            axis: Box::leak(axis.into_boxed_slice()),
+            axis: Cow::Owned(axis),
         }
     }
 
     #[cfg(off)]
     pub const fn new_const(axis: &'static [JointType]) -> Self {
-        Self { axis }
+        Self {
+            axis: Cow::Borrowed(axis),
+        }
     }
 
     #[on(classattr)]
     pub const SIX: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary]),
     };
     #[on(classattr)]
     pub const SIX_LINEAR_TRACK: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary, Linear],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary, Rotary, Rotary, Linear]),
     };
     #[on(classattr)]
     pub const FOUR: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary]),
     };
     #[on(classattr)]
     pub const FOUR_LINEAR_TRACK: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary, Linear],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary, Linear]),
     };
     #[on(classattr)]
     pub const FIVE: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary, Rotary]),
     };
     #[on(classattr)]
     pub const FIVE_LINEAR_TRACK: Self = Self {
-        axis: &[Rotary, Rotary, Rotary, Rotary, Rotary, Linear],
+        axis: Cow::Borrowed(&[Rotary, Rotary, Rotary, Rotary, Rotary, Linear]),
     };
 }
 
@@ -432,7 +436,7 @@ impl JointFormat {
     pub fn convert_from<T: JointRepr>(
         &self,
         format: JointFormat,
-        template: JointTemplate,
+        template: &JointTemplate,
         joints: T,
     ) -> T {
         let mask = &template.axis;
@@ -487,7 +491,7 @@ impl JointFormat {
                 template.axis.len()
             )));
         }
-        Ok(self.convert_from(format, template, joints))
+        Ok(self.convert_from(format, &template, joints))
     }
 }
 
@@ -553,7 +557,7 @@ mod tests {
         let original: [f64; 9] = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0];
         for fmt in ALL_FORMATS {
             for (tpl, tpl_name) in all_templates() {
-                let out = fmt.convert_from(fmt, tpl, original);
+                let out = fmt.convert_from(fmt, &tpl, original);
                 for i in 0..9 {
                     assert!(
                         approx_eq_f64(out[i], original[i]),
@@ -574,8 +578,8 @@ mod tests {
         for src in ALL_FORMATS {
             for mid in ALL_FORMATS {
                 for (tpl, tpl_name) in all_templates() {
-                    let intermediate = mid.convert_from(src, tpl, original);
-                    let back = src.convert_from(mid, tpl, intermediate);
+                    let intermediate = mid.convert_from(src, &tpl, original);
+                    let back = src.convert_from(mid, &tpl, intermediate);
                     for i in 0..9 {
                         assert!(
                             approx_eq_f64(back[i], original[i]),
@@ -594,7 +598,8 @@ mod tests {
     fn fanuc_to_abs_adjusts_only_j3_with_j2() {
         // FanucDeg -> AbsDeg: j3_abs = j3_fanuc + j2. Other axes untouched.
         let fanuc: [f64; 9] = [10.0, 25.0, -15.0, 40.0, 50.0, 60.0, 7.0, 8.0, 9.0];
-        let abs = JointFormat::AbsDeg.convert_from(JointFormat::FanucDeg, JointTemplate::SIX, fanuc);
+        let abs =
+            JointFormat::AbsDeg.convert_from(JointFormat::FanucDeg, &JointTemplate::SIX, fanuc);
         assert!(approx_eq_f64(abs[0], 10.0));
         assert!(approx_eq_f64(abs[1], 25.0));
         assert!(approx_eq_f64(abs[2], -15.0 + 25.0)); // j3 + j2
@@ -607,7 +612,7 @@ mod tests {
     fn abs_to_fanuc_subtracts_j2_from_j3() {
         let abs: [f64; 9] = [10.0, 25.0, 10.0, 40.0, 50.0, 60.0, 0.0, 0.0, 0.0];
         let fanuc =
-            JointFormat::FanucDeg.convert_from(JointFormat::AbsDeg, JointTemplate::SIX, abs);
+            JointFormat::FanucDeg.convert_from(JointFormat::AbsDeg, &JointTemplate::SIX, abs);
         assert!(approx_eq_f64(fanuc[0], 10.0));
         assert!(approx_eq_f64(fanuc[1], 25.0));
         assert!(approx_eq_f64(fanuc[2], 10.0 - 25.0));
@@ -623,7 +628,7 @@ mod tests {
         let deg: [f64; 9] = [180.0, 90.0, 90.0, 0.0, 0.0, 0.0, 1234.5, 0.0, 0.0];
         let rad = JointFormat::AbsRad.convert_from(
             JointFormat::AbsDeg,
-            JointTemplate::SIX_LINEAR_TRACK,
+            &JointTemplate::SIX_LINEAR_TRACK,
             deg,
         );
         assert!(approx_eq_f64(rad[0], std::f64::consts::PI));
@@ -658,7 +663,7 @@ mod tests {
         ];
         let deg = JointFormat::AbsDeg.convert_from(
             JointFormat::AbsRad,
-            JointTemplate::SIX_LINEAR_TRACK,
+            &JointTemplate::SIX_LINEAR_TRACK,
             rad,
         );
         assert!(approx_eq_f64(deg[0], 180.0));
@@ -674,12 +679,12 @@ mod tests {
         let fanuc_deg: [f32; 9] = [-90.0, 30.0, -15.0, 180.0, -90.0, 0.0, 0.0, 0.0, 0.0];
         let abs_rad = JointFormat::AbsRad.convert_from(
             JointFormat::FanucDeg,
-            JointTemplate::SIX,
+            &JointTemplate::SIX,
             fanuc_deg,
         );
         let back = JointFormat::FanucDeg.convert_from(
             JointFormat::AbsRad,
-            JointTemplate::SIX,
+            &JointTemplate::SIX,
             abs_rad,
         );
         assert_arr_close_f32(back, fanuc_deg, "f32 fanuc_deg <-> abs_rad round-trip");
@@ -693,12 +698,12 @@ mod tests {
         let fanuc_deg_vec: Vec<f64> = fanuc_deg_arr.to_vec();
         let abs_rad_arr = JointFormat::AbsRad.convert_from(
             JointFormat::FanucDeg,
-            JointTemplate::SIX,
+            &JointTemplate::SIX,
             fanuc_deg_arr,
         );
         let abs_rad_vec = JointFormat::AbsRad.convert_from(
             JointFormat::FanucDeg,
-            JointTemplate::SIX,
+            &JointTemplate::SIX,
             fanuc_deg_vec,
         );
         for i in 0..9 {
@@ -717,7 +722,7 @@ mod tests {
         // any conversion untouched even though the array carries 9 slots.
         let abs_deg: [f64; 9] = [10.0, 20.0, 30.0, 40.0, 1234.5, 5678.0, 9999.0, 0.0, 0.0];
         let abs_rad =
-            JointFormat::AbsRad.convert_from(JointFormat::AbsDeg, JointTemplate::FOUR, abs_deg);
+            JointFormat::AbsRad.convert_from(JointFormat::AbsDeg, &JointTemplate::FOUR, abs_deg);
         assert!(approx_eq_f64(abs_rad[4], 1234.5));
         assert!(approx_eq_f64(abs_rad[5], 5678.0));
         assert!(approx_eq_f64(abs_rad[6], 9999.0));
