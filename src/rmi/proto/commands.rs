@@ -435,7 +435,7 @@ pub struct FrcReadJointAnglesResponse {
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl FrcReadJointAnglesResponse {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> JointAngles {
-        format.convert_from(JointFormat::FanucDeg, template, self.joint_angles)
+        format.convert_from(JointFormat::FanucDeg, &template, self.joint_angles)
     }
 }
 

@@ -6,7 +6,7 @@ use proto::instructions::*;
 use proto::member_structs::*;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // --- Packetable impl for RMI JSON over TCP ---
 
@@ -394,11 +394,7 @@ where
         .then_stateful_action::<RobotState>(handle_rmi_request)
         .until_stateful_condition::<TimerState>(|t| t.poll_elapsed() >= Duration::from_secs(5));
 
-    let thread_id = std::thread::current().id();
-    let client_handle = std::thread::spawn(move || {
-        snare::register_thread_child_of(thread_id);
-        client_fn(addr);
-    });
+    let client_handle = snare::thread::spawn(move || client_fn(addr));
 
     run_testers!(conn_tester, cmd_tester);
     client_handle.join().unwrap();
@@ -1281,4 +1277,263 @@ fn test_full_reset() {
 
         driver.disconnect().ok();
     });
+}
+
+// =====================================================================
+// Disconnect must wake the runner explicitly
+// =====================================================================
+//
+// The runner thread parks in `poll.poll(.., Some(8ms))` when its message
+// queue is empty. With a normal robot peer, ambient WRITABLE/READABLE
+// events keep the runner re-entering its drain loop within milliseconds.
+// On real hardware (and under `Quiesce`), the wire goes silent and only
+// the explicit `Waker::wake()` from the driver side will unblock it.
+// This test simulates that silence and asserts disconnect returns
+// promptly — proving `RmiDriver::disconnect` is actually waking the
+// runner instead of relying on ambient socket activity.
+
+#[derive(Default)]
+struct DisconnectQuiesceState {
+    step: u8,
+}
+
+fn disconnect_quiesce_handler(
+    state: &mut DisconnectQuiesceState,
+    _packet: RmiPacket,
+    src: SocketAddr,
+) -> TesterAction<RmiPacket> {
+    let action = match state.step {
+        0 => TesterAction::Send(
+            src,
+            RmiPacket(r#"{"Command":"FRC_Initialize","ErrorID":0}"#.to_string()),
+        ),
+        1 => TesterAction::Quiesce(src, Duration::from_secs(5)),
+        _ => TesterAction::Multiple(vec![]),
+    };
+    state.step = state.step.saturating_add(1);
+    action
+}
+
+#[test]
+fn test_disconnect_runs_when_peer_silent() {
+    snare::register_test();
+    let addr = IpAddr::V4(Ipv4Addr::new(10, 0, 99, 1));
+    snare::add_ip_addr(addr);
+
+    let connect_addr = SocketAddr::new(addr, 16001);
+    let command_addr = SocketAddr::new(addr, NEGOTIATED_PORT);
+
+    let mut conn_tester = connect_tester::<RmiPacket>(connect_addr)
+        .then_action(handle_connect_request)
+        .until_stateful_condition::<TimerState>(|t| t.poll_elapsed() >= Duration::from_secs(8));
+
+    let mut cmd_tester = connect_tester::<RmiPacket>(command_addr)
+        .with_state::<DisconnectQuiesceState>(|_| {})
+        .then_stateful_action::<DisconnectQuiesceState>(disconnect_quiesce_handler)
+        .until_stateful_condition::<TimerState>(|t| t.poll_elapsed() >= Duration::from_secs(8));
+
+    let client_handle = snare::thread::spawn(move || {
+        let mut driver = RmiDriver::new(make_config(addr));
+        driver.connect(None).expect("connect failed");
+
+        // Step 0 packet: FrcInitialize → tester replies normally, then
+        // (on its next packet) will quiesce us.
+        driver
+            .send(FrcInitialize::default())
+            .expect("send FrcInitialize")
+            .wait_timeout(Duration::from_secs(2))
+            .expect("await FrcInitialize");
+
+        // Step 1 packet (sentinel): tester replies with Quiesce only — no
+        // response data. We deliberately do NOT wait on this handle.
+        let _quiesce_trigger = driver.send(FrcGetStatus).expect("send sentinel");
+
+        // Give the tester loop a chance to receive the sentinel and apply
+        // Quiesce. After this, the runner thread's poll has no peer
+        // readiness to react to.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let start = Instant::now();
+        driver.disconnect().expect("disconnect call");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "disconnect() took {:?} — runner was not woken explicitly. \
+             This indicates `RmiConnection.handle` has no waker set (the \
+             pre-4d85ce8 bug) so `ThreadHandle::join`'s internal `self.wake()` \
+             is a no-op, leaving the runner reliant on ambient socket traffic.",
+            elapsed
+        );
+    });
+
+    run_testers!(conn_tester, cmd_tester);
+    client_handle.join().unwrap();
+}
+
+// =====================================================================
+// RmiHandleGeneric direct unit tests
+//
+// These exercise the listener/state interaction in `wait_timeout` and
+// `Future::poll` without standing up a driver / network. They cover the
+// post-audit H2 race-fix invariant: a response set just before / just
+// after `listen()` must still be observed by the waiter, never lost.
+// =====================================================================
+
+mod handle_unit_tests {
+    use super::super::ResponsePacket;
+    use super::super::proto::commands::FrcInitializeResponse;
+    use super::super::rmi_handle::RmiHandleGeneric;
+    use crate::rmi::errors::RmiError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn make_init_response(error_id: u32) -> ResponsePacket {
+        ResponsePacket::from(FrcInitializeResponse {
+            error_id,
+            group_mask: None,
+        })
+    }
+
+    #[test]
+    fn wait_timeout_returns_immediately_when_already_set() {
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        handle.set_generic(make_init_response(0)).unwrap();
+
+        let start = Instant::now();
+        let resp = handle.wait_timeout(Duration::from_secs(5)).unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "wait_timeout on a pre-set handle took {elapsed:?}"
+        );
+        match resp {
+            ResponsePacket::Command(_) => {}
+            other => panic!("unexpected response variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wait_timeout_observes_response_set_after_call_starts() {
+        // Spawn a setter that delays briefly, then sets the response.
+        // The waiter must register a listener before checking is_set so
+        // it doesn't miss the wake-up — this is the H2 invariant.
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        let setter_handle = handle.clone();
+        let setter_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            setter_handle.set_generic(make_init_response(0)).unwrap();
+        });
+
+        let start = Instant::now();
+        let resp = handle.wait_timeout(Duration::from_secs(5)).unwrap();
+        let elapsed = start.elapsed();
+        setter_thread.join().unwrap();
+
+        assert!(
+            elapsed >= Duration::from_millis(40),
+            "wait_timeout returned faster than the setter delay: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "wait_timeout took {elapsed:?} — likely missed the listener wake"
+        );
+        assert_eq!(resp.error_id(), 0);
+    }
+
+    #[test]
+    fn wait_timeout_returns_timeout_error_when_unset() {
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        let start = Instant::now();
+        let res = handle.wait_timeout(Duration::from_millis(100));
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(res, Err(RmiError::Timeout)),
+            "expected RmiError::Timeout, got {res:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(90) && elapsed < Duration::from_millis(500),
+            "timeout fired at unexpected time: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn set_generic_with_mismatched_packet_name_returns_packet_mismatch() {
+        // Handle is for FRC_Abort but the response is FRC_Initialize.
+        let handle = RmiHandleGeneric::new("FRC_Abort", 1);
+        let res = handle.set_generic(make_init_response(0));
+        assert!(
+            matches!(res, Err(RmiError::PacketMismatch(_))),
+            "expected PacketMismatch, got {res:?}"
+        );
+        // The handle must be marked as "set" (Skipped) and resolve the wait.
+        assert!(handle.is_set());
+        let resp = handle.wait_timeout(Duration::from_millis(100));
+        assert!(
+            matches!(resp, Err(RmiError::ResponseNotFulfilled(_))),
+            "expected ResponseNotFulfilled, got {resp:?}"
+        );
+    }
+
+    #[test]
+    fn set_generic_propagates_fanuc_error_code_in_response() {
+        // Non-zero error_id must surface as FanucErrorCode, not a normal response.
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        handle.set_generic(make_init_response(2)).unwrap();
+        let res = handle.wait_timeout(Duration::from_millis(100));
+        assert!(
+            matches!(res, Err(RmiError::FanucErrorCode(_))),
+            "expected FanucErrorCode, got {res:?}"
+        );
+    }
+
+    #[test]
+    fn timestamp_unset_before_set_then_present_after() {
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        assert!(handle.timestamp().is_none());
+        handle.set_generic(make_init_response(0)).unwrap();
+        assert!(handle.timestamp().is_some());
+    }
+
+    #[test]
+    fn many_concurrent_waiters_all_observe_response() {
+        // Fan-out multiple waiters on the same handle. notify(usize::MAX)
+        // must wake all of them; none should hit the timeout branch.
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        let all_succeeded = Arc::new(AtomicBool::new(true));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let h = handle.clone();
+            let flag = all_succeeded.clone();
+            threads.push(thread::spawn(move || {
+                if h.wait_timeout(Duration::from_secs(3)).is_err() {
+                    flag.store(false, Ordering::Relaxed);
+                }
+            }));
+        }
+        thread::sleep(Duration::from_millis(50));
+        handle.set_generic(make_init_response(0)).unwrap();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!(
+            all_succeeded.load(Ordering::Relaxed),
+            "at least one waiter timed out instead of seeing the notify"
+        );
+    }
+
+    #[test]
+    fn second_set_is_no_op_first_response_wins() {
+        // OnceLock semantics: the second set must not overwrite the first.
+        let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
+        handle.set_generic(make_init_response(0)).unwrap();
+        handle.set_generic(make_init_response(7)).ok();
+        let resp = handle.wait_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(
+            resp.error_id(),
+            0,
+            "second set unexpectedly overwrote first"
+        );
+    }
 }

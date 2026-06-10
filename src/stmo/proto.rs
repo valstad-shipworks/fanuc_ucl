@@ -162,9 +162,9 @@ impl MotionCommandPacket {
         template: JointTemplate,
         joints: impl JointRepr,
     ) -> Result<Self, StreamMotionError> {
-        let joints = JointFormat::FanucDeg.convert_from(format, template, joints);
-        let mut full_joints = [0.0; 9];
         let axis_cnt = template.axis.len();
+        let joints = JointFormat::FanucDeg.convert_from(format, &template, joints);
+        let mut full_joints = [0.0; 9];
         match axis_cnt {
             4 => full_joints[..axis_cnt].copy_from_slice(&joints.to_array::<4, f64>(false)?),
             5 => full_joints[..axis_cnt].copy_from_slice(&joints.to_array::<5, f64>(false)?),
@@ -560,7 +560,7 @@ impl RobotStatusPacket {
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl RobotStatusPacket {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucDeg, template, self.joints)
+        format.convert_from(JointFormat::FanucDeg, &template, self.joints)
     }
 }
 
@@ -627,7 +627,7 @@ pub struct CommandPositionResponsePacket {
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl CommandPositionResponsePacket {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucDeg, template, self.joints)
+        format.convert_from(JointFormat::FanucDeg, &template, self.joints)
     }
 }
 
@@ -1133,5 +1133,179 @@ mod tests {
             f32::from_be_bytes(bincode_bytes[120..124].try_into().unwrap()),
             100_000.0
         );
+    }
+
+    // ---- MotionCommandPacket::try_from_joints / try_from_pose ----
+
+    use crate::joints::{JointFormat, JointTemplate};
+
+    #[test]
+    fn try_from_joints_six_axis_stores_in_first_six_slots() {
+        let joints = [-90.0, 0.0, 0.0, -180.0, 90.0, 180.0];
+        let pkt =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, joints)
+                .unwrap();
+        // Position is stored in FanucDeg internally (j3 -= j2; j2 == 0 here so
+        // values match input exactly).
+        for (i, &v) in joints.iter().enumerate() {
+            assert!(
+                (pkt.position[i] - v as f64).abs() < 1e-6,
+                "axis {i}: got {} expected {}",
+                pkt.position[i],
+                v
+            );
+        }
+        // Slots beyond the template length must remain at the constructor
+        // default (0.0), not stale memory.
+        for i in 6..9 {
+            assert_eq!(pkt.position[i], 0.0, "axis {i} should be zero-filled");
+        }
+        assert!(pkt.joint_format, "joint_format flag must be set");
+        assert!(!pkt.last_command);
+        assert_eq!(pkt.seq, 0);
+    }
+
+    #[test]
+    fn try_from_joints_converts_input_format_to_fanuc_deg() {
+        // Same physical pose in two formats must produce the same `position`.
+        let abs_deg = [-90.0, 30.0, 10.0, 0.0, 0.0, 0.0];
+        let abs_rad = [
+            -90.0_f64.to_radians(),
+            30.0_f64.to_radians(),
+            10.0_f64.to_radians(),
+            0.0,
+            0.0,
+            0.0,
+        ];
+
+        let pkt_deg =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, abs_deg)
+                .unwrap();
+        let pkt_rad =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsRad, JointTemplate::SIX, abs_rad)
+                .unwrap();
+
+        for i in 0..6 {
+            assert!(
+                (pkt_deg.position[i] - pkt_rad.position[i]).abs() < 1e-4,
+                "axis {i}: deg-input={} rad-input={} (should match in FanucDeg)",
+                pkt_deg.position[i],
+                pkt_rad.position[i]
+            );
+        }
+    }
+
+    #[test]
+    fn try_from_joints_applies_fanuc_j3_relative_convention() {
+        // AbsDeg → FanucDeg: j3 = j3_abs - j2.
+        let pkt = MotionCommandPacket::try_from_joints(
+            JointFormat::AbsDeg,
+            JointTemplate::SIX,
+            [10.0, 25.0, 10.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+        assert!((pkt.position[0] - 10.0).abs() < 1e-9);
+        assert!((pkt.position[1] - 25.0).abs() < 1e-9);
+        assert!(
+            (pkt.position[2] - (10.0 - 25.0)).abs() < 1e-9,
+            "j3 should be abs-relative converted to fanuc: got {}",
+            pkt.position[2]
+        );
+    }
+
+    #[test]
+    fn try_from_joints_too_few_axes_for_template_returns_error() {
+        // Template SIX wants 6 joint values; a [f64; 4] doesn't have enough
+        // entries. With fill_missing_nan=false (the path try_from_joints
+        // takes), this must return JointDataSizeError, not panic.
+        let result = MotionCommandPacket::try_from_joints(
+            JointFormat::AbsDeg,
+            JointTemplate::SIX,
+            [10.0, 20.0, 30.0, 40.0],
+        );
+        assert!(
+            result.is_err(),
+            "expected error for under-sized input, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn try_from_joints_too_few_axes_via_vec_returns_error() {
+        // Same case via the Vec<f64> JointRepr impl — a separate code path
+        // with the same contract.
+        let v: Vec<f64> = vec![10.0, 20.0, 30.0, 40.0];
+        let result =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, v);
+        assert!(
+            result.is_err(),
+            "expected error for under-sized vec input, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn try_from_joints_seven_axis_linear_track() {
+        // SIX_LINEAR_TRACK: 6 rotary + 1 linear (track in mm). The linear
+        // axis must be passed through unchanged regardless of deg/rad input.
+        let joints = [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1234.5];
+        let pkt = MotionCommandPacket::try_from_joints(
+            JointFormat::AbsDeg,
+            JointTemplate::SIX_LINEAR_TRACK,
+            joints,
+        )
+        .unwrap();
+        assert!((pkt.position[6] - 1234.5).abs() < 1e-6);
+        for i in 7..9 {
+            assert_eq!(pkt.position[i], 0.0);
+        }
+    }
+
+    #[test]
+    fn set_last_command_flips_flag() {
+        let mut pkt = MotionCommandPacket::try_from_joints(
+            JointFormat::AbsDeg,
+            JointTemplate::SIX,
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+        assert!(!pkt.last_command);
+        pkt.set_last_command(true);
+        assert!(pkt.last_command);
+        pkt.set_last_command(false);
+        assert!(!pkt.last_command);
+    }
+
+    #[test]
+    fn from_pose_disables_joint_format_flag() {
+        let pose = PoseData {
+            x: 100.0,
+            y: 200.0,
+            z: 300.0,
+            w: 1.0,
+            p: 2.0,
+            r: 3.0,
+            e1: 0.0,
+            e2: 0.0,
+            e3: 0.0,
+        };
+        let pkt = MotionCommandPacket::from_pose(pose).unwrap();
+        assert!(!pkt.joint_format, "from_pose must clear joint_format");
+        assert_eq!(pkt.position[0], 100.0);
+        assert_eq!(pkt.position[1], 200.0);
+        assert_eq!(pkt.position[2], 300.0);
+    }
+
+    #[test]
+    fn should_cast_to_single_obeys_protocol_version_and_format() {
+        let mut pkt =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, [0.0; 6])
+                .unwrap();
+        // version < 2 → always cast to single
+        assert!(pkt.should_cast_to_single(0));
+        assert!(pkt.should_cast_to_single(1));
+        // version >= 2 with joint_format=true → don't cast
+        assert!(!pkt.should_cast_to_single(2));
+        // version >= 2 with joint_format=false → cast
+        pkt.joint_format = false;
+        assert!(pkt.should_cast_to_single(2));
     }
 }

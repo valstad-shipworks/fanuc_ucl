@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import Sequence
 
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig
+from fanuc_ucl._common import JointFormat, JointTemplate, ThreadConfig
 
 __all__ = [
     "AxisMotionConstraint",
@@ -169,7 +169,9 @@ class StreamMotionDriver:
         self,
         commands: Sequence[MotionCommandPacket],
     ) -> StmoHandle: ...
-    def connect(self, config: ThreadConfig | None = None): ...
+    def connect(self, thread_config: ThreadConfig | None = None) -> None:
+        """Connect the streaming-motion driver. Pass ``thread_config=None`` (the default) to leave the runner thread on the default scheduler with no priority or affinity adjustments."""
+        ...
     def disconnect(self) -> None: ...
     def start(self, timeout_secs: float = 2.0): ...
     def stop(self) -> None: ...

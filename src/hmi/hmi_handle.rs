@@ -49,10 +49,10 @@ pub(super) fn caster_array<T: ReadableDataPort>(
     count: u16,
 ) -> HmiResult<Box<[T::ValueType]>> {
     let payload = msg.payload();
-    if payload.len() < T::expected_size(target, count) {
+    if payload.len() < T::expected_array_size(target, count) {
         log::error!(
             "Malformed response: expected at least {} bytes, got {} bytes",
-            T::expected_size(target, count),
+            T::expected_array_size(target, count),
             payload.len()
         );
         return Err(HmiError::MalformedResponse);
@@ -96,6 +96,8 @@ impl HmiHandleGeneric {
         Ok(())
     }
 }
+
+impl crate::sealed::Sealed for HmiHandleGeneric {}
 
 #[inherent]
 impl ResponseHandle for HmiHandleGeneric {
@@ -195,6 +197,8 @@ impl<T: Send + Sync + 'static> HmiHandle<T> {
         self.generic.clone()
     }
 }
+
+impl<T: Send + Sync + 'static> crate::sealed::Sealed for HmiHandle<T> {}
 
 #[inherent]
 impl<T: Send + Sync + 'static> ResponseHandle for HmiHandle<T> {
@@ -326,6 +330,14 @@ pub(super) mod py {
 
         pub fn wait<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
             self.wait_timeout(py, 100000.0)
+        }
+
+        pub fn timestamp(&self) -> Option<f64> {
+            self.inner.timestamp().map(|t| {
+                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+            })
         }
     }
 

@@ -85,6 +85,8 @@ impl RmiHandleGeneric {
     }
 }
 
+impl crate::sealed::Sealed for RmiHandleGeneric {}
+
 #[inherent]
 impl ResponseHandle for RmiHandleGeneric {
     type Ret = ResponsePacket;
@@ -111,11 +113,14 @@ impl ResponseHandle for RmiHandleGeneric {
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
+        // Register the listener before checking state so we can't miss a
+        // notify() that fires between the check and listen() (event_listener
+        // only wakes listeners registered at notify time).
+        let listener = self.resp.1.listen();
         if self.is_set() {
             return self.get();
         }
-        let listener = self.resp.1.listen();
-        if listener.wait_timeout(timeout).is_some() {
+        if listener.wait_timeout(timeout).is_some() || self.is_set() {
             self.get()
         } else {
             Err(RmiError::Timeout)
@@ -134,12 +139,21 @@ impl Future for RmiHandleGeneric {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
+        // Register before checking, mirroring `wait_timeout`'s race fix.
+        let listener = self.resp.1.listen();
         if self.is_set() {
-            std::task::Poll::Ready(self.get())
-        } else {
-            let listener = self.resp.1.listen();
-            let mut pinned = std::pin::pin!(listener);
-            pinned.as_mut().poll(cx).map(|_| self.get())
+            return std::task::Poll::Ready(self.get());
+        }
+        let mut pinned = std::pin::pin!(listener);
+        match pinned.as_mut().poll(cx) {
+            std::task::Poll::Ready(()) => std::task::Poll::Ready(self.get()),
+            std::task::Poll::Pending => {
+                if self.is_set() {
+                    std::task::Poll::Ready(self.get())
+                } else {
+                    std::task::Poll::Pending
+                }
+            }
         }
     }
 }
@@ -161,6 +175,8 @@ impl<T: ReceivablePacket> RmiHandle<T> {
         self.generic.clone()
     }
 }
+
+impl<T: ReceivablePacket> crate::sealed::Sealed for RmiHandle<T> {}
 
 #[inherent]
 impl<T: ReceivablePacket> ResponseHandle for RmiHandle<T> {
@@ -231,12 +247,14 @@ impl RmiQueueGeneric {
     }
 
     pub fn wait_all_timeout(&self, timeout: Duration) -> RmiResult<Vec<ResponsePacket>> {
-        let mut outcome = Vec::new();
-        let mut start = Instant::now();
-        let end = start + timeout;
+        let mut outcome = Vec::with_capacity(self.queue.len());
+        let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
-            outcome.push(handle.wait_timeout(end - start)?);
-            start = Instant::now();
+            let remaining = match deadline {
+                Some(end) => end.saturating_duration_since(Instant::now()),
+                None => Duration::MAX,
+            };
+            outcome.push(handle.wait_timeout(remaining)?);
         }
         Ok(outcome)
     }
@@ -246,11 +264,14 @@ impl RmiQueueGeneric {
     }
 
     pub fn wait_next_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
-        let start = Instant::now();
-        let end = start + timeout;
+        let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
             if !handle.is_set() {
-                return handle.wait_timeout(end - start);
+                let remaining = match deadline {
+                    Some(end) => end.saturating_duration_since(Instant::now()),
+                    None => Duration::MAX,
+                };
+                return handle.wait_timeout(remaining);
             }
         }
         Err(RmiError::ResponseNotFulfilled(ResponseNotFulfilled))
@@ -270,12 +291,9 @@ impl RmiQueueGeneric {
 
     #[cfg(feature = "async")]
     pub async fn wait_all_async(&self) -> RmiResult<Vec<ResponsePacket>> {
-        let mut outcome = Vec::new();
-        let mut start = Instant::now();
-        let end = start + timeout;
+        let mut outcome = Vec::with_capacity(self.queue.len());
         for handle in &self.queue {
-            outcome.push(handle.wait_async(end - start).await?);
-            start = Instant::now();
+            outcome.push(handle.clone().await?);
         }
         Ok(outcome)
     }
@@ -370,7 +388,7 @@ pub(super) mod py {
         }
 
         pub fn wait_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_timeout(timeout)
                 .map_err(Into::into)
@@ -379,6 +397,14 @@ pub(super) mod py {
 
         pub fn wait(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
             self.wait_timeout(py, 100000.0)
+        }
+
+        pub fn timestamp(&self) -> Option<f64> {
+            self.inner.timestamp().map(|t| {
+                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+            })
         }
     }
 
@@ -467,7 +493,7 @@ pub(super) mod py {
             py: Python<'_>,
             timeout_secs: f64,
         ) -> PyResult<Vec<Py<PyAny>>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_all_timeout(timeout)
                 .map_err(Into::into)
@@ -484,7 +510,7 @@ pub(super) mod py {
         }
 
         pub fn wait_next_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
-            let timeout = Duration::from_secs_f64(timeout_secs);
+            let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
             self.inner
                 .wait_next_timeout(timeout)
                 .map_err(Into::into)

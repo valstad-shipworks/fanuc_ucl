@@ -1,3 +1,5 @@
+//! TCP driver for the FANUC Remote Motion Interface (RMI).
+
 use std::{
     collections::VecDeque,
     io::{Read, Write},
@@ -12,15 +14,9 @@ use std::{
 
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender};
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use serde_json::{Map as JsonMap, Value as JsonValue};
-#[cfg(test)]
-use snare::TcpStream as StdTcpStream;
-#[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
-#[cfg(not(test))]
-use std::net::TcpStream as StdTcpStream;
+use snare::net::TcpStream as StdTcpStream;
 
 use crate::{
     rmi::{
@@ -169,11 +165,9 @@ impl RmiRunner {
         let (waker_tx, waker_rx) = flume::unbounded();
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
-        let thread_id = std::thread::current().id();
-        let handle = std::thread::Builder::new()
+        let handle = snare::thread::Builder::new()
             .name("fanuc-rmi-runner".to_string())
             .spawn(move || {
-                snare::register_thread_child_of(thread_id);
                 if let Err(e) = rmi_runner_runtime(
                     handle,
                     tcp_stream,
@@ -396,23 +390,30 @@ fn rmi_runner_runtime(
     Ok(())
 }
 
+/// Connection settings for an [`RmiDriver`].
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Debug, Clone)]
 pub struct RmiDriverConfig {
+    /// IP address of the robot controller.
     pub address: IpAddr,
+    /// Minimum RMI major version the controller must report at connect.
     #[on(pyo3(get, set))]
     pub expected_major_version: u8,
+    /// Installed software options, used to validate feature-gated packet fields.
     #[on(pyo3(get, set))]
     pub software_options: Vec<SoftwareOptions>,
+    /// Maximum number of requests in flight before sends are held back.
     #[on(pyo3(get, set))]
     pub buffer_cnt: u8,
+    /// Read/write timeout for the connect handshake.
     pub timeout: Duration,
 }
 
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl RmiDriverConfig {
+    /// Config with sensible defaults: major version 7, no software options, 8-deep buffer, 2 s timeout.
     #[cfg(off)]
     pub fn default_with_ip<T: Into<IpAddr>>(address: T) -> Self {
         Self {
@@ -424,6 +425,10 @@ impl RmiDriverConfig {
         }
     }
 
+    /// Builds a config, validating the buffer size and timeout.
+    ///
+    /// # Errors
+    /// Returns [`RmiError::Structure`] if `buffer_cnt` is 0 or `timeout_secs` is not positive.
     #[cfg(on)]
     #[on(new)]
     #[on(pyo3(signature = (address, expected_major_version=7, software_options=None, buffer_cnt=8, timeout_secs=2.0)))]
@@ -526,6 +531,9 @@ struct RmiConnection {
     err_flag: Arc<AtomicBool>,
 }
 
+/// Client for the FANUC Remote Motion Interface: a JSON-over-TCP protocol for sending
+/// motion instructions and commands to the controller. Sends return immediately with a
+/// handle that resolves once the controller's response arrives on the I/O thread.
 #[derive(Debug)]
 pub struct RmiDriver {
     config: RmiDriverConfig,
@@ -534,6 +542,7 @@ pub struct RmiDriver {
 }
 
 impl RmiDriver {
+    /// Creates an unconnected driver; call [`connect`](Self::connect) before sending.
     pub fn new(config: RmiDriverConfig) -> Self {
         Self {
             config,
@@ -542,12 +551,20 @@ impl RmiDriver {
         }
     }
 
+    /// The controller's reported `(major, minor)` RMI version, or `None` if not connected.
     pub fn version(&self) -> Option<(u8, u8)> {
         self.connection
             .as_ref()
             .map(|c| (c.major_version, c.minor_version))
     }
 
+    /// Performs the FRC_Connect handshake on port 16001 and spawns the I/O thread
+    /// on the negotiated port, optionally with the given thread configuration.
+    ///
+    /// # Errors
+    /// Fails if already connected, on TCP or serde errors during the handshake,
+    /// if the controller rejects the connect with an error code, or if its major
+    /// version is below [`RmiDriverConfig::expected_major_version`].
     pub fn connect(
         &mut self,
         thread_config: Option<ThreadConfig>,
@@ -617,13 +634,7 @@ impl RmiDriver {
             thread_config,
         )?;
         handle.set_handle(join_handle);
-        cfg_if::cfg_if!(
-            if #[cfg(test)] {
-                handle.set_waker_snare(waker);
-            } else {
-                handle.set_waker_mio(waker);
-            }
-        );
+        handle.set_waker_mio(waker);
 
         self.seq.store(0, Ordering::Relaxed);
         self.connection = Some(RmiConnection {
@@ -639,6 +650,11 @@ impl RmiDriver {
         Ok(response)
     }
 
+    /// Sends FRC_Disconnect and joins the I/O thread, blocking until it exits.
+    ///
+    /// # Errors
+    /// Returns [`RmiError::Disconnected`] if not connected, or a communication
+    /// error if the disconnect packet cannot be queued to the I/O thread.
     pub fn disconnect(&mut self) -> RmiResult<RmiHandle<FrcDisconnectResponse>> {
         if let Some(conn) = self.connection.take() {
             log::info!("RmiDriver disconnecting from {}", self.config.address);
@@ -669,10 +685,12 @@ impl RmiDriver {
         }
     }
 
+    /// Whether the driver is connected and its I/O thread is still alive.
     pub fn is_connected(&self) -> bool {
         self.get_connection().is_ok()
     }
 
+    /// Whether the I/O thread failed during setup and aborted.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.err_flag.load(Ordering::Relaxed)
@@ -681,6 +699,10 @@ impl RmiDriver {
         }
     }
 
+    /// Clears the connection state if the I/O thread has died.
+    ///
+    /// # Errors
+    /// Returns [`RmiError::Disconnected`] if not connected or the I/O thread has exited.
     pub fn update_connection(&mut self) -> RmiResult<()> {
         if let Some(conn) = &self.connection {
             if !conn.handle.is_alive() {
@@ -693,6 +715,13 @@ impl RmiDriver {
         }
     }
 
+    /// Queues a type-erased packet for sending, assigning instructions a sequence ID,
+    /// and returns a handle that resolves with the controller's response.
+    ///
+    /// # Errors
+    /// Fails if not connected, if the packet fails to serialize, if a field is
+    /// rejected by feature-gate validation (version or software option), or if
+    /// handing the packet to the I/O thread fails.
     #[inline(never)]
     pub fn send_generic(&self, mut packet: SendPacket) -> RmiResult<RmiHandleGeneric> {
         let conn = self.get_connection()?;
@@ -728,6 +757,10 @@ impl RmiDriver {
         Ok(generic_handle)
     }
 
+    /// Queues a packet for sending, returning a handle typed to its response counterpart.
+    ///
+    /// # Errors
+    /// Same as [`send_generic`](Self::send_generic).
     #[inline]
     pub fn send<P: SendablePacket>(&self, packet: P) -> RmiResult<RmiHandle<P::Counterpart>> {
         // this is to reduce the extra code from monomorphization
@@ -736,6 +769,11 @@ impl RmiDriver {
         ))
     }
 
+    /// Resets, aborts, then resets again to clear faults and any queued motion,
+    /// waiting on the first two responses before issuing the final reset.
+    ///
+    /// # Errors
+    /// Same as [`send_generic`](Self::send_generic).
     pub fn send_full_reset(&self) -> RmiResult<RmiHandle<FrcResetResponse>> {
         let _ = self.send(FrcReset)?.wait();
         let _ = self.send(FrcAbort)?.wait();

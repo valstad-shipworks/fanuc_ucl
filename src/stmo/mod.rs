@@ -1,10 +1,11 @@
+#[warn(missing_docs)]
 mod driver;
 pub mod proto;
 pub(crate) mod stmo_handle;
 mod types;
 
 pub use self::{
-    driver::StreamMotionDriver,
+    driver::{StmoControlLoop, StreamMotionDriver},
     stmo_handle::StmoHandle,
     types::{AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StreamMotionError},
 };

@@ -30,8 +30,8 @@ use crate::{
     thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
 };
 
-use mio::net::UdpSocket as MioUdpSocket;
-use mio::{Events, Interest, Poll, Token, Waker};
+use snare::mio::net::UdpSocket as MioUdpSocket;
+use snare::mio::{Events, Interest, Poll, Token, Waker};
 
 #[cfg(feature = "py")]
 use pyo3::prelude::*;
@@ -198,7 +198,7 @@ impl StreamMotionContext {
                 break;
             }
 
-            for ev in &events {
+            for ev in events.iter() {
                 match ev.token() {
                     TOK_SOCKET => {
                         // drain UDP
@@ -376,7 +376,7 @@ impl StreamMotionContext {
 #[allow(clippy::too_many_arguments)]
 fn stream_motion_runtime(
     mut thread_handle: ThreadHandle,
-    socket: std::net::UdpSocket,
+    socket: snare::net::UdpSocket,
     thread_config: Option<ThreadConfig>,
     to_driver: Sender<RxPackets>,
     from_driver: Receiver<ToThreadMessage>,
@@ -421,6 +421,10 @@ struct StreamMotionConnection {
     itl: Arc<(Event, AtomicBool)>,
 }
 
+/// Driver for FANUC Stream Motion (STMO), a UDP protocol in which the controller
+/// requests a position command every interpolation cycle (typically 8ms).
+/// A dedicated I/O thread answers each cycle from a queue of motion commands;
+/// dropping the driver disconnects, joining that thread.
 #[cfg_attr(feature = "py", pyo3::pyclass(str))]
 #[derive(Debug)]
 pub struct StreamMotionDriver {
@@ -451,6 +455,12 @@ type DriverResult<T> = Result<T, StreamMotionError>;
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl StreamMotionDriver {
+    /// Creates a driver targeting the controller at `addr`. `send_last_command`
+    /// sets the last-command flag on filler packets, ending the stream once the
+    /// command queue runs dry instead of holding position indefinitely.
+    ///
+    /// # Errors
+    /// `addr` is not a valid IP address.
     #[cfg(on)]
     #[on(pyo3(signature = (addr, send_last_command = false)))]
     #[on(new)]
@@ -466,6 +476,9 @@ impl StreamMotionDriver {
         })
     }
 
+    /// Creates a driver targeting the controller at `remote_addr`; `send_last_command`
+    /// sets the last-command flag on filler packets, ending the stream once the
+    /// command queue runs dry instead of holding position indefinitely.
     #[cfg(off)]
     pub fn new<T: Into<IpAddr>>(remote_addr: T, send_last_command: bool) -> Self {
         let remote_addr = remote_addr.into();
@@ -478,11 +491,13 @@ impl StreamMotionDriver {
         }
     }
 
+    /// Returns the controller's IP address as a string.
     #[on(pyo3(signature = ()))]
     pub fn get_remote_addr(&self) -> String {
         self.remote_addr.to_string()
     }
 
+    /// Drains packets received by the I/O thread into the driver's internal buffers.
     pub fn refresh(&mut self) {
         let connection = match &self.connection {
             Some(c) => c,
@@ -503,6 +518,12 @@ impl StreamMotionDriver {
         self.rx_storage.prune();
     }
 
+    /// Queues motion commands; the I/O thread sends one per controller cycle.
+    /// The returned handle is set once the whole batch has been sent.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] or [`StreamMotionError::NotStarted`] if
+    /// [`connect`](Self::connect) and [`start`](Self::start) have not succeeded.
     pub fn command_motion(
         &mut self,
         mut motions: Vec<MotionCommandPacket>,
@@ -545,11 +566,17 @@ impl StreamMotionDriver {
         Ok(())
     }
 
+    /// Sends a stop packet, halting the stream on the controller side.
     pub fn stop(&mut self) {
         self.send_packet(ToThreadMessage::Stop(StopPacket {}));
         self.refresh();
     }
 
+    /// Binds a local UDP socket to the controller's Stream Motion port (60015)
+    /// and spawns the I/O thread. No-op if already connected.
+    ///
+    /// # Errors
+    /// I/O failure binding or connecting the socket, or failure to spawn the I/O thread.
     #[on(pyo3(signature = (thread_config=None)))]
     pub fn connect(&mut self, thread_config: Option<ThreadConfig>) -> DriverResult<()> {
         log::info!(
@@ -563,7 +590,7 @@ impl StreamMotionDriver {
         }
         let port = openport::pick_unused_port(57000..60000).unwrap_or(60000);
         let local_addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
-        let socket = std::net::UdpSocket::bind(local_addr).map_err(StreamMotionError::from)?;
+        let socket = snare::net::UdpSocket::bind(local_addr).map_err(StreamMotionError::from)?;
         socket
             .connect(SocketAddr::new(self.remote_addr, 60015))
             .map_err(StreamMotionError::from)?;
@@ -587,7 +614,7 @@ impl StreamMotionDriver {
 
         let send_last_command = self.send_last_command;
 
-        let thread = std::thread::Builder::new()
+        let thread = snare::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
             .spawn(move || {
                 if let Err(e) = stream_motion_runtime(
@@ -625,6 +652,7 @@ impl StreamMotionDriver {
         Ok(())
     }
 
+    /// Returns `true` if the I/O thread exited with an error.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.err_flag.load(std::sync::atomic::Ordering::SeqCst)
@@ -633,6 +661,11 @@ impl StreamMotionDriver {
         }
     }
 
+    /// Sends the start packet and waits for the controller's version response.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] if [`connect`](Self::connect) has not succeeded;
+    /// [`StreamMotionError::Timeout`] if no version response arrives within `timeout_secs`.
     #[on(pyo3(signature = (timeout_secs=2.0)))]
     pub fn start(&mut self, timeout_secs: f32) -> DriverResult<()> {
         let timeout = Duration::from_secs_f32(timeout_secs);
@@ -666,6 +699,8 @@ impl StreamMotionDriver {
         Ok(())
     }
 
+    /// Stops the stream and joins the I/O thread, blocking until it exits.
+    /// Called automatically on drop.
     pub fn disconnect(&mut self) {
         if let Some(conn) = self.connection.take() {
             log::info!("StreamMotionDriver disconnecting from {}", self.remote_addr);
@@ -676,6 +711,7 @@ impl StreamMotionDriver {
         self.rx_storage.clear();
     }
 
+    /// Returns `true` if the I/O thread is alive.
     pub fn is_connected(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.thread_handle.is_alive()
@@ -684,6 +720,7 @@ impl StreamMotionDriver {
         }
     }
 
+    /// Returns `true` once [`start`](Self::start) has completed on the current connection.
     pub fn is_started(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.is_started
@@ -692,6 +729,14 @@ impl StreamMotionDriver {
         }
     }
 
+    /// Requests the per-axis velocity, acceleration, and jerk threshold tables, blocking
+    /// until all are received. `extra_axis` is the number of axes beyond the standard six.
+    /// Results are cached after the first successful fetch.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] or [`StreamMotionError::NotStarted`] before
+    /// [`connect`](Self::connect) and [`start`](Self::start), or if the connection drops
+    /// mid-fetch; [`StreamMotionError::JointDataSizeError`] if `extra_axis > 3`.
     #[on(pyo3(signature = (extra_axis=0)))]
     #[allow(clippy::needless_range_loop)]
     pub fn fetch_movement_limits(&mut self, extra_axis: u8) -> DriverResult<JointMovementLimits> {
@@ -797,16 +842,19 @@ impl StreamMotionDriver {
         }
     }
 
+    /// Drains and returns all buffered robot status packets.
     pub fn pull_states(&mut self) -> Vec<RobotStatusPacket> {
         self.refresh();
         self.rx_storage.status.drain(..).collect()
     }
 
+    /// Drains and returns all buffered command position packets.
     pub fn pull_command_positions(&mut self) -> Vec<CommandPositionResponsePacket> {
         self.refresh();
         self.rx_storage.command_position.drain(..).collect()
     }
 
+    /// Blocks until a command position packet arrives, or returns `None` after `timeout_secs`.
     #[on(pyo3(signature = (timeout_secs = 0.2)))]
     pub fn wait_for_command_position(
         &mut self,
@@ -845,12 +893,19 @@ impl std::fmt::Display for StreamMotionDriver {
     }
 }
 
+/// A cycle-by-cycle control session: suspends the I/O thread's automatic filler
+/// replies so the caller can answer each robot status with [`send_command`](Self::send_command).
+/// Filler replies resume on drop.
 #[derive(Debug)]
 pub struct StmoControlLoop<'a> {
     driver: &'a mut StreamMotionDriver,
 }
 
 impl<'a> StmoControlLoop<'a> {
+    /// Begins a control session on the given driver.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] if the driver has no live connection.
     pub fn try_new(driver: &'a mut StreamMotionDriver) -> Result<Self, StreamMotionError> {
         if let Some(cnx) = &mut driver.connection {
             cnx.itl.1.store(true, Ordering::SeqCst);
@@ -860,25 +915,46 @@ impl<'a> StmoControlLoop<'a> {
         }
     }
 
+    /// Blocks until the next robot status packet arrives.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::Timeout`] if no status arrives within `timeout`;
+    /// [`StreamMotionError::NotConnected`] or [`StreamMotionError::NotStarted`]
+    /// if the connection or session is gone.
     pub fn wait_for_status(
         &mut self,
         timeout: Duration,
     ) -> Result<RobotStatusPacket, StreamMotionError> {
-        self.driver.refresh();
-        if let Some(cnx) = &mut self.driver.connection {
-            let listener = cnx.itl.0.listen();
-            if listener.wait_timeout(timeout).is_some() {
-                self.driver.refresh();
-                if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
-                    return Ok(pkt);
+        // Register the listener and verify ITL state before draining pending
+        // packets — otherwise a status that arrives between refresh() and
+        // listen() fires notify() with no listeners and is silently lost.
+        let listener = match &self.driver.connection {
+            Some(cnx) => {
+                if !cnx.itl.1.load(Ordering::SeqCst) {
+                    return Err(StreamMotionError::NotStarted);
                 }
+                cnx.itl.0.listen()
             }
-            Err(StreamMotionError::Timeout)
-        } else {
-            Err(StreamMotionError::NotConnected)
+            None => return Err(StreamMotionError::NotConnected),
+        };
+        self.driver.refresh();
+        if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
+            return Ok(pkt);
         }
+        if listener.wait_timeout(timeout).is_some() {
+            self.driver.refresh();
+            if let Some(pkt) = self.driver.rx_storage.status.pop_back() {
+                return Ok(pkt);
+            }
+        }
+        Err(StreamMotionError::Timeout)
     }
 
+    /// Sends a single motion command in reply to the most recent status.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] or [`StreamMotionError::NotStarted`] if the
+    /// driver is no longer connected and started.
     #[inline]
     pub fn send_command(&mut self, motion: MotionCommandPacket) -> DriverResult<()> {
         self.driver
@@ -896,17 +972,23 @@ impl Drop for StmoControlLoop<'_> {
 }
 
 impl StreamMotionDriver {
+    /// Begins an [`StmoControlLoop`] session on this driver.
+    ///
+    /// # Errors
+    /// [`StreamMotionError::NotConnected`] if the driver has no live connection.
     pub fn control_loop(&mut self) -> Result<StmoControlLoop<'_>, StreamMotionError> {
         StmoControlLoop::try_new(self)
     }
 }
 
+/// Python bindings for the STMO driver.
 #[cfg(feature = "py")]
 pub mod py {
     use crate::stmo::types::JointMovementLimit;
 
     use super::*;
 
+    /// Python context-manager counterpart of [`StmoControlLoop`].
     #[derive(Debug)]
     #[pyclass(name = "StmoControlLoop")]
     pub struct PyStmoControlLoop {
@@ -937,29 +1019,64 @@ pub mod py {
             Ok(())
         }
 
+        /// Blocks (GIL released) until the next robot status packet arrives.
+        ///
+        /// # Errors
+        /// Timeout if no status arrives within `timeout_secs`; not-connected or
+        /// not-started if the connection or session is gone.
         pub fn wait_for_status(
             &mut self,
             py: Python<'_>,
             timeout_secs: f32,
         ) -> PyResult<RobotStatusPacket> {
             let timeout = Duration::from_secs_f32(timeout_secs);
-            if let Some(cnx) = &mut self.inner.borrow_mut(py).connection {
-                if !cnx.itl.1.load(Ordering::SeqCst) {
-                    return Err(StreamMotionError::NotStarted.into());
-                }
-                let listener = cnx.itl.0.listen();
-                if listener.wait_timeout(timeout).is_some() {
-                    self.inner.borrow_mut(py).refresh();
-                    if let Some(pkt) = self.inner.borrow_mut(py).rx_storage.status.pop_back() {
-                        return Ok(pkt);
+
+            // Clone the shared itl Arc and register the listener BEFORE
+            // refresh()/drain — otherwise a status that arrives between
+            // refresh() and listen() fires notify() with no listeners and is
+            // silently lost (event_listener doesn't buffer for unsubscribed
+            // listeners). The borrow is also dropped before blocking so other
+            // stmo_driver methods can run during the timeout window.
+            let listener = {
+                let driver = self.inner.borrow(py);
+                match &driver.connection {
+                    Some(cnx) => {
+                        if !cnx.itl.1.load(Ordering::SeqCst) {
+                            return Err(StreamMotionError::NotStarted.into());
+                        }
+                        cnx.itl.0.listen()
                     }
+                    None => return Err(StreamMotionError::NotConnected.into()),
                 }
-                Err(StreamMotionError::Timeout.into())
-            } else {
-                Err(StreamMotionError::NotConnected.into())
+            };
+
+            // Drain any status that arrived before we registered the listener.
+            {
+                let mut driver = self.inner.borrow_mut(py);
+                driver.refresh();
+                if let Some(pkt) = driver.rx_storage.status.pop_back() {
+                    return Ok(pkt);
+                }
             }
+
+            // Wait for the next status notification with the GIL released so
+            // other Python threads (and other stmo_driver methods) can run.
+            let woke = py.detach(|| listener.wait_timeout(timeout).is_some());
+
+            if woke {
+                let mut driver = self.inner.borrow_mut(py);
+                driver.refresh();
+                if let Some(pkt) = driver.rx_storage.status.pop_back() {
+                    return Ok(pkt);
+                }
+            }
+            Err(StreamMotionError::Timeout.into())
         }
 
+        /// Sends a single motion command in reply to the most recent status.
+        ///
+        /// # Errors
+        /// Not-connected or not-started if used outside an entered context manager.
         pub fn send_command(
             &mut self,
             py: Python<'_>,
@@ -979,13 +1096,16 @@ pub mod py {
 
     #[pymethods]
     impl StreamMotionDriver {
-        pub fn itl(slf: Bound<'_, StreamMotionDriver>) -> PyResult<PyStmoControlLoop> {
+        /// Returns a control-loop context manager for this driver.
+        #[pyo3(name = "control_loop")]
+        pub fn py_control_loop(slf: Bound<'_, StreamMotionDriver>) -> PyResult<PyStmoControlLoop> {
             Ok(PyStmoControlLoop {
                 inner: slf.unbind(),
             })
         }
     }
 
+    /// Registers the STMO driver classes on the given Python module.
     pub fn register(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
         parent_module.add_class::<AxisMotionConstraint>()?;
         parent_module.add_class::<JointMovementLimit>()?;

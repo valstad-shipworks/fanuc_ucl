@@ -25,6 +25,11 @@ pub struct ThreadConfig {
 }
 
 impl ThreadConfig {
+    /// Applies this configuration to the calling thread.
+    ///
+    /// # Errors
+    /// Fails if the CPU index or `SCHED_FIFO` priority is out of range or the
+    /// underlying scheduling call fails. Always fails on non-Linux platforms.
     pub fn configure_this_thread(&self) -> io::Result<()> {
         configure_thread_scheduling(self.priority, self.cpu_affinity)
     }
@@ -39,6 +44,7 @@ impl ThreadConfig {
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl ThreadConfig {
+    /// Creates a config with the given `SCHED_FIFO` priority and optional CPU core to pin to.
     #[on(new)]
     #[on(pyo3(signature=(priority=0, cpu_affinity=None)))]
     pub fn new(priority: i32, cpu_affinity: Option<usize>) -> Self {
@@ -120,9 +126,7 @@ fn configure_thread_scheduling(_prio: i32, _cpu_affinity: Option<usize>) -> io::
 pub(crate) enum WakerVariant {
     #[allow(dead_code)]
     Std(Arc<std::task::Waker>),
-    Mio(Arc<mio::Waker>),
-    #[cfg(test)]
-    Snare(Arc<snare::mio::Waker>),
+    Mio(Arc<snare::mio::Waker>),
 }
 
 #[derive(Debug)]
@@ -154,13 +158,8 @@ impl ThreadHandle {
         self.waker = Some(WakerVariant::Std(waker));
     }
 
-    pub fn set_waker_mio(&mut self, waker: Arc<mio::Waker>) {
+    pub fn set_waker_mio(&mut self, waker: Arc<snare::mio::Waker>) {
         self.waker = Some(WakerVariant::Mio(waker));
-    }
-
-    #[cfg(test)]
-    pub fn set_waker_snare(&mut self, waker: Arc<snare::mio::Waker>) {
-        self.waker = Some(WakerVariant::Snare(waker));
     }
 
     pub fn wake(&self) -> io::Result<()> {
@@ -171,8 +170,6 @@ impl ThreadHandle {
                     Ok(())
                 }
                 WakerVariant::Mio(w) => w.wake(),
-                #[cfg(test)]
-                WakerVariant::Snare(w) => w.wake(),
             }
         } else {
             Ok(())

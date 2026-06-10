@@ -3,14 +3,14 @@ mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};
 use parking_lot::Mutex;
+use snare::thread;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
-    thread,
     time::{Duration, SystemTime},
 };
 
@@ -21,10 +21,7 @@ use crate::{
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
-#[cfg(not(test))]
-use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
-#[cfg(test)]
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 
 const TOK_SOCKET: Token = Token(0);
@@ -136,7 +133,7 @@ pub struct JointAnglesPacket {
 impl JointAnglesPacket {
     /// Returns the joint angles converted from the internal FANUC radian format to the specified format and template.
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
-        format.convert_from(JointFormat::FanucRad, template, self.joints)
+        format.convert_from(JointFormat::FanucRad, &template, self.joints)
     }
 }
 
@@ -189,6 +186,35 @@ impl std::fmt::Display for VariablesPacket {
     }
 }
 
+/// Header fields shared by every HSPO packet type.
+///
+/// This trait is sealed and cannot be implemented outside this crate.
+pub trait HspoPacket: crate::sealed::Sealed {
+    /// Per-stream packet sequence index.
+    fn index(&self) -> u32;
+    /// Controller clock at send time (wrapping 32-bit, 1µs per unit).
+    fn clock(&self) -> u32;
+}
+
+macro_rules! impl_hspo_packet {
+    ($($pkt:ty),*) => {$(
+        impl crate::sealed::Sealed for $pkt {}
+        impl HspoPacket for $pkt {
+            fn index(&self) -> u32 {
+                self.index
+            }
+            fn clock(&self) -> u32 {
+                self.clock
+            }
+        }
+    )*};
+}
+impl_hspo_packet!(
+    TcpCartesianPositionPacket,
+    JointAnglesPacket,
+    VariablesPacket
+);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
 #[cfg_vis(test, pub)]
@@ -214,32 +240,101 @@ impl PacketType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_vis(test, pub)]
-struct ClockSpec {
-    mutex: Mutex<(u64, u64)>,
+enum HspoStream {
+    Tcp,
+    Joint,
+    Variables,
 }
 
-impl Default for ClockSpec {
-    fn default() -> Self {
-        ClockSpec {
-            mutex: Mutex::new((0, 0)),
+/// Per-stream clock tracker shared between the broker thread and a channel.
+///
+/// The broker folds each accepted packet's wrapping 32-bit clock into a cumulative
+/// value, recording at which packet index each wrap was first seen and the offset
+/// between the cumulative clock and system time. [`system_time_of`](Self::system_time_of)
+/// reconstructs the receive time of a buffered packet from that record.
+#[derive(Debug, Default)]
+#[cfg_vis(test, pub)]
+struct StreamClock {
+    state: Mutex<StreamClockState>,
+}
+
+#[derive(Debug, Default)]
+struct StreamClockState {
+    last_index: Option<u32>,
+    last_clock: u32,
+    wraps: u64,
+    /// `(first packet index seen at this wrap count, wrap count)`, newest last.
+    wrap_points: VecDeque<(u32, u64)>,
+    /// System micros minus cumulative clock micros, from the newest accepted packet.
+    offset_micros: Option<i64>,
+}
+
+impl StreamClock {
+    const SPAN: u64 = u32::MAX as u64 + 1;
+    const WRAP_HISTORY: usize = 32;
+
+    /// Gates a packet by index and folds its clock into the cumulative value,
+    /// recording wrap points and the clock-to-system offset as it goes.
+    ///
+    /// Returns `None` when `index` is older than the newest already seen on this
+    /// stream — a reordered or stale datagram the caller must disregard. Otherwise
+    /// returns the absolute cumulative clock `wraps * 2^32 + clock`.
+    ///
+    /// Because out-of-order packets are gated out here, the accepted samples are in
+    /// order, so a backward clock step on a strictly-newer packet is an unambiguous
+    /// 32-bit wrap. The boundary check (previous value near the top of the range, new
+    /// value near the bottom) covers streams whose index does not advance between
+    /// packets, e.g. duplicates or controllers that leave `index` fixed.
+    #[cfg_vis(test, pub)]
+    fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
+        const WRAP_GUARD: u32 = u32::MAX / 4;
+        let mut state = self.state.lock();
+        if let Some(last_index) = state.last_index {
+            if index < last_index {
+                return None;
+            }
+            let crossed_boundary = state.last_clock > u32::MAX - WRAP_GUARD && clock < WRAP_GUARD;
+            if clock < state.last_clock && (index > last_index || crossed_boundary) {
+                state.wraps += 1;
+            }
         }
+        if state.wrap_points.back().map(|&(_, w)| w) != Some(state.wraps) {
+            let wraps = state.wraps;
+            state.wrap_points.push_back((index, wraps));
+            if state.wrap_points.len() > Self::WRAP_HISTORY {
+                state.wrap_points.pop_front();
+            }
+        }
+        state.last_index = Some(index);
+        state.last_clock = clock;
+        let absolute = state.wraps * Self::SPAN + clock as u64;
+        state.offset_micros = Some(sys_micros as i64 - absolute as i64);
+        Some(absolute)
     }
-}
 
-impl ClockSpec {
+    /// Reconstructs the system time at which the packet carrying this index and
+    /// clock was received, or `None` before any packet has been accepted.
+    ///
+    /// The wrap count is the one in effect at the packet's index per the recorded
+    /// wrap points, so buffered packets resolve correctly even when read after the
+    /// clock has wrapped again. Assumes the controller clock ticks at 1µs per unit.
     #[cfg_vis(test, pub)]
-    fn write(&self, hspo_add: u64, system: u64) {
-        let mut guard = self.mutex.lock();
-        guard.0 += hspo_add;
-        guard.1 = system;
-    }
-
-    #[cfg_vis(test, pub)]
-    fn read(&self) -> (u64, u64) {
-        let guard = self.mutex.lock();
-        (guard.0, guard.1)
+    fn system_time_of(&self, index: u32, clock: u32) -> Option<SystemTime> {
+        let state = self.state.lock();
+        let offset = state.offset_micros?;
+        let wraps = state
+            .wrap_points
+            .iter()
+            .rev()
+            .find(|&&(first_index, _)| first_index <= index)
+            .map(|&(_, w)| w)
+            .or_else(|| state.wrap_points.front().map(|&(_, w)| w.saturating_sub(1)))?;
+        let micros = (wraps * Self::SPAN + clock as u64) as i128 + offset as i128;
+        u64::try_from(micros)
+            .ok()
+            .map(|m| SystemTime::UNIX_EPOCH + Duration::from_micros(m))
     }
 }
 
@@ -255,28 +350,31 @@ struct RobotSender {
     tcp_dropper: Receiver<TcpCartesianPositionPacket>,
     joint_dropper: Receiver<JointAnglesPacket>,
     var_dropper: Receiver<VariablesPacket>,
-    raw_clock: AtomicU32,
-    tracked_clock: Arc<ClockSpec>,
+    tcp_clock: Arc<StreamClock>,
+    joint_clock: Arc<StreamClock>,
+    var_clock: Arc<StreamClock>,
 }
 
 impl RobotSender {
-    fn update_clocks(&self, new_clock: u32) {
-        let prev_clock = self.raw_clock.load(Ordering::Relaxed);
-        let mut hspo_add = 0;
-        if new_clock < prev_clock {
-            let extra = (u32::MAX - prev_clock) as u64 + new_clock as u64 + 1;
-            hspo_add = extra;
-        } else if new_clock > prev_clock {
-            let diff = (new_clock - prev_clock) as u64;
-            hspo_add = diff;
-        }
-        self.raw_clock.store(new_clock, Ordering::Relaxed);
+    /// Gates a freshly received packet by its per-stream index and folds its clock
+    /// into the stream's shared wrap-corrected clock tracker.
+    ///
+    /// Returns `false` if `index` is older than the newest already seen on `stream`,
+    /// meaning the packet is reordered or stale and the caller must disregard it (not
+    /// forward it to its channel). Each stream tracks its own highest index.
+    fn accept_packet(&self, stream: HspoStream, index: u32, clock: u32) -> bool {
+        let stream_clock = match stream {
+            HspoStream::Tcp => &self.tcp_clock,
+            HspoStream::Joint => &self.joint_clock,
+            HspoStream::Variables => &self.var_clock,
+        };
         let sys_micros = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
             .as_micros();
-        self.tracked_clock
-            .write(hspo_add, sys_micros.try_into().unwrap_or(u64::MAX));
+        stream_clock
+            .accept(index, clock, sys_micros.try_into().unwrap_or(u64::MAX))
+            .is_some()
     }
 }
 
@@ -286,16 +384,48 @@ impl RobotSender {
 #[derive(Debug)]
 pub struct HspoChannel<T> {
     rx: Receiver<T>,
+    clock: Arc<StreamClock>,
+}
+
+impl<T> Clone for HspoChannel<T> {
+    fn clone(&self) -> Self {
+        Self {
+            rx: self.rx.clone(),
+            clock: self.clock.clone(),
+        }
+    }
+}
+
+impl<T: HspoPacket> HspoChannel<T> {
+    /// Returns the system time at which the broker received `packet`, reconstructed
+    /// from the packet's index and controller clock using the stream's recorded
+    /// wrap points and clock-to-system offset.
+    ///
+    /// Works for buffered packets read after the controller's 32-bit clock has
+    /// wrapped again. Returns `None` if nothing has been received on this stream yet.
+    pub fn received_at(&self, packet: &T) -> Option<SystemTime> {
+        self.clock.system_time_of(packet.index(), packet.clock())
+    }
 }
 
 impl<T> HspoChannel<T> {
-    fn new(rx: Receiver<T>) -> Self {
-        Self { rx }
+    fn new(rx: Receiver<T>, clock: Arc<StreamClock>) -> Self {
+        Self { rx, clock }
     }
 
     /// Blocks until a packet is received or the timeout elapses.
     pub fn wait_for(&self, timeout: Duration) -> Option<T> {
         self.rx.recv_timeout(timeout).ok()
+    }
+
+    /// Awaits the next packet. Resolves to `None` if the broker is destroyed.
+    ///
+    /// Buffered packets are yielded immediately; otherwise the future is woken
+    /// when the broker thread delivers the next packet. Pair with your runtime's
+    /// timeout combinator if a deadline is needed.
+    #[cfg(feature = "async")]
+    pub async fn recv_async(&self) -> Option<T> {
+        self.rx.recv_async().await.ok()
     }
 
     /// Returns the next buffered packet without blocking, or `None` if the buffer is empty.
@@ -344,19 +474,19 @@ mod py_channel {
     impl PyHspoChannel {
         pub fn from_tcp(channel: &HspoChannel<TcpCartesianPositionPacket>) -> Self {
             Self {
-                inner: InnerChannel::Tcp(HspoChannel::new(channel.clone_rx())),
+                inner: InnerChannel::Tcp(channel.clone()),
             }
         }
 
         pub fn from_joint(channel: &HspoChannel<JointAnglesPacket>) -> Self {
             Self {
-                inner: InnerChannel::Joint(HspoChannel::new(channel.clone_rx())),
+                inner: InnerChannel::Joint(channel.clone()),
             }
         }
 
         pub fn from_var(channel: &HspoChannel<VariablesPacket>) -> Self {
             Self {
-                inner: InnerChannel::Var(HspoChannel::new(channel.clone_rx())),
+                inner: InnerChannel::Var(channel.clone()),
             }
         }
     }
@@ -429,18 +559,34 @@ mod py_channel {
         fn clear(&self) {
             dispatch_channel!(self, clear);
         }
+
+        /// Returns the system time the broker received `packet` as seconds since
+        /// the Unix epoch, or `None` if nothing has been received on this stream yet.
+        fn received_at(&self, packet: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+            let received = match &self.inner {
+                InnerChannel::Tcp(ch) => {
+                    ch.received_at(&packet.extract::<TcpCartesianPositionPacket>()?)
+                }
+                InnerChannel::Joint(ch) => ch.received_at(&packet.extract::<JointAnglesPacket>()?),
+                InnerChannel::Var(ch) => ch.received_at(&packet.extract::<VariablesPacket>()?),
+            };
+            Ok(received.map(|t| {
+                t.duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or(Duration::ZERO)
+                    .as_secs_f64()
+            }))
+        }
     }
 }
 
 /// Receives HSPO (High Speed Position Output) packets from a specific FANUC controller.
 ///
-/// Created via [`initialize_broker`] followed by [`try_new`](Self::try_new). Packets are buffered internally
+/// Created via [`initialize_broker`] followed by `try_new`. Packets are buffered internally
 /// and can be consumed via the [`tcp`](Self::tcp), [`joint`](Self::joint), and [`var`](Self::var) channels.
 #[cfg_attr(feature = "py", pyo3::pyclass)]
 #[derive(Debug)]
 pub struct HspoReceiver {
     connection_active: Arc<AtomicBool>,
-    tracked_clock: Arc<ClockSpec>,
     /// Channel for TCP cartesian position packets.
     pub tcp: HspoChannel<TcpCartesianPositionPacket>,
     /// Channel for joint angles packets.
@@ -495,21 +641,6 @@ impl HspoReceiver {
     /// Returns `true` if a packet has been received from this robot recently.
     pub fn is_connected(&self) -> bool {
         self.connection_active.load(Ordering::Relaxed)
-    }
-
-    /// Returns the cumulative HSPO clock in microseconds, accounting for wraps of the controller's 32-bit clock.
-    pub fn clock_micros(&self) -> u64 {
-        self.tracked_clock.read().0
-    }
-
-    /// Returns the cumulative HSPO clock in milliseconds.
-    pub fn clock_ms(&self) -> f64 {
-        self.clock_micros() as f64 / 1000.0
-    }
-
-    /// Returns a pair of `(hspo_clock_micros, system_time_micros)` for correlating controller time with system time.
-    pub fn clock_pair_micros(&self) -> (u64, u64) {
-        self.tracked_clock.read()
     }
 
     /// Returns the TCP cartesian position channel.
@@ -628,7 +759,9 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        rs.update_clocks(p.clock);
+                                        if !rs.accept_packet(HspoStream::Tcp, p.index, p.clock) {
+                                            continue;
+                                        }
                                         match rs.tcp_tx.try_send(p) {
                                             Ok(_) => {}
                                             Err(TrySendError::Full(fb_p)) => {
@@ -650,7 +783,9 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        rs.update_clocks(p.clock);
+                                        if !rs.accept_packet(HspoStream::Joint, p.index, p.clock) {
+                                            continue;
+                                        }
                                         match rs.joint_tx.try_send(p) {
                                             Ok(_) => {}
                                             Err(TrySendError::Full(fb_p)) => {
@@ -670,7 +805,13 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        rs.update_clocks(p.clock);
+                                        if !rs.accept_packet(
+                                            HspoStream::Variables,
+                                            p.index,
+                                            p.clock,
+                                        ) {
+                                            continue;
+                                        }
                                         match rs.var_tx.try_send(p) {
                                             Ok(_) => {}
                                             Err(TrySendError::Full(fb_p)) => {
@@ -735,11 +876,10 @@ impl HspoBroker {
         let (joint_tx, joint_rx) = bounded::<JointAnglesPacket>(packet_buffer_size);
         let (var_tx, var_rx) = bounded::<VariablesPacket>(packet_buffer_size);
         let connection_active = Arc::new(AtomicBool::new(false));
-        let tracked_clock = Arc::new(ClockSpec::default());
 
-        let tcp = HspoChannel::new(tcp_rx);
-        let joint = HspoChannel::new(joint_rx);
-        let var = HspoChannel::new(var_rx);
+        let tcp = HspoChannel::new(tcp_rx, Arc::new(StreamClock::default()));
+        let joint = HspoChannel::new(joint_rx, Arc::new(StreamClock::default()));
+        let var = HspoChannel::new(var_rx, Arc::new(StreamClock::default()));
 
         let robot_sender = RobotSender {
             ip_of_interest,
@@ -752,8 +892,9 @@ impl HspoBroker {
             tcp_dropper: tcp.clone_rx(),
             joint_dropper: joint.clone_rx(),
             var_dropper: var.clone_rx(),
-            raw_clock: AtomicU32::new(0),
-            tracked_clock: tracked_clock.clone(),
+            tcp_clock: tcp.clock.clone(),
+            joint_clock: joint.clock.clone(),
+            var_clock: var.clock.clone(),
         };
 
         log::info!(
@@ -768,7 +909,6 @@ impl HspoBroker {
 
         Ok(HspoReceiver {
             connection_active,
-            tracked_clock,
             tcp,
             joint,
             var,
@@ -786,11 +926,9 @@ impl HspoBroker {
 
         let thread_kill_switch = local_kill_switch.clone();
         let thread_err_flag = local_err_flag.clone();
-        let thread_id = std::thread::current().id();
         let _thread_handle = thread::Builder::new()
             .name("hspo_server".to_string())
             .spawn(move || {
-                snare::register_thread_child_of(thread_id);
                 if let Err(e) = broker_runtime(
                     listen_on,
                     thread_config,

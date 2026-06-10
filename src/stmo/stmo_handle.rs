@@ -28,6 +28,8 @@ impl StmoHandle {
     }
 }
 
+impl crate::sealed::Sealed for StmoHandle {}
+
 #[inherent]
 impl ResponseHandle for StmoHandle {
     type Ret = ();

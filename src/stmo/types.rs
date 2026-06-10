@@ -321,10 +321,10 @@ pub enum StreamMotionError {
     JointDataSizeError(#[from] JointDataSizeError),
     #[error("Invalid Joint Count: {0}")]
     InvalidJointCount(u8),
-    #[error("Encoding Error")]
-    EncodingError(#[from] bincode::error::EncodeError),
-    #[error("Decoding Error")]
-    DecodingError(#[from] bincode::error::DecodeError),
+    #[error("Encoding Error: {0}")]
+    EncodingError(String),
+    #[error("Decoding Error: {0}")]
+    DecodingError(String),
     #[error("{0}")]
     ResponseNotFulfilled(#[from] ResponseNotFulfilled),
     #[error("Other Error: {0}")]
@@ -337,6 +337,18 @@ impl From<std::io::Error> for StreamMotionError {
         } else {
             StreamMotionError::Io(err)
         }
+    }
+}
+
+impl From<bincode::error::EncodeError> for StreamMotionError {
+    fn from(err: bincode::error::EncodeError) -> Self {
+        StreamMotionError::EncodingError(err.to_string())
+    }
+}
+
+impl From<bincode::error::DecodeError> for StreamMotionError {
+    fn from(err: bincode::error::DecodeError) -> Self {
+        StreamMotionError::DecodingError(err.to_string())
     }
 }
 

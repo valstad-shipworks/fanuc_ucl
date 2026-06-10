@@ -63,6 +63,12 @@ pub trait ReadableDataPort: DataPort {
     fn expected_size(_target_idx: u16, count: u16) -> usize {
         std::mem::size_of::<Self::ValueType>() * count as usize
     }
+    /// Minimum payload length required by [`unpack_array`](Self::unpack_array). Defaults to
+    /// [`expected_size`](Self::expected_size); bit-packed ports override this because they index
+    /// the payload by absolute byte offset rather than relative to the start of the read.
+    fn expected_array_size(target_idx: u16, count: u16) -> usize {
+        Self::expected_size(target_idx, count)
+    }
     fn unpack_single(target_idx: u16, data: &[u8]) -> Self::ValueType;
     fn unpack_array(target_idx: u16, data: &[u8], count: u16) -> Box<[Self::ValueType]>;
 }
@@ -128,6 +134,12 @@ macro_rules! readable_impl {
             fn expected_size(target_idx: u16, count: u16) -> usize {
                 let (_, count_aligned) = Self::align_read(target_idx, count);
                 (count_aligned / 8) as usize
+            }
+
+            #[inline]
+            fn expected_array_size(target_idx: u16, count: u16) -> usize {
+                let end_bit = target_idx as usize + count as usize;
+                end_bit.div_ceil(8)
             }
 
             #[inline]

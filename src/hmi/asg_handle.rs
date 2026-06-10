@@ -32,7 +32,7 @@ impl<T: AsgEncodableType> AsgVarInterface<T, 1> {
         value: impl AsgEncodableType,
     ) -> DriverResult<HmiHandle<()>> {
         let bytes = self.entry.encode_to_bytes(&value.into())?;
-        driver.write_array::<ports::Register>(self.entry.address as usize, bytes_to_i16(&bytes))
+        driver.write_array::<ports::Register>(self.entry.address as usize, &bytes_to_i16(&bytes))
     }
 
     /// Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response.
@@ -65,7 +65,7 @@ macro_rules! arr_size_impl {
                     for value in values.into_iter() {
                         bytes.extend(self.entry.encode_to_bytes(&value.into())?);
                     }
-                    driver.write_array::<ports::Register>(self.entry.address as usize, bytes_to_i16(&bytes))
+                    driver.write_array::<ports::Register>(self.entry.address as usize, &bytes_to_i16(&bytes))
                 }
 
                 pub fn read(&self, driver: &HmiDriver) -> DriverResult<HmiHandle<[T; $num]>> {
@@ -827,7 +827,7 @@ pub(super) mod py {
             let asg_value = py_value_to_asg_value(&value, self.entry.tag)?;
             let bytes = self.entry.encode_to_bytes(&asg_value)?;
             let gen_handle = driver
-                .write_array::<ports::Register>(self.entry.address as usize, bytes_to_i16(&bytes))?
+                .write_array::<ports::Register>(self.entry.address as usize, &bytes_to_i16(&bytes))?
                 .generic();
             Ok(PyHmiHandleGeneric {
                 inner: gen_handle,

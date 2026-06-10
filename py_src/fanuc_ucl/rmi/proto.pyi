@@ -1,6 +1,6 @@
 from enum import Enum
 
-from fanuc_ucl import JointFormat, JointTemplate
+from fanuc_ucl._common import JointFormat, JointTemplate
 
 __all__ = [
     "Command",
