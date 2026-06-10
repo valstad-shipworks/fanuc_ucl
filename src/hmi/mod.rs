@@ -153,10 +153,7 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: f64 = 1.0;
 #[derive(Debug)]
 struct HmiConnection {
     handle: ThreadHandle,
-    #[cfg(test)]
     waker: Arc<snare::mio::Waker>,
-    #[cfg(not(test))]
-    waker: Arc<mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
 }
