@@ -25,6 +25,11 @@ pub struct ThreadConfig {
 }
 
 impl ThreadConfig {
+    /// Applies this configuration to the calling thread.
+    ///
+    /// # Errors
+    /// Fails if the CPU index or `SCHED_FIFO` priority is out of range or the
+    /// underlying scheduling call fails. Always fails on non-Linux platforms.
     pub fn configure_this_thread(&self) -> io::Result<()> {
         configure_thread_scheduling(self.priority, self.cpu_affinity)
     }
@@ -39,6 +44,7 @@ impl ThreadConfig {
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl ThreadConfig {
+    /// Creates a config with the given `SCHED_FIFO` priority and optional CPU core to pin to.
     #[on(new)]
     #[on(pyo3(signature=(priority=0, cpu_affinity=None)))]
     pub fn new(priority: i32, cpu_affinity: Option<usize>) -> Self {

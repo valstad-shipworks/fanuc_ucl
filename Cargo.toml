@@ -1,12 +1,15 @@
 [package]
 name = "fanuc_ucl"
-version = "1.4.1"
+version = "1.5.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
 description = "Unofficial Control Library for FANUC Robots"
 repository = "https://github.com/valstad-shipworks/fanuc_ucl"
+documentation = "https://docs.rs/fanuc_ucl"
+readme = "README.md"
 keywords = ["python", "robotics", "fanuc"]
+categories = ["science::robotics", "hardware-support", "network-programming"]
 exclude = ["examples/showcase.gif", "examples/showcase.mp4"]
 
 
@@ -42,12 +45,12 @@ inherent = { version = "1.0.13", optional = true }
 openport = { version = "0.1.1", optional = true }
 parking_lot = "0.12.5"
 log = { version = "0.4.29", features = ["release_max_level_debug", "std"] }
-snare = { path = "../snare", features = ["mio-compat"] }
+snare = { path = "../snare", version = "1.3.0", features = ["mio-compat"] }
 cfg-vis = "0.3.0"
 env_logger = { version = "0.11.9", optional = true}
 
 [dev-dependencies]
-snare = { path = "../snare", features = ["shim", "mio-compat"] }
+snare = { path = "../snare", version = "1.3.0", features = ["shim", "mio-compat"] }
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.28.0", optional = true, features = [
@@ -60,7 +63,7 @@ pyo3 = { version = "0.28.0", optional = true, features = [
 
 [features]
 default = ["stmo", "rmi", "hspo", "hmi"]
-async = []
+async = ["flume/async"]
 stmo = ["joint_conv", "bincode", "spin_sleep", "libc", "bitflags", "openport", "event-listener"]
 rmi = [
     "joint_conv",

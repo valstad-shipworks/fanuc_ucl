@@ -332,7 +332,7 @@ float_vec_joint!(&mut f64, std::f64::consts::PI);
 float_vec_joint!(f32, std::f32::consts::PI);
 float_vec_joint!(&mut f32, std::f32::consts::PI);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JointDataSizeError(pub usize);
 impl std::fmt::Display for JointDataSizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

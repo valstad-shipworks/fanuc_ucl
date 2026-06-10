@@ -168,11 +168,17 @@ impl std::fmt::Display for ResponseNotFulfilled {
 }
 impl std::error::Error for ResponseNotFulfilled {}
 
+mod sealed {
+    pub trait Sealed {}
+}
+
 /// A trait representing a handle to an asynchronous response that can be awaited or queried for its status in synchronous contexts.
 /// This is used for operations that may complete in the future, allowing the caller to check if the response is ready,
 /// retrieve the result, or wait for completion with an optional timeout.
+///
+/// This trait is sealed and cannot be implemented outside this crate.
 pub trait ResponseHandle:
-    Future<Output = Result<Self::Ret, Self::Error>> + Send + Sync + 'static
+    sealed::Sealed + Future<Output = Result<Self::Ret, Self::Error>> + Send + Sync + 'static
 {
     type Ret;
     type Error: std::error::Error;

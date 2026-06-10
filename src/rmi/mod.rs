@@ -1,3 +1,4 @@
+#[warn(missing_docs)]
 pub mod driver;
 pub mod errors;
 pub mod proto;

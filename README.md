@@ -70,6 +70,150 @@ def main():
 ```
 
 
+### Stream Motion
+
+Stream Motion gives real-time joint-level control of the robot at the interpolation
+rate (typically 8ms). The controller requests a position every cycle and the driver's
+I/O thread answers from a queue of motion commands; `command_motion` returns a handle
+that is set once the whole batch has been transmitted. The second argument to
+`StreamMotionDriver::new` controls whether the stream is marked finished when the
+queue runs dry, and individual packets can be flagged with `set_last_command`.
+
+#### Batch streaming
+
+```rust
+use std::time::Duration;
+
+use fanuc_ucl::{
+    ThreadConfig,
+    joints::{JointFormat, JointTemplate},
+    stmo::{StreamMotionDriver, proto::MotionCommandPacket},
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], false);
+    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.start(2.0)?;
+
+    let limits = driver.fetch_movement_limits(0)?;
+    println!("Velocity cap: {}", limits.vmax);
+
+    // one command per cycle: sweep J1 through a 10 degree sine wave over 4 seconds
+    let home = [0.0f32, 0.0, 0.0, 0.0, -90.0, 0.0];
+    let mut commands = Vec::with_capacity(500);
+    for i in 0..500 {
+        let mut joints = home;
+        joints[0] += 10.0 * (i as f32 / 500.0 * std::f32::consts::TAU).sin();
+        commands.push(MotionCommandPacket::try_from_joints(
+            JointFormat::FanucDeg,
+            JointTemplate::SIX,
+            joints,
+        )?);
+    }
+
+    let handle = driver.command_motion(commands)?;
+    // do other work while the batch streams out …
+    handle.wait_timeout(Duration::from_secs(10))?;
+
+    driver.stop();
+    driver.disconnect();
+    Ok(())
+}
+```
+
+```python
+import math
+
+from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
+
+def main():
+    driver = stmo.StreamMotionDriver("10.0.0.1")
+    driver.connect(ThreadConfig(80, None))
+    driver.start(2.0)
+
+    limits = driver.fetch_movement_limits(0)
+    print(f"Velocity cap: {limits.vmax}")
+
+    # one command per cycle: sweep J1 through a 10 degree sine wave over 4 seconds
+    home = [0.0, 0.0, 0.0, 0.0, -90.0, 0.0]
+    commands = []
+    for i in range(500):
+        joints = home.copy()
+        joints[0] += 10.0 * math.sin(i / 500.0 * math.tau)
+        commands.append(stmo.MotionCommandPacket.try_from_joints(
+            JointFormat.FanucDeg, JointTemplate.SIX, joints,
+        ))
+
+    handle = driver.command_motion(commands)
+    # do other work while the batch streams out …
+    handle.wait_timeout(10.0)
+
+    driver.stop()
+    driver.disconnect()
+```
+
+#### In-the-loop control
+
+The control loop interface (`StmoControlLoop`) reacts to each robot status cycle
+as it arrives — useful for sensor-based feedback or adaptive trajectories.
+
+```rust
+use std::time::Duration;
+
+use fanuc_ucl::{
+    ThreadConfig,
+    joints::{JointFormat, JointTemplate},
+    stmo::{StreamMotionDriver, proto::MotionCommandPacket},
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], false);
+    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.start(2.0)?;
+
+    {
+        let mut ctl = driver.control_loop()?;
+        for _ in 0..500 {
+            let status = ctl.wait_for_status(Duration::from_millis(100))?;
+            let mut joints = status.joints(JointFormat::FanucDeg, JointTemplate::SIX);
+            // compute the next setpoint from current feedback …
+            joints[5] += 0.05;
+            ctl.send_command(MotionCommandPacket::try_from_joints(
+                JointFormat::FanucDeg,
+                JointTemplate::SIX,
+                joints,
+            )?)?;
+        }
+    } // control loop dropped — the driver resumes normal queue behaviour
+
+    driver.stop();
+    driver.disconnect();
+    Ok(())
+}
+```
+
+```python
+from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
+
+def main():
+    driver = stmo.StreamMotionDriver("10.0.0.1")
+    driver.connect(ThreadConfig(80, None))
+    driver.start(2.0)
+
+    with driver.control_loop() as ctl:
+        for _ in range(500):
+            status = ctl.wait_for_status(0.1)
+            joints = list(status.joints(JointFormat.FanucDeg, JointTemplate.SIX))
+            # compute the next setpoint from current feedback …
+            joints[5] += 0.05
+            ctl.send_command(stmo.MotionCommandPacket.try_from_joints(
+                JointFormat.FanucDeg, JointTemplate.SIX, joints,
+            ))
+
+    driver.stop()
+    driver.disconnect()
+```
+
 ### RMI
 
 ```rust
@@ -178,21 +322,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let receiver = HspoReceiver::try_new([10, 0, 0, 1], 128, Duration::from_millis(10))?;
 
-    if let Some(joint_packet) = receiver.wait_for_joint_packet(Duration::from_millis(16)) {
+    if let Some(joint_packet) = receiver.joint.wait_for(Duration::from_millis(16)) {
         println!(
             "Received joint packet: {:?}",
             joint_packet.joints(JointFormat::AbsDeg, JointTemplate::SIX)
         );
     }
 
-    receiver.clear_tcp_packet_buffer();
+    receiver.tcp.clear();
     sleep(Duration::from_secs(1));
-    let opt_tcp_packet = receiver.try_recv_tcp_packet();
+    let opt_tcp_packet = receiver.tcp.try_recv();
     match opt_tcp_packet {
         Some(packet) => println!("Received TCP packet: {:?}", packet),
         None => println!("No TCP packet received within the timeout."),
     }
-    let var_packets = receiver.recv_all_var_packets();
+    let var_packets = receiver.var.recv_all();
     println!(
         "Received {} Variables packets: {:?}",
         var_packets.len(),
@@ -212,17 +356,17 @@ def main():
 
     receiver = hspo.HspoReceiver("10.0.0.1", 128)
 
-    joint_packet = receiver.wait_for_joint_packet(0.016)
+    joint_packet = receiver.joint.wait_for(0.016)
     if joint_packet is not None:
         print(f"Received joint packet: {joint_packet.joints(JointFormat.AbsDeg, JointTemplate.SIX)}")
 
-    receiver.clear_tcp_packet_buffer()
-    tcp_packet = receiver.try_recv_tcp_packet()
+    receiver.tcp.clear()
+    tcp_packet = receiver.tcp.try_recv()
     if tcp_packet is not None:
         print(f"Received TCP packet: {tcp_packet}")
     else:
         print("No TCP packet received within the timeout.")
-    var_packets = receiver.recv_all_var_packets()
+    var_packets = receiver.var.recv_all()
     print(f"Received {len(var_packets)} Variables packets: {var_packets}")
 
     hspo.destroy_broker()
@@ -306,154 +450,14 @@ def main():
     # When the Rustdocs are finished it will delve more into it.
 ```
 
-### Stream Motion
-
-Stream Motion allows real-time joint-level control of a FANUC robot at the servo loop rate.
-Commands are batched and streamed over UDP; `command_motion` returns an `StmoHandle` that can be
-waited on to know when the batch has been transmitted.
-
-#### Basic batch usage
-
-```rust
-use std::time::Duration;
-
-use fanuc_ucl::{
-    joints::{JointFormat, JointTemplate},
-    stmo::{StreamMotionDriver, StmoHandle},
-    stmo::proto::MotionCommandPacket,
-    ThreadConfig,
-};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut driver = StreamMotionDriver::new([10, 0, 0, 1]);
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
-    driver.start(2.0)?;
-
-    let limits = driver.fetch_movement_limits(0)?;
-    println!("vmax = {}", limits.vmax);
-
-    let mut cmd1 = MotionCommandPacket::try_from_joints(
-        JointFormat::AbsDeg,
-        JointTemplate::SIX,
-        &[-90.0, 0.0, 0.0, -180.0, 90.0, 180.0],
-    )?;
-    let mut cmd2 = MotionCommandPacket::try_from_joints(
-        JointFormat::AbsDeg,
-        JointTemplate::SIX,
-        &[90.0, 0.0, 0.0, 180.0, -90.0, -180.0],
-    )?;
-    cmd2.set_last_command(true);
-
-    let handle: StmoHandle = driver.command_motion(vec![cmd1, cmd2])?;
-    // do other work while the commands are being streamed …
-    handle.wait_timeout(Duration::from_secs(5))?;
-
-    driver.stop();
-    driver.disconnect();
-    Ok(())
-}
-```
-
-```python
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
-
-def main():
-    driver = stmo.StreamMotionDriver("10.0.0.1")
-    driver.connect(ThreadConfig(80, None))
-    driver.start(2.0)
-
-    limits = driver.fetch_movement_limits(0)
-    print(f"vmax = {limits.vmax}")
-
-    cmd1 = stmo.MotionCommandPacket.try_from_joints(
-        JointFormat.AbsDeg, JointTemplate.SIX,
-        [-90.0, 0.0, 0.0, -180.0, 90.0, 180.0],
-    )
-    cmd2 = stmo.MotionCommandPacket.try_from_joints(
-        JointFormat.AbsDeg, JointTemplate.SIX,
-        [90.0, 0.0, 0.0, 180.0, -90.0, -180.0],
-    )
-    cmd2.set_last_command(True)
-
-    handle = driver.command_motion([cmd1, cmd2])
-    # do other work while the commands are being streamed …
-    handle.wait_timeout(5.0)
-
-    driver.stop()
-    driver.disconnect()
-```
-
-#### In-the-loop control
-
-The control loop interface (`StmoControlLoop`) lets you react to each robot status
-cycle — useful for sensor-based feedback or adaptive trajectories.
-
-```rust
-use std::time::Duration;
-
-use fanuc_ucl::{
-    joints::{JointFormat, JointTemplate},
-    stmo::StreamMotionDriver,
-    stmo::proto::MotionCommandPacket,
-    ThreadConfig,
-};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut driver = StreamMotionDriver::new([10, 0, 0, 1]);
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
-    driver.start(2.0)?;
-
-    {
-        let mut ctl = driver.control_loop()?;
-        for _ in 0..100 {
-            let status = ctl.wait_for_status(Duration::from_millis(100))?;
-            let cur = status.joints(JointFormat::AbsDeg);
-            // compute next setpoint based on current feedback …
-            let cmd = MotionCommandPacket::try_from_joints(
-                JointFormat::AbsDeg,
-                JointTemplate::SIX,
-                &cur,
-            )?;
-            ctl.send_command(cmd)?;
-        }
-    } // control loop dropped — driver resumes normal hold behaviour
-
-    driver.stop();
-    driver.disconnect();
-    Ok(())
-}
-```
-
-```python
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
-
-def main():
-    driver = stmo.StreamMotionDriver("10.0.0.1")
-    driver.connect(ThreadConfig(80, None))
-    driver.start(2.0)
-
-    with driver.itl() as ctl:
-        for _ in range(100):
-            status = ctl.wait_for_status(0.1)
-            cur = status.joints(JointFormat.AbsDeg)
-            # compute next setpoint based on current feedback …
-            cmd = stmo.MotionCommandPacket.try_from_joints(
-                JointFormat.AbsDeg, JointTemplate.SIX, cur,
-            )
-            ctl.send_command(cmd)
-
-    driver.stop()
-    driver.disconnect()
-```
-
 ## Roadmap
 - Pydocs and Rustdocs for all public APIs
 - ~~Switch python terminal logging to pylog instead of tracing~~
 - ~~Implement an "In The Loop" interface for the `StreamMotionDriver` to make using feedback from sensors easier.~~
 - Implement a unit-safe api for working with Cartesian poses.
-- Update docs to show the usage of stream motion and in-the-loop examples
+- ~~Update docs to show the usage of stream motion and in-the-loop examples~~
 - Update docs to show the usage of async rmi/hmi response handles
-- Add async to hspo
+- ~~Add async to hspo~~
 - Add support for async to python
 - ~~Removing all possible panic locations and have graceful error handling for all failure modes.~~
 - ~~Extensive unit testing, I wrote a special network testing library for this I just need to write the actual tests using it~~

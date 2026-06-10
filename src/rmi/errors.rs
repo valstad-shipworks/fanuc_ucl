@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{ResponseNotFulfilled, rmi::FeatureGateFailure};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketMismatchError;
 impl std::fmt::Display for PacketMismatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -71,6 +71,11 @@ impl From<serde_json::Error> for RmiError {
 
 pub type RmiResult<T> = Result<T, RmiError>;
 
+/// Error codes reported by the RMI protocol.
+///
+/// Display messages intentionally mirror the wording in FANUC's RMI
+/// documentation (including capitalization) so they can be cross-referenced
+/// against the manual.
 #[repr(u32)]
 #[derive(Debug, Serialize, Deserialize, IntEnum, Clone, Default, Copy, PartialEq, Eq)]
 pub enum RmiProtocolError {

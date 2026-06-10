@@ -85,6 +85,8 @@ impl RmiHandleGeneric {
     }
 }
 
+impl crate::sealed::Sealed for RmiHandleGeneric {}
+
 #[inherent]
 impl ResponseHandle for RmiHandleGeneric {
     type Ret = ResponsePacket;
@@ -173,6 +175,8 @@ impl<T: ReceivablePacket> RmiHandle<T> {
         self.generic.clone()
     }
 }
+
+impl<T: ReceivablePacket> crate::sealed::Sealed for RmiHandle<T> {}
 
 #[inherent]
 impl<T: ReceivablePacket> ResponseHandle for RmiHandle<T> {
@@ -393,6 +397,14 @@ pub(super) mod py {
 
         pub fn wait(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
             self.wait_timeout(py, 100000.0)
+        }
+
+        pub fn timestamp(&self) -> Option<f64> {
+            self.inner.timestamp().map(|t| {
+                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+            })
         }
     }
 

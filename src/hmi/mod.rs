@@ -49,30 +49,37 @@ pub use proto::asg;
 /// Errors that can occur during HMI communication with a FANUC robot controller.
 #[derive(Debug, thiserror::Error)]
 pub enum HmiError {
+    /// A blocking wait on a response exceeded its timeout.
     #[error("Timeout")]
     Timeout,
+    /// The driver has no live connection to the controller.
     #[error("Not connected")]
     NotConnected,
+    /// The driver has not been started yet.
     #[error("Not started")]
     NotStarted,
+    /// An I/O error occurred on the underlying TCP connection.
     #[error("I/O Error: {0}")]
     Io(std::io::Error),
+    /// An index or count did not fit in the protocol's integer width.
     #[error("Invalid Int Size: {0}")]
     InvalidIntSize(#[from] std::num::TryFromIntError),
+    /// Index 0 was passed for a one-indexed port type.
     #[error("Zero Index")]
     ZeroIndex,
-    #[error("Encoding Error: {0}")]
-    Encoding(#[from] bincode::error::EncodeError),
-    #[error("Decoding Error: {0}")]
-    Decoding(#[from] bincode::error::DecodeError),
+    /// A message failed to encode or decode.
     #[error("Bincode Error: {0}")]
     Bincode(String),
+    /// A response carried a sequence number matching no outstanding request.
     #[error("Unexpected Sequence Number: {0}")]
     UnexpectedSequenceNumber(u8),
+    /// A response payload did not match the expected layout.
     #[error("Malformed Response")]
     MalformedResponse,
+    /// A handle was consumed before the controller responded.
     #[error("{0}")]
     ResponseNotFulfilled(#[from] ResponseNotFulfilled),
+    /// Any other failure, described by the contained message.
     #[error("Other Error: {0}")]
     Other(String),
 }
@@ -87,6 +94,18 @@ impl From<std::io::Error> for HmiError {
     }
 }
 
+impl From<bincode::error::EncodeError> for HmiError {
+    fn from(err: bincode::error::EncodeError) -> Self {
+        HmiError::Bincode(err.to_string())
+    }
+}
+
+impl From<bincode::error::DecodeError> for HmiError {
+    fn from(err: bincode::error::DecodeError) -> Self {
+        HmiError::Bincode(err.to_string())
+    }
+}
+
 impl Clone for HmiError {
     fn clone(&self) -> Self {
         match self {
@@ -96,8 +115,6 @@ impl Clone for HmiError {
             HmiError::Io(e) => HmiError::Io(std::io::Error::new(e.kind(), e.to_string())),
             HmiError::InvalidIntSize(e) => HmiError::InvalidIntSize(*e),
             HmiError::ZeroIndex => HmiError::ZeroIndex,
-            HmiError::Encoding(e) => HmiError::Bincode(format!("{}", e)),
-            HmiError::Decoding(e) => HmiError::Bincode(format!("{}", e)),
             HmiError::Bincode(s) => HmiError::Bincode(s.clone()),
             HmiError::UnexpectedSequenceNumber(n) => HmiError::UnexpectedSequenceNumber(*n),
             HmiError::MalformedResponse => HmiError::MalformedResponse,
@@ -158,7 +175,7 @@ pub struct HmiDriver {
 impl HmiDriver {
     /// Creates a new HmiDriver instance with the specified remote IP address of the HMI.
     ///
-    /// This does not immediately establish a connection to the HMI; the [connect] method must be called to do so.
+    /// This does not immediately establish a connection to the HMI; the [`connect`](Self::connect) method must be called to do so.
     pub fn new<T: Into<IpAddr>>(remote_addr: T) -> Self {
         Self {
             remote_addr: remote_addr.into(),
@@ -171,6 +188,10 @@ impl HmiDriver {
     /// Connects to the HMI and performs the necessary handshake to establish communication.
     ///
     /// This method is blocking and will wait for the connection to be established and the handshake to complete, with an optional timeout.
+    ///
+    /// # Errors
+    /// Returns an error if the timeout is zero, the TCP connection or I/O thread cannot be set up,
+    /// or the handshake times out or is not acknowledged.
     pub fn connect(
         &mut self,
         timeout: Option<Duration>,
@@ -219,6 +240,11 @@ impl HmiDriver {
     }
 
     /// Disconnects from the HMI, shutting down the runner thread and cleaning up resources.
+    ///
+    /// Shutdown joins the I/O thread and can block until it exits unless `ignore_join` is set.
+    ///
+    /// # Errors
+    /// Returns [`HmiError::NotConnected`] if no connection is open.
     pub fn disconnect(&mut self, ignore_join: bool) -> DriverResult<()> {
         if let Some(conn) = self.connection.take() {
             log::info!("HmiDriver disconnecting from {}", self.remote_addr);
@@ -242,6 +268,7 @@ impl HmiDriver {
             .unwrap_or(false)
     }
 
+    /// Returns true if the I/O thread has hit a fatal error, or false when not connected.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.err_flag.load(Ordering::Relaxed)
@@ -303,6 +330,10 @@ impl HmiDriver {
     /// # Safety
     /// This function is unsafe because it allows writing to read-only ports.
     /// Read only ports are advised against writing to but it is technically possible and mostly functional so it is exposed through a nuanced API here.
+    ///
+    /// # Errors
+    /// Fails if the index does not fit in 16 bits, is zero for a one-indexed port,
+    /// the driver is not connected, or the request fails to encode.
     pub fn write_array_unsafe<T: UnsafelyWritableDataPort>(
         &self,
         index: usize,
@@ -334,6 +365,10 @@ impl HmiDriver {
     /// # Safety
     /// This function is unsafe because it allows writing to read-only ports.
     /// Read only ports are advised against writing to but it is technically possible and mostly functional so it is exposed through a nuanced API here.
+    ///
+    /// # Errors
+    /// Fails if the index does not fit in 16 bits, is zero for a one-indexed port,
+    /// the driver is not connected, or the request fails to encode.
     #[inline]
     pub fn write_unsafe<T: UnsafelyWritableDataPort>(
         &self,
@@ -344,6 +379,10 @@ impl HmiDriver {
     }
 
     /// Writes to multiple contiguous port indexes for a given writable data port type, returning a handle to the asynchronous success response.
+    ///
+    /// # Errors
+    /// Fails if the index does not fit in 16 bits, is zero for a one-indexed port,
+    /// the driver is not connected, or the request fails to encode.
     #[inline]
     pub fn write_array<T: WritableDataPort>(
         &self,
@@ -354,6 +393,10 @@ impl HmiDriver {
     }
 
     /// Writes a single value to a writable data port at the given index, returning a handle to the asynchronous success response.
+    ///
+    /// # Errors
+    /// Fails if the index does not fit in 16 bits, is zero for a one-indexed port,
+    /// the driver is not connected, or the request fails to encode.
     #[inline]
     pub fn write<T: WritableDataPort>(
         &self,
@@ -364,6 +407,10 @@ impl HmiDriver {
     }
 
     /// Reads multiple contiguous values from a readable data port starting at the given index, returning a handle to the asynchronous response containing the values.
+    ///
+    /// # Errors
+    /// Fails if the index or count does not fit in 16 bits, the index is zero for a
+    /// one-indexed port, the driver is not connected, or the request fails to encode.
     pub fn read_array<T: ReadableDataPort>(
         &self,
         index: usize,
@@ -393,6 +440,10 @@ impl HmiDriver {
     }
 
     /// Reads a single value from a readable data port at the given index, returning a handle to the asynchronous response.
+    ///
+    /// # Errors
+    /// Fails if the index does not fit in 16 bits, is zero for a one-indexed port,
+    /// the driver is not connected, or the request fails to encode.
     pub fn read<T: ReadableDataPort>(&self, index: usize) -> DriverResult<HmiHandle<T::ValueType>>
     where
         T::ValueType: Send + Sync + 'static,
@@ -416,6 +467,13 @@ impl HmiDriver {
         ))
     }
 
+    /// Registers a controller variable in the SNPX assignment table via `SETASG`, allocating the next free
+    /// register address, and returns an interface for reading and writing it.
+    /// Re-registering the same variable name returns an interface to the existing entry.
+    ///
+    /// # Errors
+    /// Fails if the driver is not connected, the `SETASG` command fails to encode,
+    /// or the controller does not acknowledge it within `timeout`.
     pub fn register_asg<T: AsgArgument>(
         &mut self,
         arg: T,
@@ -448,6 +506,12 @@ impl HmiDriver {
         Ok(AsgVarInterface::new(entry_arc))
     }
 
+    /// Like [`HmiDriver::register_asg`] but maps `N` contiguous elements of the variable,
+    /// returning an interface over the whole array.
+    ///
+    /// # Errors
+    /// Fails if the driver is not connected, the `SETASG` command fails to encode,
+    /// or the controller does not acknowledge it within `timeout`.
     pub fn register_asg_array<T: AsgArgument, const N: usize>(
         &mut self,
         arg: T,
@@ -482,6 +546,9 @@ impl HmiDriver {
     }
 
     /// Sends a command to clear all active alarms on the controller.
+    ///
+    /// # Errors
+    /// Fails if the driver is not connected or the command fails to encode.
     pub fn clear_alarms(&self) -> DriverResult<HmiHandle<()>> {
         self.write::<ports::Command>(0, "CLRALM".to_string())
     }

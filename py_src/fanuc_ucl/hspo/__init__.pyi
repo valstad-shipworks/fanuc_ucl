@@ -62,6 +62,14 @@ class HspoChannel(Generic[_T]):
         """Drains and returns all buffered packets."""
     def clear(self) -> None:
         """Discards all buffered packets."""
+    def received_at(self, packet: _T) -> float | None:
+        """Returns the system time the broker received ``packet`` as seconds since the Unix epoch.
+
+        Reconstructed from the packet's index and controller clock using the stream's
+        recorded wrap points and clock-to-system offset, so buffered packets resolve
+        correctly even after the controller's 32-bit clock has wrapped again. Returns
+        ``None`` if nothing has been received on this stream yet.
+        """
 
 def initialize_broker(
     listen_on: str, thread_config: ThreadConfig | None = None
@@ -101,12 +109,6 @@ class HspoReceiver:
         """Creates a new receiver for the given robot IP address with the specified packet buffer size."""
     def is_connected(self) -> bool:
         """Returns True if a packet has been received from this robot recently."""
-    def clock_micros(self) -> int:
-        """Returns the cumulative HSPO clock in microseconds, accounting for wraps of the controller's 32-bit clock."""
-    def clock_ms(self) -> float:
-        """Returns the cumulative HSPO clock in milliseconds."""
-    def clock_pair_micros(self) -> tuple[int, int]:
-        """Returns a pair of ``(hspo_clock_micros, system_time_micros)`` for correlating controller time with system time."""
     @property
     def tcp(self) -> HspoChannel[TcpCartesianPositionPacket]:
         """Channel for TCP cartesian position packets."""

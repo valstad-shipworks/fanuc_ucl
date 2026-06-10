@@ -125,6 +125,8 @@ class HmiHandle(Generic[_H]):
         """Blocks until the response arrives or the timeout elapses, raising TimeoutError on expiry."""
     def wait(self) -> _H:
         """Blocks indefinitely until the response arrives."""
+    def timestamp(self) -> float | None:
+        """Returns when the response was fulfilled as seconds since the Unix epoch, or None if not yet fulfilled."""
 
 class HmiDriver:
     """The main driver for interfacing with a FANUC robot via SNPX HMI.

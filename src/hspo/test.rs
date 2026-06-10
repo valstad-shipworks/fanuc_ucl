@@ -129,15 +129,127 @@ fn test_packet_encode_decode_roundtrip() {
 }
 
 #[test]
-fn test_clock_spec() {
-    let clock = ClockSpec::default();
-    assert_eq!(clock.read().0, 0);
+fn test_stream_clock_index_gate() {
+    let sc = StreamClock::default();
+    assert_eq!(sc.accept(0, 1000, 0), Some(1000));
+    assert_eq!(sc.accept(1, 1008, 8), Some(1008));
 
-    clock.write(1000, 100);
-    assert_eq!(clock.read(), (1000, 100));
+    // Lower index than the newest seen: disregarded.
+    assert_eq!(sc.accept(0, 5000, 16), None);
 
-    clock.write(500, 200);
-    assert_eq!(clock.read(), (1500, 200));
+    // A controller that leaves the index fixed keeps delivering (equal is not lower).
+    assert_eq!(sc.accept(1, 1016, 24), Some(1016));
+    assert_eq!(sc.accept(2, 1024, 32), Some(1024));
+}
+
+#[test]
+fn test_stream_clock_wrap() {
+    let sc = StreamClock::default();
+    let span = u32::MAX as u64 + 1;
+
+    assert_eq!(sc.accept(0, u32::MAX - 5, 0), Some((u32::MAX - 5) as u64));
+    // Strictly-newer packet whose clock stepped backward across the boundary: a wrap.
+    assert_eq!(sc.accept(1, 4, 8), Some(span + 4));
+    assert_eq!(sc.accept(2, 12, 16), Some(span + 12));
+}
+
+#[test]
+fn test_stream_clock_wrap_fixed_index() {
+    let sc = StreamClock::default();
+    let span = u32::MAX as u64 + 1;
+
+    // Index never advances, so the boundary check alone must catch the wrap.
+    assert_eq!(sc.accept(0, u32::MAX - 5, 0), Some((u32::MAX - 5) as u64));
+    assert_eq!(sc.accept(0, 4, 8), Some(span + 4));
+}
+
+#[test]
+fn test_stream_clock_reorder_dropped() {
+    let sc = StreamClock::default();
+    assert_eq!(sc.accept(10, 1000, 0), Some(1000));
+    assert_eq!(sc.accept(12, 1016, 16), Some(1016));
+
+    // The 1008 sample (index 11) arrives after index 12: dropped, so no spurious
+    // ~4.29e9 wrap from the backward clock step.
+    assert_eq!(sc.accept(11, 1008, 24), None);
+    assert_eq!(sc.accept(13, 1024, 32), Some(1024));
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn test_channel_recv_async() {
+    use std::task::{Context, Poll, Wake, Waker};
+
+    fn block_on<F: Future>(fut: F) -> F::Output {
+        struct ThreadWaker(std::thread::Thread);
+        impl Wake for ThreadWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(fut);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => std::thread::park(),
+            }
+        }
+    }
+
+    let (tx, rx) = bounded::<VariablesPacket>(4);
+    let channel = HspoChannel::new(rx, Arc::new(StreamClock::default()));
+
+    let sender = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        tx.send(make_variables_packet(42)).unwrap();
+        // tx drops here, disconnecting the channel
+    });
+
+    assert_eq!(
+        block_on(channel.recv_async()),
+        Some(make_variables_packet(42))
+    );
+    assert_eq!(block_on(channel.recv_async()), None);
+    sender.join().unwrap();
+}
+
+#[test]
+fn test_stream_clock_system_time_of() {
+    let sc = StreamClock::default();
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+
+    // Nothing accepted yet: no offset to reconstruct from.
+    assert_eq!(sc.system_time_of(0, 1000), None);
+
+    // System time runs 5_000µs ahead of the controller clock.
+    sc.accept(0, 1000, 6_000);
+    sc.accept(1, 1008, 6_008);
+    assert_eq!(sc.system_time_of(0, 1000), Some(epoch(6_000)));
+    assert_eq!(sc.system_time_of(1, 1008), Some(epoch(6_008)));
+}
+
+#[test]
+fn test_stream_clock_system_time_of_across_wrap() {
+    let sc = StreamClock::default();
+    let span = u32::MAX as u64 + 1;
+    let offset = 5_000u64;
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+
+    let pre_wrap_clock = u32::MAX - 5;
+    sc.accept(0, pre_wrap_clock, pre_wrap_clock as u64 + offset);
+    sc.accept(1, 4, span + 4 + offset);
+    sc.accept(2, 12, span + 12 + offset);
+
+    // A pre-wrap packet read after the wrap still resolves with wrap count 0.
+    assert_eq!(
+        sc.system_time_of(0, pre_wrap_clock),
+        Some(epoch(pre_wrap_clock as u64 + offset))
+    );
+    // Post-wrap packets resolve with the folded wrap.
+    assert_eq!(sc.system_time_of(1, 4), Some(epoch(span + 4 + offset)));
+    assert_eq!(sc.system_time_of(2, 12), Some(epoch(span + 12 + offset)));
 }
 
 const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 60000);
