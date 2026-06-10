@@ -21,7 +21,9 @@ def main():
         joints[0] += 10.0 * math.sin(i / 500.0 * math.tau)
         commands.append(
             stmo.MotionCommandPacket.try_from_joints(
-                JointFormat.FanucDeg, JointTemplate.SIX, joints,
+                JointFormat.FanucDeg,
+                JointTemplate.SIX,
+                joints,
             ),
         )
     handle = driver.command_motion(commands)
@@ -37,7 +39,9 @@ def main():
             joints[5] += 0.05
             ctl.send_command(
                 stmo.MotionCommandPacket.try_from_joints(
-                    JointFormat.FanucDeg, JointTemplate.SIX, joints,
+                    JointFormat.FanucDeg,
+                    JointTemplate.SIX,
+                    joints,
                 ),
             )
 

@@ -604,7 +604,10 @@ mod tests {
         assert!(approx_eq_f64(abs[1], 25.0));
         assert!(approx_eq_f64(abs[2], -15.0 + 25.0)); // j3 + j2
         for i in 3..9 {
-            assert!(approx_eq_f64(abs[i], fanuc[i]), "axis {i} should be untouched");
+            assert!(
+                approx_eq_f64(abs[i], fanuc[i]),
+                "axis {i} should be untouched"
+            );
         }
     }
 
@@ -677,16 +680,10 @@ mod tests {
         // The stmo and hspo packets carry [f32; 9]. Ensure conversion works at
         // the f32 precision used on the wire.
         let fanuc_deg: [f32; 9] = [-90.0, 30.0, -15.0, 180.0, -90.0, 0.0, 0.0, 0.0, 0.0];
-        let abs_rad = JointFormat::AbsRad.convert_from(
-            JointFormat::FanucDeg,
-            &JointTemplate::SIX,
-            fanuc_deg,
-        );
-        let back = JointFormat::FanucDeg.convert_from(
-            JointFormat::AbsRad,
-            &JointTemplate::SIX,
-            abs_rad,
-        );
+        let abs_rad =
+            JointFormat::AbsRad.convert_from(JointFormat::FanucDeg, &JointTemplate::SIX, fanuc_deg);
+        let back =
+            JointFormat::FanucDeg.convert_from(JointFormat::AbsRad, &JointTemplate::SIX, abs_rad);
         assert_arr_close_f32(back, fanuc_deg, "f32 fanuc_deg <-> abs_rad round-trip");
     }
 
@@ -756,7 +753,9 @@ mod tests {
     #[test]
     fn to_array_undersized_array_pads_with_nan_when_fill_requested() {
         let src: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
-        let res: [f64; 6] = src.to_array(true).expect("fill_missing_nan path must succeed");
+        let res: [f64; 6] = src
+            .to_array(true)
+            .expect("fill_missing_nan path must succeed");
         assert_eq!(res[0], 1.0);
         assert_eq!(res[1], 2.0);
         assert_eq!(res[2], 3.0);

@@ -1530,6 +1530,10 @@ mod handle_unit_tests {
         handle.set_generic(make_init_response(0)).unwrap();
         handle.set_generic(make_init_response(7)).ok();
         let resp = handle.wait_timeout(Duration::from_millis(100)).unwrap();
-        assert_eq!(resp.error_id(), 0, "second set unexpectedly overwrote first");
+        assert_eq!(
+            resp.error_id(),
+            0,
+            "second set unexpectedly overwrote first"
+        );
     }
 }

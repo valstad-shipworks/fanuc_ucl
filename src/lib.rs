@@ -100,7 +100,12 @@ pub mod py {
     fn parse_rust_log_baseline() -> log::LevelFilter {
         use log::LevelFilter::*;
         let raw = std::env::var("RUST_LOG").ok();
-        match raw.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        match raw
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
             Some("off") => Off,
             Some("error") => Error,
             Some("warn") | Some("warning") => Warn,
@@ -119,7 +124,11 @@ pub mod py {
     fn set_log_level(level: LogLevel) -> LogLevel {
         let requested: log::LevelFilter = level.into();
         let current = log::max_level();
-        let effective = if requested > current { requested } else { current };
+        let effective = if requested > current {
+            requested
+        } else {
+            current
+        };
         log::set_max_level(effective);
         match effective {
             log::LevelFilter::Off => LogLevel::Off,

@@ -1142,12 +1142,9 @@ mod tests {
     #[test]
     fn try_from_joints_six_axis_stores_in_first_six_slots() {
         let joints = [-90.0, 0.0, 0.0, -180.0, 90.0, 180.0];
-        let pkt = MotionCommandPacket::try_from_joints(
-            JointFormat::AbsDeg,
-            JointTemplate::SIX,
-            joints,
-        )
-        .unwrap();
+        let pkt =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, joints)
+                .unwrap();
         // Position is stored in FanucDeg internally (j3 -= j2; j2 == 0 here so
         // values match input exactly).
         for (i, &v) in joints.iter().enumerate() {
@@ -1181,18 +1178,12 @@ mod tests {
             0.0,
         ];
 
-        let pkt_deg = MotionCommandPacket::try_from_joints(
-            JointFormat::AbsDeg,
-            JointTemplate::SIX,
-            abs_deg,
-        )
-        .unwrap();
-        let pkt_rad = MotionCommandPacket::try_from_joints(
-            JointFormat::AbsRad,
-            JointTemplate::SIX,
-            abs_rad,
-        )
-        .unwrap();
+        let pkt_deg =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, abs_deg)
+                .unwrap();
+        let pkt_rad =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsRad, JointTemplate::SIX, abs_rad)
+                .unwrap();
 
         for i in 0..6 {
             assert!(
@@ -1243,11 +1234,8 @@ mod tests {
         // Same case via the Vec<f64> JointRepr impl — a separate code path
         // with the same contract.
         let v: Vec<f64> = vec![10.0, 20.0, 30.0, 40.0];
-        let result = MotionCommandPacket::try_from_joints(
-            JointFormat::AbsDeg,
-            JointTemplate::SIX,
-            v,
-        );
+        let result =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, v);
         assert!(
             result.is_err(),
             "expected error for under-sized vec input, got {result:?}"
@@ -1308,12 +1296,9 @@ mod tests {
 
     #[test]
     fn should_cast_to_single_obeys_protocol_version_and_format() {
-        let mut pkt = MotionCommandPacket::try_from_joints(
-            JointFormat::AbsDeg,
-            JointTemplate::SIX,
-            [0.0; 6],
-        )
-        .unwrap();
+        let mut pkt =
+            MotionCommandPacket::try_from_joints(JointFormat::AbsDeg, JointTemplate::SIX, [0.0; 6])
+                .unwrap();
         // version < 2 → always cast to single
         assert!(pkt.should_cast_to_single(0));
         assert!(pkt.should_cast_to_single(1));

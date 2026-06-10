@@ -3,6 +3,7 @@ mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};
 use parking_lot::Mutex;
+use snare::thread;
 use std::{
     collections::{HashMap, VecDeque},
     net::{IpAddr, SocketAddr},
@@ -12,7 +13,6 @@ use std::{
     },
     time::{Duration, SystemTime},
 };
-use snare::thread;
 
 use crate::{
     joints::{JointFormat, JointTemplate},
@@ -209,7 +209,11 @@ macro_rules! impl_hspo_packet {
         }
     )*};
 }
-impl_hspo_packet!(TcpCartesianPositionPacket, JointAnglesPacket, VariablesPacket);
+impl_hspo_packet!(
+    TcpCartesianPositionPacket,
+    JointAnglesPacket,
+    VariablesPacket
+);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
@@ -563,9 +567,7 @@ mod py_channel {
                 InnerChannel::Tcp(ch) => {
                     ch.received_at(&packet.extract::<TcpCartesianPositionPacket>()?)
                 }
-                InnerChannel::Joint(ch) => {
-                    ch.received_at(&packet.extract::<JointAnglesPacket>()?)
-                }
+                InnerChannel::Joint(ch) => ch.received_at(&packet.extract::<JointAnglesPacket>()?),
                 InnerChannel::Var(ch) => ch.received_at(&packet.extract::<VariablesPacket>()?),
             };
             Ok(received.map(|t| {
@@ -781,8 +783,7 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        if !rs.accept_packet(HspoStream::Joint, p.index, p.clock)
-                                        {
+                                        if !rs.accept_packet(HspoStream::Joint, p.index, p.clock) {
                                             continue;
                                         }
                                         match rs.joint_tx.try_send(p) {
@@ -804,8 +805,11 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        if !rs.accept_packet(HspoStream::Variables, p.index, p.clock)
-                                        {
+                                        if !rs.accept_packet(
+                                            HspoStream::Variables,
+                                            p.index,
+                                            p.clock,
+                                        ) {
                                             continue;
                                         }
                                         match rs.var_tx.try_send(p) {
