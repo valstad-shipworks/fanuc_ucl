@@ -1,3 +1,4 @@
+mod rx_timestamp;
 #[cfg(test)]
 mod test;
 
@@ -357,24 +358,20 @@ struct RobotSender {
 
 impl RobotSender {
     /// Gates a freshly received packet by its per-stream index and folds its clock
-    /// into the stream's shared wrap-corrected clock tracker.
+    /// into the stream's shared wrap-corrected clock tracker. `sys_micros` is the
+    /// receive time as micros since the Unix epoch — the kernel rx timestamp when
+    /// available, user-space receive time otherwise.
     ///
     /// Returns `false` if `index` is older than the newest already seen on `stream`,
     /// meaning the packet is reordered or stale and the caller must disregard it (not
     /// forward it to its channel). Each stream tracks its own highest index.
-    fn accept_packet(&self, stream: HspoStream, index: u32, clock: u32) -> bool {
+    fn accept_packet(&self, stream: HspoStream, index: u32, clock: u32, sys_micros: u64) -> bool {
         let stream_clock = match stream {
             HspoStream::Tcp => &self.tcp_clock,
             HspoStream::Joint => &self.joint_clock,
             HspoStream::Variables => &self.var_clock,
         };
-        let sys_micros = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_micros();
-        stream_clock
-            .accept(index, clock, sys_micros.try_into().unwrap_or(u64::MAX))
-            .is_some()
+        stream_clock.accept(index, clock, sys_micros).is_some()
     }
 }
 
@@ -692,6 +689,13 @@ fn broker_runtime(
     {
         let _ = socket.set_nonblocking(true);
     }
+    let kernel_ts = match rx_timestamp::enable_rx_timestamping(&socket) {
+        Ok(()) => true,
+        Err(e) => {
+            log::debug!("HSPO kernel rx timestamps unavailable: {}", e);
+            false
+        }
+    };
     poll.registry()
         .register(&mut socket, TOK_SOCKET, Interest::READABLE)
         .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
@@ -732,8 +736,13 @@ fn broker_runtime(
 
             // Read all pending datagrams.
             loop {
-                match socket.recv_from(&mut buf) {
-                    Ok((n, addr)) => {
+                let received = if kernel_ts {
+                    rx_timestamp::recv_from_timestamped(&socket, &mut buf)
+                } else {
+                    socket.recv_from(&mut buf).map(|(n, addr)| (n, addr, None))
+                };
+                match received {
+                    Ok((n, addr, rx_ts)) => {
                         if n == 0 {
                             continue;
                         }
@@ -747,6 +756,13 @@ fn broker_runtime(
                         // Determine packet type. 'typ' is at offset 12 (u32,u32,u32 -> 12 bytes).
                         let pkt_type = PacketType::from_bytes(&buf[..n], 12);
                         let now = std::time::Instant::now();
+                        let sys_micros: u64 = rx_ts
+                            .unwrap_or_else(SystemTime::now)
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap_or(Duration::ZERO)
+                            .as_micros()
+                            .try_into()
+                            .unwrap_or(u64::MAX);
 
                         match pkt_type {
                             PacketType::TcpCartesianPosition => {
@@ -759,7 +775,12 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        if !rs.accept_packet(HspoStream::Tcp, p.index, p.clock) {
+                                        if !rs.accept_packet(
+                                            HspoStream::Tcp,
+                                            p.index,
+                                            p.clock,
+                                            sys_micros,
+                                        ) {
                                             continue;
                                         }
                                         match rs.tcp_tx.try_send(p) {
@@ -783,7 +804,12 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
-                                        if !rs.accept_packet(HspoStream::Joint, p.index, p.clock) {
+                                        if !rs.accept_packet(
+                                            HspoStream::Joint,
+                                            p.index,
+                                            p.clock,
+                                            sys_micros,
+                                        ) {
                                             continue;
                                         }
                                         match rs.joint_tx.try_send(p) {
@@ -809,6 +835,7 @@ fn broker_runtime(
                                             HspoStream::Variables,
                                             p.index,
                                             p.clock,
+                                            sys_micros,
                                         ) {
                                             continue;
                                         }
