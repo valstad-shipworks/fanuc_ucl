@@ -99,7 +99,6 @@ jobs:
     runs-on: ubuntu-latest
     name: Publish to PyPI
     needs: [build-wheels, build-freethreaded, sdist]
-    environment: publish
 
     steps:
       - uses: actions/download-artifact@v4
@@ -117,7 +116,6 @@ jobs:
   publish-crates:
     runs-on: ubuntu-latest
     name: Publish to crates.io
-    environment: publish
 
     steps:
       - uses: actions/checkout@v4
