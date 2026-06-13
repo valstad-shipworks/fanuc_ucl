@@ -1,9 +1,15 @@
 name: Publish
 
+# The build jobs run on every PR and push to main as a dry run of the real
+# release pipeline — same targets, same interpreters — so a publish-time
+# breakage (unsupported interpreter, packaging error, bad metadata) surfaces
+# in CI before a tag is cut. Only the upload jobs are gated on v* tags.
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
+  pull_request:
 
 permissions:
   contents: read
@@ -63,14 +69,12 @@ jobs:
       - uses: actions/setup-python@v5
         if: matrix.os != 'ubuntu-latest'
         with:
-          python-version: |
-            3.13t
-            3.14t
+          python-version: 3.14t
 
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python3.13t python3.14t
+          args: --release --out dist --interpreter python3.14t
           manylinux: auto
 
       - uses: actions/upload-artifact@v4
@@ -95,10 +99,42 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  check-dist:
+    runs-on: ubuntu-latest
+    name: twine check
+    needs: [build-wheels, build-freethreaded, sdist]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv tool run twine check --strict dist/*
+
+  crates-dry-run:
+    runs-on: ubuntu-latest
+    name: cargo publish --dry-run
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-dry-run
+
+      - run: cargo publish --dry-run
+
   publish-pypi:
     runs-on: ubuntu-latest
     name: Publish to PyPI
-    needs: [build-wheels, build-freethreaded, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check-dist]
 
     steps:
       - uses: actions/download-artifact@v4
@@ -116,6 +152,7 @@ jobs:
   publish-crates:
     runs-on: ubuntu-latest
     name: Publish to crates.io
+    if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - uses: actions/checkout@v4

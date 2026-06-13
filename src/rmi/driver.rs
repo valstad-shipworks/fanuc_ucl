@@ -324,10 +324,8 @@ impl RmiRunner {
                     connection_established = true;
                 }
                 match event.token() {
-                    RmiRunner::TOK_WAKER => {
-                        if !self.fill_queue(&mut message_queue) {
-                            continue;
-                        }
+                    RmiRunner::TOK_WAKER if !self.fill_queue(&mut message_queue) => {
+                        continue;
                     }
                     RmiRunner::TOK_SOCKET => {
                         self.read_stream(&mut read_buf)?;
