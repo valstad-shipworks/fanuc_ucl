@@ -4,7 +4,7 @@ use cfg_mixin::cfg_mixin;
 #[cfg(target_os = "linux")]
 use libc::{
     CPU_SET, CPU_ZERO, cpu_set_t, pthread_self, pthread_setaffinity_np, pthread_setschedparam,
-    sched_get_priority_max, sched_get_priority_min, sched_param, setpriority,
+    sched_get_priority_max, sched_get_priority_min, setpriority,
 };
 use std::{
     error::Error,
