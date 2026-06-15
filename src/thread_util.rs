@@ -86,7 +86,8 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
         }
 
         let rc = if prio < 1 {
-            let param = sched_param { sched_priority: 0 };
+            let mut param: libc::sched_param = std::mem::zeroed();
+            param.sched_priority = 0;
             let r = pthread_setschedparam(pthread_self(), libc::SCHED_OTHER, &param);
             set_nice(-8)?;
             r
@@ -102,9 +103,8 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
                     ),
                 ));
             }
-            let param = sched_param {
-                sched_priority: prio,
-            };
+            let mut param: libc::sched_param = std::mem::zeroed();
+            param.sched_priority = prio;
             pthread_setschedparam(pthread_self(), libc::SCHED_FIFO, &param)
         };
 
