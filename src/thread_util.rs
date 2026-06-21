@@ -4,7 +4,7 @@ use cfg_mixin::cfg_mixin;
 #[cfg(target_os = "linux")]
 use libc::{
     CPU_SET, CPU_ZERO, cpu_set_t, pthread_self, pthread_setaffinity_np, pthread_setschedparam,
-    sched_get_priority_max, sched_get_priority_min, sched_param, setpriority,
+    sched_get_priority_max, sched_get_priority_min, setpriority,
 };
 use std::{
     error::Error,
@@ -86,7 +86,8 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
         }
 
         let rc = if prio < 1 {
-            let param = sched_param { sched_priority: 0 };
+            let mut param: libc::sched_param = std::mem::zeroed();
+            param.sched_priority = 0;
             let r = pthread_setschedparam(pthread_self(), libc::SCHED_OTHER, &param);
             set_nice(-8)?;
             r
@@ -102,9 +103,8 @@ fn configure_thread_scheduling(prio: i32, cpu_affinity: Option<usize>) -> io::Re
                     ),
                 ));
             }
-            let param = sched_param {
-                sched_priority: prio,
-            };
+            let mut param: libc::sched_param = std::mem::zeroed();
+            param.sched_priority = prio;
             pthread_setschedparam(pthread_self(), libc::SCHED_FIFO, &param)
         };
 
