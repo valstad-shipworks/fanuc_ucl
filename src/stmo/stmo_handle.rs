@@ -4,6 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
@@ -12,19 +13,22 @@ use crate::{ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone)]
 pub struct StmoHandle {
-    resp: Arc<(OnceLock<SystemTime>, Event)>,
+    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
+    // the async `poll` waiter. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<SystemTime>, Event, AtomicWaker)>,
 }
 
 impl StmoHandle {
     pub(crate) fn new() -> Self {
         Self {
-            resp: Arc::new((OnceLock::new(), Event::new())),
+            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
         }
     }
 
     pub(crate) fn set(&self) {
         let _ = self.resp.0.set(SystemTime::now());
         self.resp.1.notify(usize::MAX);
+        self.resp.2.wake();
     }
 }
 
@@ -78,11 +82,15 @@ impl Future for StmoHandle {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if self.is_set() {
-            std::task::Poll::Ready(Ok(()))
+            return std::task::Poll::Ready(Ok(()));
+        }
+        self.resp.2.register(cx.waker());
+        // Re-check after registering: a set() between the check above and the
+        // register would otherwise wake a waker we hadn't stored yet.
+        if self.is_set() {
+            std::task::Poll::Ready(self.get())
         } else {
-            let listener = self.resp.1.listen();
-            let mut pinned = std::pin::pin!(listener);
-            pinned.as_mut().poll(cx).map(|_| self.get())
+            std::task::Poll::Pending
         }
     }
 }
@@ -135,5 +143,61 @@ pub(crate) mod py {
     pub fn register(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
         parent_module.add_class::<StmoHandle>()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::Instant;
+
+    struct ThreadWaker(std::thread::Thread);
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    fn block_on<F: Future>(fut: F) -> F::Output {
+        let mut fut = Box::pin(fut);
+        let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+                return v;
+            }
+            std::thread::park();
+        }
+    }
+
+    /// Awaiting a handle must wake when it is set *after* the first poll parks.
+    /// Parking executor + watchdog so a lost wakeup fails slow, not forever.
+    #[test]
+    fn async_await_wakes_on_late_notify() {
+        let handle = StmoHandle::new();
+        let fulfiller = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            fulfiller.set();
+        });
+
+        let waiter = std::thread::current();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            waiter.unpark();
+        });
+
+        let start = Instant::now();
+        let result = block_on(handle);
+        assert!(result.is_ok());
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "async poll did not wake on notify (lost-wakeup regression)"
+        );
     }
 }

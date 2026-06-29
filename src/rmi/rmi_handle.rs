@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
@@ -27,7 +28,9 @@ enum ResponseOrError {
 pub struct RmiHandleGeneric {
     packet_name: &'static str,
     seq_id: u32,
-    resp: Arc<(OnceLock<ResponseOrError>, Event)>,
+    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
+    // the async `poll` waiter. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<ResponseOrError>, Event, AtomicWaker)>,
 }
 impl RmiHandleGeneric {
     const ERROR_NAMES: [&'static str; 2] = ["FRC_SystemFault", "FRC_Terminate"];
@@ -36,7 +39,7 @@ impl RmiHandleGeneric {
         Self {
             packet_name,
             seq_id,
-            resp: Arc::new((OnceLock::new(), Event::new())),
+            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
         }
     }
 
@@ -72,6 +75,7 @@ impl RmiHandleGeneric {
             let _ = self.resp.0.set(ResponseOrError::Response(value, now));
         }
         self.resp.1.notify(usize::MAX);
+        self.resp.2.wake();
         outcome
     }
 
@@ -81,6 +85,7 @@ impl RmiHandleGeneric {
             .0
             .set(ResponseOrError::Error(error, SystemTime::now()));
         self.resp.1.notify(usize::MAX);
+        self.resp.2.wake();
         Ok(())
     }
 }
@@ -139,21 +144,16 @@ impl Future for RmiHandleGeneric {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        // Register before checking, mirroring `wait_timeout`'s race fix.
-        let listener = self.resp.1.listen();
         if self.is_set() {
             return std::task::Poll::Ready(self.get());
         }
-        let mut pinned = std::pin::pin!(listener);
-        match pinned.as_mut().poll(cx) {
-            std::task::Poll::Ready(()) => std::task::Poll::Ready(self.get()),
-            std::task::Poll::Pending => {
-                if self.is_set() {
-                    std::task::Poll::Ready(self.get())
-                } else {
-                    std::task::Poll::Pending
-                }
-            }
+        self.resp.2.register(cx.waker());
+        // Re-check after registering: a response set between the check above and
+        // the register would otherwise wake a waker we hadn't stored yet.
+        if self.is_set() {
+            std::task::Poll::Ready(self.get())
+        } else {
+            std::task::Poll::Pending
         }
     }
 }
@@ -547,5 +547,61 @@ pub(super) mod py {
         parent_module.add_class::<PyRmiHandleGeneric>()?;
         parent_module.add_class::<PyRmiHandleQueue>()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::Instant;
+
+    struct ThreadWaker(std::thread::Thread);
+    impl Wake for ThreadWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    fn block_on<F: Future>(fut: F) -> F::Output {
+        let mut fut = Box::pin(fut);
+        let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+        let mut cx = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+                return v;
+            }
+            std::thread::park();
+        }
+    }
+
+    /// Awaiting a handle must wake when it is fulfilled *after* the first poll
+    /// parks. Parking executor + watchdog so a lost wakeup fails slow, not
+    /// forever.
+    #[test]
+    fn async_await_wakes_on_late_notify() {
+        let handle = RmiHandleGeneric::new("test", 0);
+        let fulfiller = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = fulfiller.set_error(RmiError::Timeout);
+        });
+
+        let waiter = std::thread::current();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            waiter.unpark();
+        });
+
+        let start = Instant::now();
+        let result = block_on(handle);
+        assert!(result.is_err());
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "async poll did not wake on notify (lost-wakeup regression)"
+        );
     }
 }
