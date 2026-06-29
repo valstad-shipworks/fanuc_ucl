@@ -3,6 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
@@ -71,12 +72,14 @@ pub(super) fn caster_null<T: DataPort>(_: Message, _: u16, _: u16) -> HmiResult<
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HmiHandleGeneric {
-    resp: Arc<(OnceLock<ResponseOrError>, Event)>,
+    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
+    // the async `poll` waiter. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<ResponseOrError>, Event, AtomicWaker)>,
 }
 impl HmiHandleGeneric {
     pub(super) fn new() -> Self {
         Self {
-            resp: Arc::new((OnceLock::new(), Event::new())),
+            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
         }
     }
 
@@ -84,6 +87,7 @@ impl HmiHandleGeneric {
         let now = SystemTime::now();
         let _ = self.resp.0.set(ResponseOrError::Response(value, now));
         self.resp.1.notify(usize::MAX);
+        self.resp.2.wake();
         Ok(())
     }
 
@@ -93,6 +97,7 @@ impl HmiHandleGeneric {
             .0
             .set(ResponseOrError::Error(error, SystemTime::now()));
         self.resp.1.notify(usize::MAX);
+        self.resp.2.wake();
         Ok(())
     }
 }
@@ -156,11 +161,15 @@ impl Future for HmiHandleGeneric {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if self.is_set() {
+            return std::task::Poll::Ready(self.get());
+        }
+        self.resp.2.register(cx.waker());
+        // Re-check after registering: a response set between the check above and
+        // the register would otherwise wake a waker we hadn't stored yet.
+        if self.is_set() {
             std::task::Poll::Ready(self.get())
         } else {
-            let listener = self.resp.1.listen();
-            let mut pinned = std::pin::pin!(listener);
-            pinned.as_mut().poll(cx).map(|_| self.get())
+            std::task::Poll::Pending
         }
     }
 }
@@ -238,11 +247,13 @@ impl<T: Send + Sync + 'static> Future for HmiHandle<T> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if self.is_set() {
+            return std::task::Poll::Ready(self.get());
+        }
+        self.generic.resp.2.register(cx.waker());
+        if self.is_set() {
             std::task::Poll::Ready(self.get())
         } else {
-            let listener = self.generic.resp.1.listen();
-            let mut pinned = std::pin::pin!(listener);
-            pinned.as_mut().poll(cx).map(|_| self.get())
+            std::task::Poll::Pending
         }
     }
 }
