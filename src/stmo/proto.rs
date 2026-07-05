@@ -937,9 +937,9 @@ impl TxPackets {
         match packet_type {
             StartPacket::PACKET_TYPE => Some(TxPackets::Start(StartPacket {})),
             StopPacket::PACKET_TYPE => Some(TxPackets::Stop(StopPacket {})),
-            VersionNumberRequestPacket::PACKET_TYPE => Some(TxPackets::VersionNumberRequest(
-                VersionNumberRequestPacket {},
-            )),
+            VersionNumberRequestPacket::PACKET_TYPE => {
+                Some(TxPackets::VersionNumberRequest(VersionNumberRequestPacket {}))
+            }
             CommandPositionRequestPacket::PACKET_TYPE => Some(TxPackets::CommandPositionRequest(
                 CommandPositionRequestPacket {},
             )),
