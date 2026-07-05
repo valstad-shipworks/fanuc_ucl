@@ -157,6 +157,11 @@ pub struct MotionCommandPacket {
 }
 
 impl MotionCommandPacket {
+    /// The commanded position/joint vector (FanucDeg for joint-format packets).
+    pub(crate) fn position(&self) -> [f64; 9] {
+        self.position
+    }
+
     pub fn try_from_joints(
         format: JointFormat,
         template: JointTemplate,
@@ -562,6 +567,12 @@ impl RobotStatusPacket {
     pub fn joints(&self, format: JointFormat, template: JointTemplate) -> [f32; 9] {
         format.convert_from(JointFormat::FanucDeg, &template, self.joints)
     }
+
+    /// Raw reported joints in FanucDeg — the frame `MotionCommandPacket::position`
+    /// is stored in, so the two are directly comparable.
+    pub(crate) fn joints_raw(&self) -> [f32; 9] {
+        self.joints
+    }
 }
 
 impl std::fmt::Display for RobotStatusPacket {
@@ -816,6 +827,175 @@ impl RxPackets {
             }
             _ => None,
         }
+    }
+}
+
+// Device / emulator side. The driver encodes `TxPackets` and decodes `RxPackets`;
+// a simulated controller needs the mirror image — decode the commands the driver
+// sends and encode the status it expects. Kept here so the wire format has one
+// source of truth.
+
+impl MotionCommandPacket {
+    /// Sequence counter the driver stamped on this command; echo it in the
+    /// matching [`RobotStatusPacket`].
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// Whether this is the final command of the stream — the cue to end the
+    /// Stream-Motion program (and release a parked RMI `FRC_Call`).
+    pub fn is_last_command(&self) -> bool {
+        self.last_command
+    }
+
+    /// True when [`commanded_position`](Self::commanded_position) holds joint
+    /// angles (FanucDeg); false when it holds a Cartesian pose.
+    pub fn joint_format(&self) -> bool {
+        self.joint_format
+    }
+
+    /// The commanded vector — joint angles (FanucDeg) or a Cartesian pose.
+    pub fn commanded_position(&self) -> [f64; 9] {
+        self.position
+    }
+
+    /// The embedded IO write (e.g. welder DO80, gripper DO20-23), or `None`.
+    pub fn write_io(&self) -> Option<(IoType, u16, u16, u16)> {
+        if self.write_io_type == IoType::None {
+            None
+        } else {
+            Some((
+                self.write_io_type,
+                self.write_io_index,
+                self.write_io_mask,
+                self.write_io_value,
+            ))
+        }
+    }
+
+    /// The embedded IO-read request the device should answer, or `None`.
+    pub fn read_io(&self) -> Option<(IoType, u16, u16)> {
+        if self.read_io_type == IoType::None {
+            None
+        } else {
+            Some((self.read_io_type, self.read_io_index, self.read_io_mask))
+        }
+    }
+}
+
+impl RobotStatusPacket {
+    /// Build a status packet for the device/emulator side. `status` is the raw
+    /// [`StatusBitfield`] byte — set [`StatusBitfield::READY_FOR_COMMANDS`] for the
+    /// driver to stream motion. `joints` are FanucDeg (the frame
+    /// [`MotionCommandPacket::commanded_position`] arrives in).
+    pub fn new(seq: u32, status: u8, time_stamp: u32, joints: [f32; 9]) -> Self {
+        Self {
+            seq,
+            status,
+            read_io_type: 0,
+            read_io_index: 0,
+            read_io_mask: 0,
+            read_io_value: 0,
+            time_stamp,
+            pose: PoseData {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 0.0,
+                p: 0.0,
+                r: 0.0,
+                e1: 0.0,
+                e2: 0.0,
+                e3: 0.0,
+            },
+            joints,
+            motor_current: [0.0; 9],
+        }
+    }
+
+    /// Populate the IO-read reply fields (answering [`MotionCommandPacket::read_io`]).
+    pub fn set_read_io_reply(&mut self, io_type: u8, index: u16, mask: u16, value: u16) {
+        self.read_io_type = io_type;
+        self.read_io_index = index;
+        self.read_io_mask = mask;
+        self.read_io_value = value;
+    }
+}
+
+impl TxPackets {
+    /// Device-side decode: interpret a datagram the driver sent to the controller.
+    /// The mirror of [`TxPackets::encode_into`].
+    pub fn decode_from(buf: &[u8]) -> Option<Self> {
+        if buf.len() < 8 {
+            return None;
+        }
+        let packet_type = u32::from_be_bytes(buf[0..4].try_into().ok()?);
+        let data_buf = &buf[8..];
+        let cfg = bincode::config::standard()
+            .with_big_endian()
+            .with_fixed_int_encoding();
+        match packet_type {
+            StartPacket::PACKET_TYPE => Some(TxPackets::Start(StartPacket {})),
+            StopPacket::PACKET_TYPE => Some(TxPackets::Stop(StopPacket {})),
+            VersionNumberRequestPacket::PACKET_TYPE => {
+                Some(TxPackets::VersionNumberRequest(VersionNumberRequestPacket {}))
+            }
+            CommandPositionRequestPacket::PACKET_TYPE => Some(TxPackets::CommandPositionRequest(
+                CommandPositionRequestPacket {},
+            )),
+            MotionCommandPacketSingle::PACKET_TYPE => {
+                let (single, _): (MotionCommandPacketSingle, _) =
+                    bincode::decode_from_slice(data_buf, cfg).ok()?;
+                Some(TxPackets::MotionCommand(single.into()))
+            }
+            MotionCommandPacket::PACKET_TYPE => {
+                let (pkt, _) = bincode::decode_from_slice(data_buf, cfg).ok()?;
+                Some(TxPackets::MotionCommand(pkt))
+            }
+            ThresholdTableRequestPacket::PACKET_TYPE => {
+                let (pkt, _) = bincode::decode_from_slice(data_buf, cfg).ok()?;
+                Some(TxPackets::ThresholdTableRequest(pkt))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl RxPackets {
+    /// Device-side encode: serialize a status/response for the driver. The mirror
+    /// of [`RxPackets::decode_from`].
+    pub fn encode_into(&self, version: u32, buffer: &mut [u8]) -> Result<usize, StreamMotionError> {
+        let pkt_type = match self {
+            RxPackets::RobotStatus(_) => RobotStatusPacket::PACKET_TYPE,
+            RxPackets::CommandPositionResponse(_) => CommandPositionResponsePacket::PACKET_TYPE,
+            RxPackets::ThresholdTableResponse(_) => ThresholdTableResponsePacket::PACKET_TYPE,
+            RxPackets::VersionNumberResponse(_) => VersionNumberResponsePacket::PACKET_TYPE,
+        };
+        buffer[0..4].copy_from_slice(&pkt_type.to_be_bytes());
+        // The driver reads a VersionNumberResponse straight from the header's
+        // version slot (see `decode_from`), so that packet must carry the reported
+        // protocol version there rather than the stream `version`.
+        let header_version = match self {
+            RxPackets::VersionNumberResponse(v) => v.version,
+            _ => version,
+        };
+        buffer[4..8].copy_from_slice(&header_version.to_be_bytes());
+        let data_buf = &mut buffer[8..];
+        let cfg = bincode::config::standard()
+            .with_big_endian()
+            .with_fixed_int_encoding();
+        let n = match self {
+            RxPackets::RobotStatus(pkt) => bincode::encode_into_slice(pkt, data_buf, cfg)?,
+            RxPackets::CommandPositionResponse(pkt) => {
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
+            }
+            RxPackets::ThresholdTableResponse(pkt) => {
+                bincode::encode_into_slice(pkt, data_buf, cfg)?
+            }
+            // The driver never decodes a body for type 6 — the version is in the header.
+            RxPackets::VersionNumberResponse(_) => 0,
+        };
+        Ok(n + 8)
     }
 }
 
@@ -1307,5 +1487,99 @@ mod tests {
         // version >= 2 with joint_format=false → cast
         pkt.joint_format = false;
         assert!(pkt.should_cast_to_single(2));
+    }
+}
+
+#[cfg(test)]
+mod device_roundtrip_tests {
+    use super::*;
+    use crate::joints::{JointFormat, JointTemplate};
+
+    #[test]
+    fn device_decodes_client_control_packets() {
+        let mut b = [0u8; 512];
+        for (encode, expect) in [
+            (
+                TxPackets::Start(StartPacket {}),
+                "start",
+            ),
+            (
+                TxPackets::Stop(StopPacket {}),
+                "stop",
+            ),
+            (
+                TxPackets::VersionNumberRequest(VersionNumberRequestPacket {}),
+                "version",
+            ),
+        ] {
+            let n = encode.encode_into(2, &mut b).unwrap();
+            let decoded = TxPackets::decode_from(&b[..n]).unwrap();
+            let ok = match (expect, decoded) {
+                ("start", TxPackets::Start(_)) => true,
+                ("stop", TxPackets::Stop(_)) => true,
+                ("version", TxPackets::VersionNumberRequest(_)) => true,
+                _ => false,
+            };
+            assert!(ok, "decode mismatch for {expect}");
+        }
+    }
+
+    #[test]
+    fn device_decodes_client_motion_command_double() {
+        let mut cmd = MotionCommandPacket::try_from_joints(
+            JointFormat::FanucDeg,
+            JointTemplate::SIX,
+            [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+        )
+        .unwrap();
+        cmd.seq = 7;
+        cmd.last_command = true;
+
+        let mut b = [0u8; 512];
+        // version >= 2 + joint_format keeps the double (type 5) encoding.
+        let n = TxPackets::MotionCommand(cmd).encode_into(2, &mut b).unwrap();
+        match TxPackets::decode_from(&b[..n]).unwrap() {
+            TxPackets::MotionCommand(m) => {
+                assert_eq!(m.seq(), 7);
+                assert!(m.is_last_command());
+                assert!(m.joint_format());
+                let p = m.commanded_position();
+                assert_eq!(p[0], 10.0);
+                assert_eq!(p[5], 60.0);
+            }
+            other => panic!("expected MotionCommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn client_decodes_device_robot_status() {
+        let joints = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0, 0.0];
+        let status = StatusBitfield::READY_FOR_COMMANDS.bits();
+        let pkt = RobotStatusPacket::new(9, status, 1234, joints);
+
+        let mut b = [0u8; 512];
+        let n = RxPackets::RobotStatus(pkt).encode_into(2, &mut b).unwrap();
+        match RxPackets::decode_from(&b[..n]).unwrap() {
+            RxPackets::RobotStatus(s) => {
+                assert_eq!(s.seq, 9);
+                assert!(s.status_bits().ready_for_commands());
+                let j = s.joints(JointFormat::FanucDeg, JointTemplate::SIX);
+                assert_eq!(j[0], 1.0);
+                assert_eq!(j[5], 6.0);
+            }
+            other => panic!("expected RobotStatus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn client_decodes_device_version_response() {
+        let mut b = [0u8; 512];
+        let n = RxPackets::VersionNumberResponse(VersionNumberResponsePacket { version: 2 })
+            .encode_into(0, &mut b)
+            .unwrap();
+        match RxPackets::decode_from(&b[..n]).unwrap() {
+            RxPackets::VersionNumberResponse(v) => assert_eq!(v.version, 2),
+            other => panic!("expected VersionNumberResponse, got {other:?}"),
+        }
     }
 }

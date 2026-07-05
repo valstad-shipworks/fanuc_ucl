@@ -187,6 +187,8 @@ impl StreamMotionContext {
         let mut rx_buf = [0u8; 2048];
         let mut tx_buf = [0u8; 1024];
         let mut prev_motion_packet: Option<MotionCommandPacket> = None;
+        let mut prev_command_was_real = false;
+        let mut consecutive_fillers: u32 = 0;
         // let mut status_cycle_count: u32 = 0;
 
         while thread_handle.should_live() {
@@ -232,7 +234,20 @@ impl StreamMotionContext {
                                                 self.next_motion_command()
                                             {
                                                 cmd.seq = state.seq;
+                                                if consecutive_fillers > 0 {
+                                                    log::debug!(
+                                                        "STMO queue refilled (seq {}) after {} filler cycle(s) (~{}ms starved)",
+                                                        state.seq,
+                                                        consecutive_fillers,
+                                                        consecutive_fillers * 8
+                                                    );
+                                                    consecutive_fillers = 0;
+                                                }
                                                 prev_motion_packet = Some(cmd);
+                                                prev_command_was_real = true;
+                                                if cmd.last_command {
+                                                    log::trace!("Last motion command sent");
+                                                }
                                                 let _ = self.send(
                                                     TxPackets::MotionCommand(cmd),
                                                     &mut tx_buf,
@@ -255,6 +270,22 @@ impl StreamMotionContext {
                                                         self.send_last_command,
                                                     );
                                                     cmd.seq = state.seq;
+                                                    consecutive_fillers += 1;
+                                                    let held = prev_motion_packet.position();
+                                                    let actual = state.joints_raw();
+                                                    log::debug!(
+                                                        "STMO queue starved: filler #{} (seq {}, prev_real={}) holding setpoint while robot moves — J1 held={:.4} actual={:.4} (Δ{:.4}), rail held={:.3} actual={:.3} (Δ{:.3})",
+                                                        consecutive_fillers,
+                                                        cmd.seq,
+                                                        prev_command_was_real,
+                                                        held[0],
+                                                        actual[0],
+                                                        actual[0] as f64 - held[0],
+                                                        held[6],
+                                                        actual[6],
+                                                        actual[6] as f64 - held[6],
+                                                    );
+                                                    prev_command_was_real = false;
                                                     let _ = self.send(
                                                         TxPackets::MotionCommand(cmd),
                                                         &mut tx_buf,
@@ -267,6 +298,8 @@ impl StreamMotionContext {
                                                     "Notifying in the loop that we got a new status"
                                                 );
                                                 self.itl.0.notify(1);
+                                            } else {
+                                                log::trace!("No new status received in the loop");
                                             }
                                         }
                                     } else {
