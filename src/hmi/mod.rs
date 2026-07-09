@@ -3,6 +3,7 @@ mod asg_handle;
 mod hmi_handle;
 mod proto;
 mod runner;
+pub mod server;
 
 #[cfg(test)]
 mod test;

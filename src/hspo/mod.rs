@@ -138,6 +138,61 @@ impl JointAnglesPacket {
     }
 }
 
+/// Protocol version stamped on controller-emitted feedback packets. The broker
+/// ignores it, so any value round-trips.
+const FEEDBACK_VERSION: u32 = 1;
+
+impl JointAnglesPacket {
+    /// Build a controller-side joint feedback packet from an on-wire **FanucRad**
+    /// arm-first body (`[J1..J6, J7=track_mm, 0, 0]`) — the exact representation
+    /// [`joints`](Self::joints) reads. Use this when the pose is already in the
+    /// FanucRad frame so no interaction re-compensation is applied.
+    pub fn feedback_from_fanuc_rad(
+        index: u32,
+        clock: u32,
+        motion_group: u16,
+        fanuc_rad: [f32; 9],
+        status: u32,
+        io: u32,
+    ) -> Self {
+        Self {
+            version: FEEDBACK_VERSION,
+            index,
+            clock,
+            typ: PacketType::JointAngles as u16,
+            motion_group,
+            joints: fanuc_rad,
+            status,
+            io,
+        }
+    }
+
+    /// Build a controller-side joint feedback packet from arm-first **AbsRad**
+    /// (`[j1..j6, J7=track_mm, 0, 0]`), converting to the on-wire FanucRad body
+    /// (re-applying the FANUC J2/J3 interaction) — the inverse of [`joints`](Self::joints).
+    pub fn feedback_from_abs_rad(
+        index: u32,
+        clock: u32,
+        motion_group: u16,
+        template: JointTemplate,
+        abs_rad: [f32; 9],
+        status: u32,
+        io: u32,
+    ) -> Self {
+        let fanuc_rad = JointFormat::FanucRad.convert_from(JointFormat::AbsRad, &template, abs_rad);
+        Self::feedback_from_fanuc_rad(index, clock, motion_group, fanuc_rad, status, io)
+    }
+}
+
+/// Encode a joint feedback packet to a datagram using the broker's wire config
+/// (bincode standard, fixed-int, **big-endian**).
+pub fn encode_joint_packet(packet: &JointAnglesPacket) -> Vec<u8> {
+    let config = bincode::config::standard()
+        .with_fixed_int_encoding()
+        .with_big_endian();
+    bincode::encode_to_vec(packet, config).unwrap_or_default()
+}
+
 impl std::fmt::Display for JointAnglesPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
