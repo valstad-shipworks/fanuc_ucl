@@ -16,6 +16,7 @@ pub use member_structs::*;
 #[doc(hidden)]
 macro_rules! zst_filler {
     ($name:ident) => {
+        #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
         #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
         #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct $name;

@@ -85,6 +85,9 @@ pub enum HmiError {
     Other(String),
 }
 
+#[cfg(feature = "valuable")]
+error_valuable!(HmiError, "HmiError");
+
 impl From<std::io::Error> for HmiError {
     fn from(err: std::io::Error) -> Self {
         if err.kind() == std::io::ErrorKind::TimedOut {

@@ -53,6 +53,8 @@ impl JointValue for f32 {
 }
 
 /// An enum represnting the unit quantity for a joint and how to handle conversions between different formats.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JointType {
@@ -332,6 +334,7 @@ float_vec_joint!(&mut f64, std::f64::consts::PI);
 float_vec_joint!(f32, std::f32::consts::PI);
 float_vec_joint!(&mut f32, std::f32::consts::PI);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JointDataSizeError(pub usize);
 impl std::fmt::Display for JointDataSizeError {
@@ -353,6 +356,7 @@ impl std::error::Error for JointDataSizeError {}
 /// - [JointTemplate::FOUR_LINEAR_TRACK]: A 5-axis robot with 4 rotary joints and a linear track.
 /// - [JointTemplate::FIVE]: A 5-axis robot with all rotary joints.
 /// - [JointTemplate::FIVE_LINEAR_TRACK]: A 6-axis robot with 5 rotary joints and a linear track.
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone)]
 pub struct JointTemplate {
@@ -423,6 +427,8 @@ impl std::fmt::Display for JointTemplate {
 ///
 /// This enum is often passed into the API's in this library to know how to return the information in the appropriate format
 /// however users have access to [JointFormat::convert_from] to convert between formats on their own data as well.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy)]
 pub enum JointFormat {

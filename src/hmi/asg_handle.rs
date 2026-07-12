@@ -111,6 +111,8 @@ pub trait AsgArgument: Sized + Send + Sync + 'static {
 }
 
 /// Arguments for registering a position register (`PR[...]`) as an ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct PosRegArgs {
     pub index: u16,
@@ -158,6 +160,8 @@ impl AsgArgument for PosRegArgs {
 }
 
 /// Arguments for registering the current position (`POS[...]`) as a read-only ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CurPosArgs {
     pub frame: i8,
@@ -197,6 +201,8 @@ impl AsgArgument for CurPosArgs {
 }
 
 /// Arguments for registering a numeric register (`R[...]`) as an ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct NumRegArgs {
     pub index: u16,
@@ -244,6 +250,8 @@ fn format_slice_suffix(default_len: u16, range: Option<(u16, u16)>) -> (u16, u16
 }
 
 /// Arguments for registering a string register (`SR[...]`) as an ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct StringRegArgs {
     pub index: u16,
@@ -283,6 +291,8 @@ impl AsgArgument for StringRegArgs {
 }
 
 /// Boolean I/O signal types available on a FANUC controller.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolIoSignal {
@@ -339,6 +349,8 @@ impl std::fmt::Display for BoolIoSignal {
 }
 
 /// Arguments for registering a boolean I/O signal as an ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct BoolIoArgs {
     pub signal: BoolIoSignal,
@@ -382,6 +394,8 @@ impl AsgArgument for BoolIoArgs {
 }
 
 /// Integer (group/analog) I/O signal types available on a FANUC controller.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntIoSignal {
@@ -414,6 +428,8 @@ impl std::fmt::Display for IntIoSignal {
 }
 
 /// Arguments for registering an integer I/O signal as an ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct IntIoArgs {
     pub signal: IntIoSignal,
@@ -457,6 +473,8 @@ impl AsgArgument for IntIoArgs {
 }
 
 /// Source log from which to read alarms on the controller.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AlarmSource {
@@ -496,6 +514,8 @@ impl std::fmt::Display for AlarmSource {
 }
 
 /// Arguments for registering an alarm entry as a read-only ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct AlarmArgs {
     pub source: AlarmSource,
@@ -539,6 +559,8 @@ impl AsgArgument for AlarmArgs {
 }
 
 /// The kind of program task to query status for.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProgramStatusKind {
@@ -572,6 +594,8 @@ impl std::fmt::Display for ProgramStatusKind {
 }
 
 /// Arguments for registering a program status entry as a read-only ASG variable.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy)]
 pub struct ProgramStatusArgs {
     pub task: u16,

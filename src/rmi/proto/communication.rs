@@ -7,6 +7,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcConnectResponse {
@@ -24,6 +25,7 @@ pub struct FrcConnectResponse {
     pub minor_version: u16,
 }
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcDisconnectResponse {
@@ -32,6 +34,7 @@ pub struct FrcDisconnectResponse {
     pub error_id: u32,
 }
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSystemFaultResponse {
@@ -44,6 +47,7 @@ zst_filler!(FrcConnect);
 zst_filler!(FrcDisconnect);
 zst_filler!(FrcTerminateResponse);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "Communication")]
@@ -71,6 +75,7 @@ packet_wrap!(Communication {
     FrcDisconnect
 });
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(tag = "Communication")]

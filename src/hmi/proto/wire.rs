@@ -7,6 +7,8 @@ use crate::{
     hmi::proto::ports::{ReadableDataPort, UnsafelyWritableDataPort},
 };
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u8)]
 pub enum ServiceRequestCode {
@@ -33,6 +35,8 @@ pub enum ServiceRequestCode {
 }
 bincode_enum!(with_default ServiceRequestCode : u8);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u8)]
 pub enum SegmentSelector {
@@ -65,6 +69,8 @@ pub enum SegmentSelector {
 }
 bincode_enum!(with_default SegmentSelector : u8);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u16)]
 pub(super) enum PktType {
@@ -77,6 +83,8 @@ pub(super) enum PktType {
 }
 bincode_enum!(with_default PktType : u16);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u32)]
 pub(super) enum OperationType {
@@ -89,6 +97,8 @@ pub(super) enum OperationType {
 }
 bincode_enum!(with_default OperationType : u32);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u8)]
 pub(super) enum MsgTyp {
@@ -103,6 +113,8 @@ pub(super) enum MsgTyp {
 }
 bincode_enum!(with_default MsgTyp : u8);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
 #[repr(u8)]
 pub enum PlcState {
@@ -173,6 +185,8 @@ pub struct PlcStatus {
     status_flags: PlcStatusFlags,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[repr(C)]
 pub struct Header {

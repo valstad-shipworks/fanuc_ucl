@@ -8,6 +8,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWriteUToolData {
@@ -37,6 +38,7 @@ impl FrcWriteUToolData {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteUToolDataResponse {
@@ -49,6 +51,7 @@ pub struct FrcWriteUToolDataResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWriteUFrameData {
@@ -78,6 +81,7 @@ impl FrcWriteUFrameData {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteUFrameDataResponse {
@@ -90,6 +94,7 @@ pub struct FrcWriteUFrameDataResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWritePositionRegister {
@@ -128,6 +133,7 @@ impl FrcWritePositionRegister {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWritePositionRegisterResponse {
@@ -137,6 +143,7 @@ pub struct FrcWritePositionRegisterResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteDOUT {
@@ -162,6 +169,7 @@ impl FrcWriteDOUT {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWriteDOUTResponse {
@@ -171,6 +179,7 @@ pub struct FrcWriteDOUTResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameUTool {
@@ -200,6 +209,7 @@ impl FrcSetUFrameUTool {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameUToolResponse {
@@ -212,6 +222,7 @@ pub struct FrcSetUFrameUToolResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetOverRide {
@@ -231,6 +242,7 @@ impl FrcSetOverRide {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetOverRideResponse {
@@ -240,6 +252,7 @@ pub struct FrcSetOverRideResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcResetResponse {
@@ -249,6 +262,7 @@ pub struct FrcResetResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadUToolData {
@@ -274,6 +288,7 @@ impl FrcReadUToolData {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadUToolDataResponse {
@@ -292,6 +307,7 @@ pub struct FrcReadUToolDataResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadUFrameData {
@@ -317,6 +333,7 @@ impl FrcReadUFrameData {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadUFrameDataResponse {
@@ -335,6 +352,7 @@ pub struct FrcReadUFrameDataResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadTCPSpeedResponse {
@@ -350,6 +368,7 @@ pub struct FrcReadTCPSpeedResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadPositionRegister {
@@ -375,6 +394,7 @@ impl FrcReadPositionRegister {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadPositionRegisterResponse {
@@ -396,6 +416,7 @@ pub struct FrcReadPositionRegisterResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadJointAngles {
@@ -415,6 +436,7 @@ impl FrcReadJointAngles {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadJointAnglesResponse {
@@ -440,6 +462,7 @@ impl FrcReadJointAnglesResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadError {
@@ -465,6 +488,7 @@ impl Default for FrcReadError {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcReadErrorResponse {
@@ -508,6 +532,7 @@ pub struct FrcReadErrorResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadDIN {
@@ -527,6 +552,7 @@ impl FrcReadDIN {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadDINResponse {
@@ -542,6 +568,7 @@ pub struct FrcReadDINResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcReadCartesianPosition {
@@ -561,6 +588,7 @@ impl FrcReadCartesianPosition {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcReadCartesianPositionResponse {
@@ -582,6 +610,7 @@ pub struct FrcReadCartesianPositionResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcPauseResponse {
@@ -590,6 +619,7 @@ pub struct FrcPauseResponse {
     pub error_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,6 +638,7 @@ pub struct FrcInitialize {
     #[serde(rename = "Equipment", default, skip_serializing_if = "Option::is_none")]
     pub equipment: Option<u8>,
     #[serde(rename = "RTSA", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     pub rtsa: Option<OnOnly>,
     #[on(pyo3(get, set))]
     #[serde(rename = "PLTZMODE", default, skip_serializing_if = "Option::is_none")]
@@ -650,6 +681,7 @@ impl Default for FrcInitialize {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcInitializeResponse {
@@ -662,6 +694,7 @@ pub struct FrcInitializeResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetUFrameUTool {
@@ -681,6 +714,7 @@ impl FrcGetUFrameUTool {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetUFrameUToolResponse {
@@ -699,6 +733,7 @@ pub struct FrcGetUFrameUToolResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcGetStatusResponse {
@@ -729,6 +764,7 @@ pub struct FrcGetStatusResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcContinueResponse {
@@ -738,6 +774,7 @@ pub struct FrcContinueResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcAbortResponse {
@@ -753,6 +790,7 @@ zst_filler!(FrcReadTCPSpeed);
 zst_filler!(FrcReset);
 zst_filler!(FrcGetStatus);
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(tag = "Command")]
@@ -858,6 +896,7 @@ packet_wrap! {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Command")]

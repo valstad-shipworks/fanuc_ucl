@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::{ResponseNotFulfilled, rmi::FeatureGateFailure};
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketMismatchError;
 impl std::fmt::Display for PacketMismatchError {
@@ -43,6 +44,9 @@ pub enum RmiError {
     SystemFaultOrTerminate,
 }
 
+#[cfg(feature = "valuable")]
+error_valuable!(RmiError, "RmiError");
+
 impl Clone for RmiError {
     fn clone(&self) -> Self {
         match self {
@@ -77,6 +81,7 @@ pub type RmiResult<T> = Result<T, RmiError>;
 /// documentation (including capitalization) so they can be cross-referenced
 /// against the manual.
 #[repr(u32)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Serialize, Deserialize, IntEnum, Clone, Default, Copy, PartialEq, Eq)]
 pub enum RmiProtocolError {
     InternalSystemError = 2556929,

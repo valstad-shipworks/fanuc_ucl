@@ -9,6 +9,7 @@ use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcWaitTime {
@@ -42,6 +43,7 @@ impl FrcWaitTime {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitTimeResponse {
@@ -54,6 +56,7 @@ pub struct FrcWaitTimeResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitDIN {
@@ -82,6 +85,7 @@ impl FrcWaitDIN {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcWaitDINResponse {
@@ -94,6 +98,7 @@ pub struct FrcWaitDINResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUTool {
@@ -118,6 +123,7 @@ impl FrcSetUTool {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUToolResponse {
@@ -130,6 +136,7 @@ pub struct FrcSetUToolResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrame {
@@ -154,6 +161,7 @@ impl FrcSetUFrame {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetUFrameResponse {
@@ -166,6 +174,7 @@ pub struct FrcSetUFrameResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetPayLoad {
@@ -190,6 +199,7 @@ impl FrcSetPayLoad {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcSetPayLoadResponse {
@@ -201,6 +211,7 @@ pub struct FrcSetPayLoadResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -237,14 +248,17 @@ pub struct FrcLinearRelativeJRep {
     #[serde(rename = "ALIMREG", default, skip_serializing_if = "Option::is_none")]
     pub alim_reg: Option<u16>,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
         default,
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     wrist_joint: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     mrot: Option<OnOnly>,
 }
 
@@ -283,6 +297,7 @@ impl_monostate_member!(FrcLinearRelativeJRep.wrist_joint = "ON");
 impl_monostate_member!(FrcLinearRelativeJRep.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearRelativeJRepResponse {
@@ -294,6 +309,7 @@ pub struct FrcLinearRelativeJRepResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -333,14 +349,17 @@ pub struct FrcLinearRelative {
     #[serde(rename = "ALIMREG", default, skip_serializing_if = "Option::is_none")]
     pub alim_reg: Option<u16>,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
         default,
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     wrist_joint: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     mrot: Option<OnOnly>,
 }
 
@@ -381,6 +400,7 @@ impl_monostate_member!(FrcLinearRelative.wrist_joint = "ON");
 impl_monostate_member!(FrcLinearRelative.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearRelativeResponse {
@@ -392,6 +412,7 @@ pub struct FrcLinearRelativeResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -436,6 +457,7 @@ pub struct FrcLinearMotionJRep {
     #[serde(rename = "ALIMREG", default, skip_serializing_if = "Option::is_none")]
     pub alim_reg: Option<u16>,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
@@ -481,6 +503,7 @@ impl FrcLinearMotionJRep {
 impl_monostate_member!(FrcLinearMotionJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearMotionJRepResponse {
@@ -492,6 +515,7 @@ pub struct FrcLinearMotionJRepResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -539,6 +563,7 @@ pub struct FrcLinearMotion {
     #[serde(rename = "ALIMREG", default, skip_serializing_if = "Option::is_none")]
     pub alim_reg: Option<u16>,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
@@ -586,6 +611,7 @@ impl FrcLinearMotion {
 impl_monostate_member!(FrcLinearMotion.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcLinearMotionResponse {
@@ -597,6 +623,7 @@ pub struct FrcLinearMotionResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -627,6 +654,7 @@ pub struct FrcJointRelativeJRep {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
     mrot: Option<OnOff>,
@@ -662,6 +690,7 @@ impl FrcJointRelativeJRep {
 impl_monostate_member!(FrcJointRelativeJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointRelativeJRepResponse {
@@ -673,6 +702,7 @@ pub struct FrcJointRelativeJRepResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -706,6 +736,7 @@ pub struct FrcJointRelative {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
     mrot: Option<OnOff>,
@@ -743,6 +774,7 @@ impl FrcJointRelative {
 impl_monostate_member!(FrcJointRelative.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointRelativeResponse {
@@ -754,6 +786,7 @@ pub struct FrcJointRelativeResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -784,6 +817,7 @@ pub struct FrcJointMotionJRep {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
     mrot: Option<OnOff>,
@@ -819,6 +853,7 @@ impl FrcJointMotionJRep {
 impl_monostate_member!(FrcJointMotionJRep.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcJointMotionJRepResponse {
@@ -830,6 +865,7 @@ pub struct FrcJointMotionJRepResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -863,6 +899,7 @@ pub struct FrcJointMotion {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
     mrot: Option<OnOff>,
@@ -900,6 +937,7 @@ impl FrcJointMotion {
 impl_monostate_member!(FrcJointMotion.no_blend = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrcJointMotionResponse {
@@ -911,6 +949,7 @@ pub struct FrcJointMotionResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -950,14 +989,17 @@ pub struct FrcCircularRelative {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
         default,
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     wrist_joint: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     mrot: Option<OnOnly>,
 }
 
@@ -1001,6 +1043,7 @@ impl_monostate_member!(FrcCircularRelative.wrist_joint = "ON");
 impl_monostate_member!(FrcCircularRelative.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCircularRelativeResponse {
@@ -1012,6 +1055,7 @@ pub struct FrcCircularRelativeResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -1051,14 +1095,17 @@ pub struct FrcCircularMotion {
     #[serde(flatten, default)]
     pub offset_register_numbers: OffsetRegisterNumbers,
     #[serde(rename = "NoBlend", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     no_blend: Option<OnOnly>,
     #[serde(
         rename = "WristJoint",
         default,
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     wrist_joint: Option<OnOnly>,
     #[serde(rename = "MROT", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "valuable", valuable(skip))]
     mrot: Option<OnOnly>,
 }
 
@@ -1102,6 +1149,7 @@ impl_monostate_member!(FrcCircularMotion.wrist_joint = "ON");
 impl_monostate_member!(FrcCircularMotion.mrot = "ON");
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCircularMotionResponse {
@@ -1114,6 +1162,7 @@ pub struct FrcCircularMotionResponse {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FrcCall {
@@ -1138,6 +1187,7 @@ impl FrcCall {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrcCallResponse {
@@ -1149,6 +1199,7 @@ pub struct FrcCallResponse {
     pub sequence_id: u32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "Instruction")]
@@ -1273,6 +1324,7 @@ packet_wrap! {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(tag = "Instruction")]

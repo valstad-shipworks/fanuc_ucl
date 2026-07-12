@@ -19,6 +19,8 @@ use crate::rmi::errors::PacketMismatchError;
 
 pub use driver::{RmiDriver, RmiDriverConfig};
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -40,6 +42,8 @@ impl SoftwareOptions {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FeatureGates {
     MajorVersion(u8),
@@ -86,6 +90,9 @@ pub enum FeatureGateFailure {
     #[error("{0}: Missing software option '{1:?}'")]
     MissingOption(String, SoftwareOptions),
 }
+
+#[cfg(feature = "valuable")]
+error_valuable!(FeatureGateFailure, "FeatureGateFailure");
 
 pub(crate) struct FeatureLockEntry {
     pub packet_name: &'static str,
@@ -318,6 +325,7 @@ impl<T, P> Packet<P> for T where
 {
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -352,6 +360,7 @@ impl ReceivablePacket for NeverPacket {
     type Counterpart = NeverPacket;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
@@ -429,6 +438,7 @@ impl SendablePacket for Instruction {
     type Counterpart = InstructionResponse;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]

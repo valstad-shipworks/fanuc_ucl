@@ -20,6 +20,7 @@ use crate::{
  * All units are in degrees per second (velocity), degrees per second^2 (acceleration),
  * or degrees per second^3 (jerk).
  */
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AxisMotionConstraint {
@@ -134,6 +135,7 @@ impl std::fmt::Display for AxisMotionConstraint {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimit {
@@ -191,6 +193,7 @@ impl std::fmt::Display for JointMovementLimit {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct JointMovementLimits {
@@ -330,6 +333,9 @@ pub enum StreamMotionError {
     #[error("Other Error: {0}")]
     Other(String),
 }
+
+#[cfg(feature = "valuable")]
+error_valuable!(StreamMotionError, "StreamMotionError");
 impl From<std::io::Error> for StreamMotionError {
     fn from(err: std::io::Error) -> Self {
         if err.kind() == std::io::ErrorKind::TimedOut {
