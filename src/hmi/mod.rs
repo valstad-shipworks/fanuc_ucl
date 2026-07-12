@@ -3,6 +3,7 @@ mod asg_handle;
 mod hmi_handle;
 mod proto;
 mod runner;
+pub mod server;
 
 #[cfg(test)]
 mod test;
@@ -489,7 +490,7 @@ impl HmiDriver {
             return Ok(AsgVarInterface::new(entry.clone()));
         }
         let mut max_address = 0u16;
-        for (_, existing_entry) in self.asg_entries.iter() {
+        for existing_entry in self.asg_entries.values() {
             let end_address = existing_entry.address + existing_entry.size;
             if end_address > max_address {
                 max_address = end_address;
@@ -528,7 +529,7 @@ impl HmiDriver {
             return Ok(AsgVarInterface::new(entry.clone()));
         }
         let mut max_address = 0u16;
-        for (_, existing_entry) in self.asg_entries.iter() {
+        for existing_entry in self.asg_entries.values() {
             let end_address = existing_entry.address + existing_entry.size;
             if end_address > max_address {
                 max_address = end_address;
