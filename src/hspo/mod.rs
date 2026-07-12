@@ -31,6 +31,7 @@ const TOK_WAKER: Token = Token(1);
 static HSPO_SERVER: LazyLock<Mutex<Option<HspoBroker>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Error returned when attempting to create an [`HspoReceiver`] before the HSPO broker has been initialized.
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HspoBrokerNotInitializedError;
 impl std::fmt::Display for HspoBrokerNotInitializedError {
@@ -51,6 +52,7 @@ impl From<HspoBrokerNotInitializedError> for pyo3::PyErr {
 
 /// A packet from a FANUC controller containing the TCP (Tool Center Point) cartesian position.
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Serialize)]
 #[repr(C)]
@@ -107,6 +109,7 @@ impl std::fmt::Display for TcpCartesianPositionPacket {
 
 /// A packet from a FANUC controller containing joint angle values.
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -212,6 +215,7 @@ impl std::fmt::Display for JointAnglesPacket {
 
 /// A packet from a FANUC controller containing up to 10 user-configured variable values.
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -271,7 +275,8 @@ impl_hspo_packet!(
     VariablesPacket
 );
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
 #[cfg_vis(test, pub)]
 enum PacketType {

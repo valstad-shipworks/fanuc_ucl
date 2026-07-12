@@ -299,6 +299,8 @@ pub mod position_struct {
 
     use crate::hmi::{HmiError, asg::HmiWireable};
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(u16)]
@@ -317,6 +319,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(u16)]
@@ -335,6 +339,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(u16)]
@@ -353,6 +359,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(u16)]
@@ -371,6 +379,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, set_all, str))]
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[repr(C)]
@@ -511,6 +521,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, set_all, str))]
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[repr(C)]
@@ -605,6 +617,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, set_all, str))]
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[repr(C)]
@@ -653,6 +667,8 @@ pub mod position_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, set_all, str))]
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[repr(C)]
@@ -708,6 +724,8 @@ pub mod alarm_struct {
 
     use crate::hmi::asg::HmiWireable;
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(i16)]
@@ -744,6 +762,8 @@ pub mod alarm_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, str))]
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[repr(C)]
@@ -807,6 +827,8 @@ pub mod alarm_struct {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, str))]
     #[derive(Debug, Clone, PartialEq)]
     #[repr(C)]
@@ -905,6 +927,8 @@ pub mod prog_status {
 
     use crate::hmi::asg::HmiWireable;
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, str))]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum)]
     #[repr(u16)]
@@ -925,6 +949,8 @@ pub mod prog_status {
         }
     }
 
+    #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object, get_all, str))]
     #[derive(Debug, Clone, PartialEq)]
     #[repr(C)]
@@ -988,6 +1014,7 @@ pub mod prog_status {
 }
 pub use prog_status::*;
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsgTypeMismatchError {
     pub expected: AsgTag,
@@ -1070,7 +1097,8 @@ pub trait AsgEncodableType:
 
 pub trait SysVarVal: AsgEncodableType {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsgTag {
     Integer,
     Short,
@@ -1083,6 +1111,8 @@ pub enum AsgTag {
     Program,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Debug, Clone)]
 pub enum AsgValue {
@@ -1163,7 +1193,8 @@ impl SysVarVal for position_struct::PositionData {}
 
 pub const MAX_ASG_CNT: usize = 80;
 
-#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct AsgEntry {
     pub address: u16,
     pub size: u16,

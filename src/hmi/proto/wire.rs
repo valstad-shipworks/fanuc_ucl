@@ -7,7 +7,10 @@ use crate::{
     hmi::proto::ports::{ReadableDataPort, UnsafelyWritableDataPort},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u8)]
 pub enum ServiceRequestCode {
     PLCStatus = 0x00,
@@ -33,7 +36,10 @@ pub enum ServiceRequestCode {
 }
 bincode_enum!(with_default ServiceRequestCode : u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u8)]
 pub enum SegmentSelector {
     Init = 0x00,
@@ -65,7 +71,10 @@ pub enum SegmentSelector {
 }
 bincode_enum!(with_default SegmentSelector : u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u16)]
 pub(super) enum PktType {
     InitTx = 0x00,
@@ -77,7 +86,10 @@ pub(super) enum PktType {
 }
 bincode_enum!(with_default PktType : u16);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u32)]
 pub(super) enum OperationType {
     Init = 0x00000000,
@@ -89,7 +101,10 @@ pub(super) enum OperationType {
 }
 bincode_enum!(with_default OperationType : u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u8)]
 pub(super) enum MsgTyp {
     Init = 0x00,
@@ -103,7 +118,10 @@ pub(super) enum MsgTyp {
 }
 bincode_enum!(with_default MsgTyp : u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, IntEnum, Default,
+)]
 #[repr(u8)]
 pub enum PlcState {
     RunIoEnabled = 0,
@@ -173,7 +191,10 @@ pub struct PlcStatus {
     status_flags: PlcStatusFlags,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[derive(
+    serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq, Encode, Decode,
+)]
 #[repr(C)]
 pub struct Header {
     pkt_type: PktType,

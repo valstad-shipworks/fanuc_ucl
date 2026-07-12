@@ -4,6 +4,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::joints::{JointFormat, JointRepr, JointTemplate, JointType, JointValue};
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnOff {
@@ -35,6 +36,7 @@ macro_rules! impl_monostate_member {
     };
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationType {
@@ -44,6 +46,7 @@ pub enum ApplicationType {
     Dispense,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PalletizingMode {
@@ -55,6 +58,7 @@ pub enum PalletizingMode {
     MSPIUP,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FrameData {
@@ -66,6 +70,7 @@ pub struct FrameData {
     pub r: f32,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configuration {
@@ -105,6 +110,7 @@ impl Default for Configuration {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
@@ -137,6 +143,7 @@ impl Default for Position {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object, get_all, set_all))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "PascalCase")]
@@ -322,6 +329,7 @@ impl JointRepr for JointAngles {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LcbType {
@@ -330,6 +338,7 @@ pub enum LcbType {
     TA,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize_repr, Deserialize_repr, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -339,6 +348,7 @@ pub enum PortType {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalConditionBlock {
@@ -360,6 +370,7 @@ pub struct LocalConditionBlock {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetRegisterNumbers {
@@ -386,6 +397,7 @@ pub struct OffsetRegisterNumbers {
     pub tool_offset: Option<u16>,
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermType {
@@ -407,6 +419,7 @@ pub enum TermType {
 /// * `InchMin` - Represents speed in inches per second.
 /// * `Time` - Represents time in 0.1 second increments.
 /// * `MilliSeconds` - Represents time in milliseconds (0.001 seconds).
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedType {

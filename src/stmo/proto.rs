@@ -16,6 +16,7 @@ pub trait Packet {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -76,6 +77,7 @@ impl PoseData {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
 struct MotionCommandPacketSingle {
@@ -137,6 +139,7 @@ impl Packet for MotionCommandPacketSingle {
     const PACKET_TYPE: u32 = 1;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -339,6 +342,7 @@ impl Packet for MotionCommandPacket {
     const PACKET_TYPE: u32 = 5;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[repr(u8)]
@@ -518,6 +522,7 @@ impl std::fmt::Display for StatusBitfield {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -602,6 +607,7 @@ impl Packet for RobotStatusPacket {
     const PACKET_TYPE: u32 = 0;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize)]
 pub struct StopPacket {}
 
@@ -609,6 +615,7 @@ impl Packet for StopPacket {
     const PACKET_TYPE: u32 = 2;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize)]
 pub struct StartPacket {}
 
@@ -616,6 +623,7 @@ impl Packet for StartPacket {
     const PACKET_TYPE: u32 = 0;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize)]
 pub struct CommandPositionRequestPacket {}
 
@@ -624,6 +632,7 @@ impl Packet for CommandPositionRequestPacket {
 }
 
 #[cfg_mixin(feature = "py")]
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(from_py_object))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
@@ -646,6 +655,7 @@ impl Packet for CommandPositionResponsePacket {
     const PACKET_TYPE: u32 = 4;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
 pub struct ThresholdTableRequestPacket {
@@ -672,6 +682,7 @@ impl TryFrom<(u32, u32)> for ThresholdTableRequestPacket {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
 pub struct ThresholdTableResponsePacket {
@@ -689,6 +700,7 @@ impl Packet for ThresholdTableResponsePacket {
     const PACKET_TYPE: u32 = 3;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize)]
 pub struct VersionNumberRequestPacket {}
 
@@ -696,6 +708,7 @@ impl Packet for VersionNumberRequestPacket {
     const PACKET_TYPE: u32 = 6;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq, Encode, Decode, Serialize)]
 #[repr(C)]
 pub struct VersionNumberResponsePacket {
@@ -706,6 +719,7 @@ impl Packet for VersionNumberResponsePacket {
     const PACKET_TYPE: u32 = 6;
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(tag = "packet", content = "data")]
 pub enum TxPackets {
@@ -765,6 +779,7 @@ impl TxPackets {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(tag = "packet", content = "data")]
 pub enum RxPackets {

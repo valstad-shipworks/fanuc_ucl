@@ -45,6 +45,10 @@
 )]
 // #![cfg_attr(not(test), warn(missing_docs))]
 
+#[cfg(feature = "valuable")]
+#[macro_use]
+mod valuable_error;
+
 #[cfg(feature = "hmi")]
 pub mod hmi;
 #[cfg(feature = "hspo")]
@@ -168,6 +172,7 @@ pub mod py {
     }
 }
 
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResponseNotFulfilled;
 impl std::fmt::Display for ResponseNotFulfilled {
