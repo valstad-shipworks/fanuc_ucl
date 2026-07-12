@@ -1098,8 +1098,7 @@ pub trait AsgEncodableType:
 pub trait SysVarVal: AsgEncodableType {}
 
 #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsgTag {
     Integer,
     Short,
@@ -1195,8 +1194,7 @@ impl SysVarVal for position_struct::PositionData {}
 pub const MAX_ASG_CNT: usize = 80;
 
 #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct AsgEntry {
     pub address: u16,
     pub size: u16,

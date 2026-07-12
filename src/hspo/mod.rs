@@ -276,8 +276,7 @@ impl_hspo_packet!(
 );
 
 #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
 #[repr(u16)]
 #[cfg_vis(test, pub)]
 enum PacketType {

@@ -43,8 +43,7 @@ impl SoftwareOptions {
 }
 
 #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
-#[derive(serde::Serialize)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FeatureGates {
     MajorVersion(u8),
     SoftwareOption(SoftwareOptions),
