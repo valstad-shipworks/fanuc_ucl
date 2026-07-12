@@ -102,7 +102,7 @@ fn make_asg_interface<T: AsgArgument>(
         return Ok(PyAsgVarInterface::new(entry.clone(), count, T::WRITABLE));
     }
     let mut max_address = 0u16;
-    for (_, existing_entry) in driver.asg_entries.iter() {
+    for existing_entry in driver.asg_entries.values() {
         let end_address = existing_entry.address + existing_entry.size;
         if end_address > max_address {
             max_address = end_address;
