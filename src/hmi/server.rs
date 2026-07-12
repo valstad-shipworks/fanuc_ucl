@@ -172,7 +172,11 @@ fn classify_fields(
             _ => HmiRequest::Other { seq },
         },
         Sr::ReadSysMemory => match segment {
-            S::Registers => HmiRequest::ReadRegs { seq, index, count: size },
+            S::Registers => HmiRequest::ReadRegs {
+                seq,
+                index,
+                count: size,
+            },
             S::InputBit => HmiRequest::ReadBits {
                 seq,
                 segment: Segment::InputBit,
@@ -242,7 +246,12 @@ pub fn ext_resp_regs(seq: u8, regs: &[i16]) -> Vec<u8> {
     for r in regs {
         payload.extend_from_slice(&r.to_le_bytes());
     }
-    let msg = Message::ext_resp(seq, ServiceRequestCode::ReadSysMemory, SegmentSelector::Registers, payload);
+    let msg = Message::ext_resp(
+        seq,
+        ServiceRequestCode::ReadSysMemory,
+        SegmentSelector::Registers,
+        payload,
+    );
     bincode::encode_to_vec(msg, BINCODE_CFG).unwrap_or_default()
 }
 
@@ -329,8 +338,7 @@ mod tests {
 
     #[test]
     fn init_ack_bytes_equal_init_ack_message() {
-        let (msg, _) =
-            bincode::decode_from_slice::<Message, _>(&init_ack(), BINCODE_CFG).unwrap();
+        let (msg, _) = bincode::decode_from_slice::<Message, _>(&init_ack(), BINCODE_CFG).unwrap();
         assert_eq!(msg, Message::INIT_ACK);
     }
 

@@ -937,9 +937,9 @@ impl TxPackets {
         match packet_type {
             StartPacket::PACKET_TYPE => Some(TxPackets::Start(StartPacket {})),
             StopPacket::PACKET_TYPE => Some(TxPackets::Stop(StopPacket {})),
-            VersionNumberRequestPacket::PACKET_TYPE => {
-                Some(TxPackets::VersionNumberRequest(VersionNumberRequestPacket {}))
-            }
+            VersionNumberRequestPacket::PACKET_TYPE => Some(TxPackets::VersionNumberRequest(
+                VersionNumberRequestPacket {},
+            )),
             CommandPositionRequestPacket::PACKET_TYPE => Some(TxPackets::CommandPositionRequest(
                 CommandPositionRequestPacket {},
             )),
@@ -1499,14 +1499,8 @@ mod device_roundtrip_tests {
     fn device_decodes_client_control_packets() {
         let mut b = [0u8; 512];
         for (encode, expect) in [
-            (
-                TxPackets::Start(StartPacket {}),
-                "start",
-            ),
-            (
-                TxPackets::Stop(StopPacket {}),
-                "stop",
-            ),
+            (TxPackets::Start(StartPacket {}), "start"),
+            (TxPackets::Stop(StopPacket {}), "stop"),
             (
                 TxPackets::VersionNumberRequest(VersionNumberRequestPacket {}),
                 "version",
@@ -1537,7 +1531,9 @@ mod device_roundtrip_tests {
 
         let mut b = [0u8; 512];
         // version >= 2 + joint_format keeps the double (type 5) encoding.
-        let n = TxPackets::MotionCommand(cmd).encode_into(2, &mut b).unwrap();
+        let n = TxPackets::MotionCommand(cmd)
+            .encode_into(2, &mut b)
+            .unwrap();
         match TxPackets::decode_from(&b[..n]).unwrap() {
             TxPackets::MotionCommand(m) => {
                 assert_eq!(m.seq(), 7);
