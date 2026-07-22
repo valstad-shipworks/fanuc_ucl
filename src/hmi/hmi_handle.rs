@@ -34,10 +34,10 @@ pub(super) fn caster_singular<T: ReadableDataPort>(
 ) -> HmiResult<T::ValueType> {
     let payload = msg.payload();
     if payload.len() < T::expected_size(target, 1) {
-        log::error!(
-            "Malformed response: expected at least {} bytes, got {} bytes",
-            T::expected_size(target, 1),
-            payload.len()
+        tracing::error!(
+            expected = T::expected_size(target, 1),
+            got = payload.len(),
+            "Malformed response"
         );
         return Err(HmiError::MalformedResponse);
     }
@@ -51,10 +51,10 @@ pub(super) fn caster_array<T: ReadableDataPort>(
 ) -> HmiResult<Box<[T::ValueType]>> {
     let payload = msg.payload();
     if payload.len() < T::expected_array_size(target, count) {
-        log::error!(
-            "Malformed response: expected at least {} bytes, got {} bytes",
-            T::expected_array_size(target, count),
-            payload.len()
+        tracing::error!(
+            expected = T::expected_array_size(target, count),
+            got = payload.len(),
+            "Malformed response"
         );
         return Err(HmiError::MalformedResponse);
     }

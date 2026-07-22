@@ -52,9 +52,9 @@ impl RmiHandleGeneric {
         // };
         let now = SystemTime::now();
         if Self::ERROR_NAMES.contains(&value.packet_name()) {
-            log::error!(
-                "RMI received system fault/terminate: {}",
-                value.packet_name()
+            tracing::error!(
+                packet = value.packet_name(),
+                "RMI received system fault/terminate"
             );
             let _ = self.resp.0.set(ResponseOrError::Error(
                 RmiError::SystemFaultOrTerminate,
@@ -62,7 +62,7 @@ impl RmiHandleGeneric {
             ));
         } else if value.error_id() != 0 {
             let ec = RmiProtocolError::try_from(value.error_id()).unwrap_or(Default::default());
-            log::error!("RMI response error for {}: {}", self.packet_name, ec);
+            tracing::error!(packet = self.packet_name, error = %ec, "RMI response error");
             let _ = self
                 .resp
                 .0

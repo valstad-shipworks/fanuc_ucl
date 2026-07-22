@@ -19,8 +19,10 @@ use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use snare::net::TcpStream as StdTcpStream;
 
 use crate::{
+    TelemetrySink,
     rmi::{
-        FeatureGates, FeatureLockEntry, SendPacket, SendablePacket, SoftwareOptions,
+        FeatureGates, FeatureLockEntry, ResponsePacket, SendPacket, SendablePacket,
+        SoftwareOptions,
         errors::{RmiError, RmiProtocolError, RmiResult},
         proto::{
             commands::{FrcAbort, FrcReset, FrcResetResponse},
@@ -34,6 +36,9 @@ use crate::{
 };
 
 type JsonObject = JsonMap<String, JsonValue>;
+
+/// Shared sink observing RMI traffic: outgoing [`SendPacket`], incoming [`ResponsePacket`].
+pub type RmiTelemetry = Arc<dyn TelemetrySink<SendPacket, ResponsePacket>>;
 
 #[derive(Debug, Clone)]
 enum VariadicString {
@@ -138,6 +143,7 @@ struct PendingWrite {
     offset: usize,
     handle: RmiHandleGeneric,
     is_disconnect: bool,
+    packet: Option<SendPacket>,
 }
 
 struct RmiRunner {
@@ -146,6 +152,7 @@ struct RmiRunner {
     from_driver: Receiver<RunnerMessage>,
     response_stack: VecDeque<RmiHandleGeneric>,
     config: RmiDriverConfig,
+    telemetry: Option<RmiTelemetry>,
 }
 
 impl RmiRunner {
@@ -158,6 +165,7 @@ impl RmiRunner {
         from_driver: Receiver<RunnerMessage>,
         config: RmiDriverConfig,
         thread_config: Option<ThreadConfig>,
+        telemetry: Option<RmiTelemetry>,
     ) -> RmiResult<(JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
         let tcp_stream = TcpStream::connect(addr)?;
         #[cfg(test)]
@@ -175,8 +183,9 @@ impl RmiRunner {
                     config,
                     thread_config,
                     waker_tx,
+                    telemetry,
                 ) {
-                    log::error!("RMI runner thread setup failed: {:?}", e);
+                    tracing::error!(error = ?e, "RMI runner thread setup failed");
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })?;
@@ -201,22 +210,28 @@ impl RmiRunner {
         loop {
             match self.tcp_stream.read(buf) {
                 Ok(0) => {
-                    log::error!("RMI TCP stream read returned 0 bytes, connection lost");
+                    tracing::error!("RMI TCP stream read returned 0 bytes, connection lost");
                     return Err(RmiError::Disconnected);
                 }
                 Ok(n) => {
-                    log::trace!("Read {} bytes", n);
+                    tracing::trace!(len = n, "Read bytes from RMI stream");
                     match rmi_string_reader(&buf[..n]) {
                         Ok(variadic) => {
-                            log::trace!("Variadic string has {} parts", variadic.len());
+                            tracing::trace!(parts = variadic.len(), "Variadic string parsed");
                             for json_str in variadic.vec() {
                                 if json_str.trim().is_empty() {
                                     continue;
                                 }
-                                log::debug!("RMI Runner received response:\n{}", json_str);
+                                tracing::debug!(response = %json_str, "RMI Runner received response");
                                 if let Some(resp_handle) = self.response_stack.front() {
-                                    match serde_json::from_str(&json_str) {
+                                    match serde_json::from_str::<ResponsePacket>(&json_str) {
                                         Ok(packet) => {
+                                            if let Some(sink) = &self.telemetry {
+                                                sink.received(
+                                                    &packet,
+                                                    std::time::SystemTime::now(),
+                                                );
+                                            }
                                             let _ = resp_handle.set_generic(packet);
                                         }
                                         Err(e) => {
@@ -225,22 +240,22 @@ impl RmiRunner {
                                     }
                                     self.response_stack.pop_front();
                                 } else {
-                                    log::warn!(
-                                        "No response handle to match incoming response: {}",
-                                        json_str
+                                    tracing::warn!(
+                                        response = %json_str,
+                                        "No response handle to match incoming response"
                                     );
                                     break;
                                 }
                             }
                         }
                         Err(e) => {
-                            log::warn!("Failed to read RMI response: {}", e);
+                            tracing::warn!(error = %e, "Failed to read RMI response");
                         }
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
                 Err(e) => {
-                    log::error!("RMI TCP stream read error: {}", e);
+                    tracing::error!(error = %e, "RMI TCP stream read error");
                     return Err(RmiError::CommunicationError(e));
                 }
             }
@@ -252,14 +267,14 @@ impl RmiRunner {
             return false;
         }
         if !q.is_empty() {
-            log::trace!("Writing to RMI tcp stream");
+            tracing::trace!("Writing to RMI tcp stream");
         }
         while let Some(front) = q.front_mut() {
             let mut write_cnt = 0;
             loop {
                 match self.tcp_stream.write(&front.buf[front.offset..]) {
                     Ok(0) => {
-                        log::error!("RMI TCP stream write returned 0, peer closed connection");
+                        tracing::error!("RMI TCP stream write returned 0, peer closed connection");
                         return true; // peer closed
                     }
                     Ok(n) => {
@@ -268,6 +283,9 @@ impl RmiRunner {
                         if front.offset == front.buf.len() {
                             let is_disc = front.is_disconnect;
                             let handle = front.handle.clone();
+                            if let (Some(sink), Some(packet)) = (&self.telemetry, &front.packet) {
+                                sink.sent(packet, std::time::SystemTime::now());
+                            }
                             // push response stack entry once the whole request is on the wire
                             self.response_stack.push_back(handle);
                             q.pop_front();
@@ -282,14 +300,14 @@ impl RmiRunner {
                         return false; // wait for next WRITABLE
                     }
                     Err(e) => {
-                        log::error!("RMI TCP stream write error: {}", e);
+                        tracing::error!(error = %e, "RMI TCP stream write error");
                         let _ = front.handle.set_error(RmiError::CommunicationError(e));
                         q.pop_front();
                         break;
                     }
                 }
             }
-            log::trace!("Wrote {} times for one packet", write_cnt);
+            tracing::trace!(writes = write_cnt, "Wrote packet to RMI stream");
             if self.response_stack.len() >= self.config.buffer_cnt as usize {
                 break;
             }
@@ -337,14 +355,14 @@ impl RmiRunner {
                 }
 
                 if connection_established && self.write_from_queue(&mut message_queue) {
-                    log::info!("Disconnect sent, terminating runner");
+                    tracing::info!("Disconnect sent, terminating runner");
                     break;
                 }
             }
 
             if !self.handle.is_alive() {
                 self.tcp_stream.shutdown(std::net::Shutdown::Both)?;
-                log::info!("RMI Runner thread terminating");
+                tracing::info!("RMI Runner thread terminating");
                 return Ok(());
             }
         }
@@ -358,9 +376,13 @@ fn rmi_runner_runtime(
     config: RmiDriverConfig,
     thread_config: Option<ThreadConfig>,
     waker_tx: Sender<Arc<Waker>>,
+    telemetry: Option<RmiTelemetry>,
 ) -> Result<(), GeneralThreadError> {
     if let Some(cfg) = thread_config {
         cfg.configure_this_thread_print_failure();
+    }
+    if let Some(sink) = &telemetry {
+        sink.warmup();
     }
     let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
     poll.registry()
@@ -381,9 +403,10 @@ fn rmi_runner_runtime(
         from_driver,
         response_stack: VecDeque::with_capacity(config.buffer_cnt as usize),
         config,
+        telemetry,
     };
     if let Err(e) = runner.run(poll) {
-        log::error!("RMI runner terminated with error: {}", e);
+        tracing::error!(error = %e, "RMI runner terminated with error");
     }
     Ok(())
 }
@@ -490,31 +513,33 @@ impl RmiDriverConfig {
 
 #[derive(Debug, Clone)]
 enum RunnerMessage {
-    SendPacket(Vec<u8>, RmiHandleGeneric),
+    SendPacket(Vec<u8>, RmiHandleGeneric, Option<SendPacket>),
     Disconnect(Vec<u8>, RmiHandleGeneric, bool),
 }
 
 impl RunnerMessage {
     fn into_pending_write(self) -> PendingWrite {
         match self {
-            RunnerMessage::SendPacket(data, handle) => PendingWrite {
+            RunnerMessage::SendPacket(data, handle, packet) => PendingWrite {
                 buf: data,
                 offset: 0,
                 handle,
                 is_disconnect: false,
+                packet,
             },
             RunnerMessage::Disconnect(data, handle, _) => PendingWrite {
                 buf: data,
                 offset: 0,
                 handle,
                 is_disconnect: true,
+                packet: None,
             },
         }
     }
 
     fn is_priority(&self) -> bool {
         match self {
-            RunnerMessage::SendPacket(_, _) => false,
+            RunnerMessage::SendPacket(_, _, _) => false,
             RunnerMessage::Disconnect(_, _, p) => *p,
         }
     }
@@ -537,6 +562,7 @@ pub struct RmiDriver {
     config: RmiDriverConfig,
     seq: AtomicU32,
     connection: Option<RmiConnection>,
+    telemetry: Option<RmiTelemetry>,
 }
 
 impl RmiDriver {
@@ -546,7 +572,21 @@ impl RmiDriver {
             config,
             seq: AtomicU32::new(2),
             connection: None,
+            telemetry: None,
         }
+    }
+
+    /// Like [`new`](Self::new), with a telemetry sink observing [`SendPacket`]s
+    /// at wire completion and decoded [`ResponsePacket`]s, from every connection
+    /// this driver makes. The FRC_Connect/FRC_Disconnect
+    /// handshake frames are raw JSON, not `SendPacket`s, and are not reported.
+    pub fn new_with_telemetry<S: TelemetrySink<SendPacket, ResponsePacket>>(
+        config: RmiDriverConfig,
+        telemetry: S,
+    ) -> Self {
+        let mut driver = Self::new(config);
+        driver.telemetry = Some(Arc::new(telemetry));
+        driver
     }
 
     /// The controller's reported `(major, minor)` RMI version, or `None` if not connected.
@@ -567,11 +607,11 @@ impl RmiDriver {
         &mut self,
         thread_config: Option<ThreadConfig>,
     ) -> RmiResult<FrcConnectResponse> {
-        log::info!("Attempting to connect RmiDriver to {}", self.config.address);
+        tracing::info!(addr = %self.config.address, "Attempting to connect RmiDriver");
         if self.connection.is_some() {
-            log::warn!(
-                "RmiDriver::connect called but already connected to {}",
-                self.config.address
+            tracing::warn!(
+                addr = %self.config.address,
+                "RmiDriver::connect called but already connected"
             );
             return Err(RmiError::Structure("Driver already started".to_string()));
         }
@@ -593,7 +633,7 @@ impl RmiDriver {
             buf
         };
         let response_str = rmi_string_reader(&response_bytes)?;
-        log::debug!("Connect response: {}", response_str);
+        tracing::debug!(response = ?response_str, "Connect response");
         let response = match response_str {
             VariadicString::Single(s) => serde_json::from_str::<FrcConnectResponse>(&s)?,
             other => {
@@ -605,17 +645,17 @@ impl RmiDriver {
         };
         if response.error_id != 0 {
             let ec = RmiProtocolError::try_from(response.error_id).unwrap_or(Default::default());
-            log::error!("RMI connect rejected by robot: {}", ec);
+            tracing::error!(error = %ec, "RMI connect rejected by robot");
             return Err(RmiError::FanucErrorCode(ec));
         }
         let major_version = response.major_version as u8;
         let minor_version = response.minor_version as u8;
         if major_version < self.config.expected_major_version {
-            log::error!(
-                "RMI version mismatch: robot v{}.{} < expected v{}",
-                major_version,
-                minor_version,
-                self.config.expected_major_version
+            tracing::error!(
+                robot_major = major_version,
+                robot_minor = minor_version,
+                expected_major = self.config.expected_major_version,
+                "RMI version mismatch"
             );
             return Err(RmiError::Initialization(format!(
                 "Robot major version {} is lower than expected {}",
@@ -630,6 +670,7 @@ impl RmiDriver {
             from_driver,
             self.config.clone(),
             thread_config,
+            self.telemetry.clone(),
         )?;
         handle.set_handle(join_handle);
         handle.set_waker_mio(waker);
@@ -643,7 +684,7 @@ impl RmiDriver {
             err_flag,
         });
 
-        log::info!("RmiDriver connected to {}", self.config.address);
+        tracing::info!(addr = %self.config.address, "RmiDriver connected");
 
         Ok(response)
     }
@@ -655,7 +696,7 @@ impl RmiDriver {
     /// error if the disconnect packet cannot be queued to the I/O thread.
     pub fn disconnect(&mut self) -> RmiResult<RmiHandle<FrcDisconnectResponse>> {
         if let Some(conn) = self.connection.take() {
-            log::info!("RmiDriver disconnecting from {}", self.config.address);
+            tracing::info!(addr = %self.config.address, "RmiDriver disconnecting");
             let data = rmi_string_writer(disconnect_json())?;
             let resp_handle = RmiHandleGeneric::new("FRC_Disconnect", 0);
             let specific_handle = RmiHandle::new_from_generic(&resp_handle);
@@ -663,7 +704,7 @@ impl RmiDriver {
                 .send(RunnerMessage::Disconnect(data, resp_handle, true))
                 .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
             conn.handle.join();
-            log::info!("RmiDriver disconnected from {}", self.config.address);
+            tracing::info!(addr = %self.config.address, "RmiDriver disconnected");
             Ok(specific_handle)
         } else {
             Err(RmiError::Disconnected)
@@ -675,9 +716,9 @@ impl RmiDriver {
         if cnx.handle.is_alive() {
             Ok(cnx)
         } else {
-            log::error!(
-                "RMI runner thread is dead, connection to {} lost",
-                self.config.address
+            tracing::error!(
+                addr = %self.config.address,
+                "RMI runner thread is dead, connection lost"
             );
             Err(RmiError::Disconnected)
         }
@@ -741,14 +782,15 @@ impl RmiDriver {
         };
         validate_gates(&content, conn.major_version, &self.config.software_options)?;
 
-        log::debug!(
-            "Sending packet to runner: {}",
-            serde_json::to_string_pretty(&content)?
+        tracing::debug!(
+            packet = %serde_json::to_string_pretty(&content)?,
+            "Sending packet to runner"
         );
         conn.to_runner
             .send(RunnerMessage::SendPacket(
                 rmi_string_writer(content)?,
                 generic_handle.clone(),
+                Some(packet),
             ))
             .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
         conn.handle.wake()?;

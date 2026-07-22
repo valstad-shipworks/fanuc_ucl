@@ -259,6 +259,57 @@ fn test_connect_disconnect() {
 }
 
 #[test]
+fn test_telemetry_sink() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingSink {
+        sent: Arc<AtomicUsize>,
+        received: Arc<AtomicUsize>,
+    }
+    impl crate::TelemetrySink<Message, Message> for CountingSink {
+        fn sent(&self, _tx: &Message, _timestamp: std::time::SystemTime) {
+            self.sent.fetch_add(1, Ordering::Relaxed);
+        }
+        fn received(&self, _rx: &Message, _timestamp: std::time::SystemTime) {
+            self.received.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let sent = Arc::new(AtomicUsize::new(0));
+    let received = Arc::new(AtomicUsize::new(0));
+    let sink = CountingSink {
+        sent: sent.clone(),
+        received: received.clone(),
+    };
+    run_hmi_test(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 31)), 60008),
+        noop_state_setup,
+        move |addr| {
+            let mut driver = HmiDriver::new_with_telemetry(addr.ip(), sink);
+            driver.connect(Some(Duration::from_secs(2)), None).unwrap();
+            driver
+                .write::<DigitalOutput>(1, true)
+                .unwrap()
+                .wait_timeout(Duration::from_secs(1))
+                .unwrap();
+            driver.disconnect(true).ok();
+        },
+    );
+
+    // At minimum INIT, MAGIC, CLRASG, and the DO write cross the wire, each acked.
+    assert!(
+        sent.load(Ordering::Relaxed) >= 4,
+        "sent hook fired {} times",
+        sent.load(Ordering::Relaxed)
+    );
+    assert!(
+        received.load(Ordering::Relaxed) >= 4,
+        "received hook fired {} times",
+        received.load(Ordering::Relaxed)
+    );
+}
+
+#[test]
 fn test_write_read_digital_output() {
     run_hmi_test(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 21)), 60008),

@@ -36,7 +36,7 @@ impl ThreadConfig {
 
     pub(crate) fn configure_this_thread_print_failure(&self) {
         if let Err(e) = self.configure_this_thread() {
-            log::error!("Failed to configure thread scheduling: {}", e);
+            tracing::error!(error = %e, "Failed to configure thread scheduling");
         }
     }
 }

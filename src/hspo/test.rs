@@ -322,8 +322,50 @@ fn test_all() {
 
     test_connection();
     test_drain();
+    test_telemetry();
 
     destroy_broker(false);
+}
+
+fn test_telemetry() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingSink(Arc<AtomicUsize>);
+    impl crate::TelemetrySink<(), HspoRxPacket> for CountingSink {
+        fn sent(&self, _tx: &(), _timestamp: SystemTime) {}
+        fn received(&self, _rx: &HspoRxPacket, _timestamp: SystemTime) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let addr = SocketAddr::from(([10, 0, 0, 4], 60000));
+    snare::add_ip_addr(addr.ip());
+
+    let received = Arc::new(AtomicUsize::new(0));
+    let receiver = HspoReceiver::try_new_with_telemetry(
+        addr.ip(),
+        128,
+        Duration::from_millis(16),
+        CountingSink(received.clone()),
+    )
+    .expect("Failed to initialize receiver.");
+
+    let mut tester = connect_tester::<RawPacket>(addr)
+        .with_stateful_cyclic_action::<TimerState>(Duration::from_millis(2), hspo_packet_sender)
+        .until_stateful_condition::<TimerState>(|state| {
+            state.poll_elapsed() >= Duration::from_millis(40)
+        });
+
+    run_testers!(tester);
+
+    assert!(
+        receiver.is_connected(),
+        "Receiver did not receive any packets."
+    );
+    assert!(
+        received.load(Ordering::Relaxed) > 0,
+        "received hook never fired"
+    );
 }
 
 fn test_connection() {

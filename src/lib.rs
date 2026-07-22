@@ -65,14 +65,42 @@ mod thread_util;
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
 pub use thread_util::ThreadConfig;
 
+/// Observer for packets crossing a driver's socket. A sink is handed to a
+/// driver constructor and shared with the I/O thread of every connection the
+/// driver makes; every hook fires on that thread, so implementations should
+/// be cheap and non-blocking.
+pub trait TelemetrySink<TX: Send + Sized, RX: Send + Sized>: Send + Sync + 'static {
+    /// Called from each I/O thread that will invoke the hooks, before its
+    /// event loop starts, allowing thread-affine setup (allocations,
+    /// thread-local state, pinning).
+    fn warmup(&self) {}
+    /// Called when the last byte of `tx` has been written to the socket.
+    fn sent(&self, tx: &TX, timestamp: std::time::SystemTime);
+    /// Called when `rx` has been decoded off the socket. `timestamp` is the
+    /// kernel receive timestamp when available (HSPO), otherwise the decode time.
+    fn received(&self, rx: &RX, timestamp: std::time::SystemTime);
+}
+
+impl<TX: Send, RX: Send> std::fmt::Debug for dyn TelemetrySink<TX, RX> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("dyn TelemetrySink")
+    }
+}
+
 #[cfg(feature = "py")]
 pub mod py {
 
     use super::{hmi, hspo, joints, rmi, stmo, thread_util};
     use pyo3::prelude::*;
+    use std::sync::OnceLock;
+    use tracing::level_filters::LevelFilter;
+    use tracing_subscriber::{layer::SubscriberExt, reload, util::SubscriberInitExt};
+
+    static FILTER_HANDLE: OnceLock<reload::Handle<LevelFilter, tracing_subscriber::Registry>> =
+        OnceLock::new();
 
     /// Logging level surfaced to Python as an enum (no string parsing on the
-    /// caller side). Maps 1:1 to [`log::LevelFilter`].
+    /// caller side). Maps 1:1 to [`LevelFilter`].
     #[pyo3::pyclass(eq, eq_int, from_py_object)]
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum LogLevel {
@@ -84,15 +112,28 @@ pub mod py {
         Trace,
     }
 
-    impl From<LogLevel> for log::LevelFilter {
+    impl From<LogLevel> for LevelFilter {
         fn from(l: LogLevel) -> Self {
             match l {
-                LogLevel::Off => log::LevelFilter::Off,
-                LogLevel::Error => log::LevelFilter::Error,
-                LogLevel::Warn => log::LevelFilter::Warn,
-                LogLevel::Info => log::LevelFilter::Info,
-                LogLevel::Debug => log::LevelFilter::Debug,
-                LogLevel::Trace => log::LevelFilter::Trace,
+                LogLevel::Off => LevelFilter::OFF,
+                LogLevel::Error => LevelFilter::ERROR,
+                LogLevel::Warn => LevelFilter::WARN,
+                LogLevel::Info => LevelFilter::INFO,
+                LogLevel::Debug => LevelFilter::DEBUG,
+                LogLevel::Trace => LevelFilter::TRACE,
+            }
+        }
+    }
+
+    impl From<LevelFilter> for LogLevel {
+        fn from(f: LevelFilter) -> Self {
+            match f.into_level() {
+                None => LogLevel::Off,
+                Some(tracing::Level::ERROR) => LogLevel::Error,
+                Some(tracing::Level::WARN) => LogLevel::Warn,
+                Some(tracing::Level::INFO) => LogLevel::Info,
+                Some(tracing::Level::DEBUG) => LogLevel::Debug,
+                Some(tracing::Level::TRACE) => LogLevel::Trace,
             }
         }
     }
@@ -101,8 +142,7 @@ pub mod py {
     /// it as a baseline. Per-module directives are not supported here — the
     /// expected use of `set_log_level` is "give me everything at level X",
     /// not selective per-target filtering.
-    fn parse_rust_log_baseline() -> log::LevelFilter {
-        use log::LevelFilter::*;
+    fn parse_rust_log_baseline() -> LevelFilter {
         let raw = std::env::var("RUST_LOG").ok();
         match raw
             .as_deref()
@@ -110,13 +150,13 @@ pub mod py {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
-            Some("off") => Off,
-            Some("error") => Error,
-            Some("warn") | Some("warning") => Warn,
-            Some("info") => Info,
-            Some("debug") => Debug,
-            Some("trace") => Trace,
-            _ => Warn,
+            Some("off") => LevelFilter::OFF,
+            Some("error") => LevelFilter::ERROR,
+            Some("warn") | Some("warning") => LevelFilter::WARN,
+            Some("info") => LevelFilter::INFO,
+            Some("debug") => LevelFilter::DEBUG,
+            Some("trace") => LevelFilter::TRACE,
+            _ => LevelFilter::WARN,
         }
     }
 
@@ -126,37 +166,34 @@ pub mod py {
     /// effective level after the call.
     #[pyo3::pyfunction]
     fn set_log_level(level: LogLevel) -> LogLevel {
-        let requested: log::LevelFilter = level.into();
-        let current = log::max_level();
-        let effective = if requested > current {
-            requested
-        } else {
-            current
+        let requested: LevelFilter = level.into();
+        let Some(handle) = FILTER_HANDLE.get() else {
+            return requested.into();
         };
-        log::set_max_level(effective);
-        match effective {
-            log::LevelFilter::Off => LogLevel::Off,
-            log::LevelFilter::Error => LogLevel::Error,
-            log::LevelFilter::Warn => LogLevel::Warn,
-            log::LevelFilter::Info => LogLevel::Info,
-            log::LevelFilter::Debug => LogLevel::Debug,
-            log::LevelFilter::Trace => LogLevel::Trace,
-        }
+        let current = handle.clone_current().unwrap_or(LevelFilter::OFF);
+        let effective = requested.max(current);
+        let _ = handle.reload(effective);
+        effective.into()
     }
 
     #[pyo3::pymodule(name = "_fanuc_core")]
     fn py_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        // Configure env_logger to pass every record through (no internal
-        // filter) so `log::max_level()` is the single runtime gate. Otherwise
-        // env_logger's parsed filter would clamp verbosity below whatever
-        // `set_log_level` later asks for.
-        let env_baseline = parse_rust_log_baseline();
-        let _ = env_logger::Builder::new()
-            .filter_level(log::LevelFilter::Trace)
-            .try_init();
-        log::set_max_level(env_baseline);
+        // The reload handle is the single runtime gate: `set_log_level` swaps
+        // the level filter in place without touching the fmt layer. Init can
+        // fail if the embedding process already installed a global subscriber;
+        // in that case its filtering wins and the handle stays unset.
+        let baseline = parse_rust_log_baseline();
+        let (filter, handle) = reload::Layer::new(baseline);
+        if tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .try_init()
+            .is_ok()
+        {
+            let _ = FILTER_HANDLE.set(handle);
+        }
 
-        log::trace!("Initializing Python module fanuc_ucl._fanuc_core");
+        tracing::trace!("Initializing Python module fanuc_ucl._fanuc_core");
 
         hmi::py::register_child_module(m)?;
         stmo::py::register_child_module(m)?;

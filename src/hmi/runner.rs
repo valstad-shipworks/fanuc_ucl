@@ -9,7 +9,7 @@ use std::time::Duration;
 use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 
 use crate::hmi::proto::wire::{Body, Header, Message};
-use crate::hmi::{BINCODE_CFG, DriverResult, HmiError};
+use crate::hmi::{BINCODE_CFG, DriverResult, HmiError, HmiTelemetry};
 use crate::thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle};
 
 use super::hmi_handle::{HmiHandleGeneric, HmiResult};
@@ -20,6 +20,7 @@ pub(super) enum RunnerMessage {
         seq: u8,
         data: Vec<u8>,
         handle: HmiHandleGeneric,
+        message: Message,
     },
     Shutdown,
 }
@@ -30,6 +31,7 @@ pub(super) struct PendingWrite {
     offset: usize,
     seq: u8,
     handle: HmiHandleGeneric,
+    message: Message,
 }
 
 pub(super) struct HmiRunner {
@@ -39,6 +41,7 @@ pub(super) struct HmiRunner {
     pending_responses: HashMap<u8, HmiHandleGeneric>,
     read_buffer: Vec<u8>,
     shutting_down: bool,
+    telemetry: Option<HmiTelemetry>,
 }
 
 impl HmiRunner {
@@ -50,30 +53,36 @@ impl HmiRunner {
         handle: ThreadHandle,
         from_driver: Receiver<RunnerMessage>,
         thread_config: Option<ThreadConfig>,
+        telemetry: Option<HmiTelemetry>,
     ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
         let tcp_stream = TcpStream::connect(addr)?;
         #[cfg(test)]
         {
             tcp_stream.set_nonblocking(true)?;
         }
-        log::trace!("HMI runner connected to {}", addr);
+        tracing::trace!(addr = %addr, "HMI runner connected");
         let (waker_tx, waker_rx) = flume::bounded(1);
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
         let join_handle = snare::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
-                if let Err(e) =
-                    hmi_runner_runtime(handle, tcp_stream, from_driver, thread_config, waker_tx)
-                {
-                    log::error!("HMI runner thread setup failed: {:?}", e);
+                if let Err(e) = hmi_runner_runtime(
+                    handle,
+                    tcp_stream,
+                    from_driver,
+                    thread_config,
+                    waker_tx,
+                    telemetry,
+                ) {
+                    tracing::error!(error = ?e, "HMI runner thread setup failed");
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })?;
         let waker = waker_rx
             .recv()
             .map_err(|e| HmiError::Io(IoError::other(e)))?;
-        log::trace!("HMI runner started");
+        tracing::trace!("HMI runner started");
         Ok((join_handle, waker, local_err_flag))
     }
 
@@ -142,12 +151,18 @@ impl HmiRunner {
     fn drain_channel(&mut self, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
         while let Ok(msg) = self.from_driver.try_recv() {
             match msg {
-                RunnerMessage::Send { seq, data, handle } => {
+                RunnerMessage::Send {
+                    seq,
+                    data,
+                    handle,
+                    message,
+                } => {
                     queue.push_back(PendingWrite {
                         buf: data,
                         offset: 0,
                         seq,
                         handle,
+                        message,
                     });
                 }
                 RunnerMessage::Shutdown => {
@@ -160,16 +175,19 @@ impl HmiRunner {
     }
 
     fn write_from_queue(&mut self, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
-        log::trace!("Writing to HMI tcp stream");
+        tracing::trace!("Writing to HMI tcp stream");
         while let Some(front) = queue.front_mut() {
             match self.tcp_stream.write(&front.buf[front.offset..]) {
                 Ok(0) => {
-                    log::error!("HMI TCP write returned 0, peer closed connection");
+                    tracing::error!("HMI TCP write returned 0, peer closed connection");
                     return Err(HmiError::NotConnected);
                 }
                 Ok(n) => {
                     front.offset += n;
                     if front.offset == front.buf.len() {
+                        if let Some(sink) = &self.telemetry {
+                            sink.sent(&front.message, std::time::SystemTime::now());
+                        }
                         self.pending_responses
                             .insert(front.seq, front.handle.clone());
                         queue.pop_front();
@@ -179,7 +197,7 @@ impl HmiRunner {
                 Err(e) => {
                     let handle = front.handle.clone();
                     queue.pop_front();
-                    log::error!("HMI TCP write error: {}", e);
+                    tracing::error!(error = %e, "HMI TCP write error");
                     let _ = handle.set_error(HmiError::Io(e));
                 }
             }
@@ -191,7 +209,7 @@ impl HmiRunner {
         loop {
             match self.tcp_stream.read(scratch) {
                 Ok(0) => {
-                    log::error!("HMI TCP read returned 0, connection lost");
+                    tracing::error!("HMI TCP read returned 0, connection lost");
                     return Err(HmiError::NotConnected);
                 }
                 Ok(n) => {
@@ -200,7 +218,7 @@ impl HmiRunner {
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
                 Err(e) => {
-                    log::error!("HMI TCP read error: {}", e);
+                    tracing::error!(error = %e, "HMI TCP read error");
                     return Err(HmiError::Io(e));
                 }
             }
@@ -227,24 +245,24 @@ impl HmiRunner {
     }
 
     fn handle_message(&mut self, msg: Message) {
+        if let Some(sink) = &self.telemetry {
+            sink.received(&msg, std::time::SystemTime::now());
+        }
         let seq = msg.seq();
         if let Some(handle) = self.pending_responses.remove(&seq) {
             let _ = handle.set_generic(msg);
         } else if matches!(msg.body, Body::Resp { .. } | Body::ExtResp { .. }) {
-            log::error!(
-                "HMI runner received response with no awaiting handle: seq {}",
-                seq
-            );
+            tracing::error!(seq, "HMI runner received response with no awaiting handle");
         }
     }
 
     fn fail_all(&mut self, queue: &mut VecDeque<PendingWrite>, error: HmiError) {
         let pending_count = self.pending_responses.len() + queue.len();
         if pending_count > 0 {
-            log::warn!(
-                "HMI runner failing {} pending requests: {}",
-                pending_count,
-                error
+            tracing::warn!(
+                pending = pending_count,
+                error = %error,
+                "HMI runner failing pending requests"
             );
         }
         for (_, handle) in self.pending_responses.drain() {
@@ -262,9 +280,13 @@ fn hmi_runner_runtime(
     from_driver: Receiver<RunnerMessage>,
     thread_config: Option<ThreadConfig>,
     waker_tx: Sender<Arc<Waker>>,
+    telemetry: Option<HmiTelemetry>,
 ) -> Result<(), GeneralThreadError> {
     if let Some(cfg) = thread_config {
         cfg.configure_this_thread_print_failure();
+    }
+    if let Some(sink) = &telemetry {
+        sink.warmup();
     }
     let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
     poll.registry()
@@ -286,9 +308,10 @@ fn hmi_runner_runtime(
         pending_responses: HashMap::new(),
         read_buffer: Vec::with_capacity(2048),
         shutting_down: false,
+        telemetry,
     };
     if let Err(e) = runner.run(poll) {
-        log::error!("HMI runner terminated with error: {}", e);
+        tracing::error!(error = %e, "HMI runner terminated with error");
     }
     Ok(())
 }
