@@ -87,7 +87,7 @@ fn make_asg_interface<T: AsgArgument>(
     timeout: Duration,
 ) -> DriverResult<PyAsgVarInterface> {
     let mut entry = arg.to_asg_entry();
-    log::trace!("Making ASG interface for entry: {}", entry);
+    tracing::trace!(entry = %entry, "Making ASG interface");
     entry.size *= count as u16;
     if driver.asg_entries.is_empty() {
         entry.address = 1;

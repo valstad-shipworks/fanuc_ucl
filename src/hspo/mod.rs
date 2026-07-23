@@ -399,6 +399,19 @@ impl StreamClock {
     }
 }
 
+/// A decoded HSPO datagram, as reported to a [`crate::TelemetrySink`].
+///
+/// HSPO is receive-only, so sinks use `()` as their TX type and `sent` never fires.
+#[derive(Debug, Clone, Copy)]
+pub enum HspoRxPacket {
+    TcpCartesianPosition(TcpCartesianPositionPacket),
+    JointAngles(JointAnglesPacket),
+    Variables(VariablesPacket),
+}
+
+/// Shared sink observing one receiver's incoming HSPO packets.
+pub type HspoTelemetry = Arc<dyn crate::TelemetrySink<(), HspoRxPacket>>;
+
 #[derive(Debug)]
 struct RobotSender {
     ip_of_interest: IpAddr,
@@ -414,6 +427,7 @@ struct RobotSender {
     tcp_clock: Arc<StreamClock>,
     joint_clock: Arc<StreamClock>,
     var_clock: Arc<StreamClock>,
+    telemetry: Option<HspoTelemetry>,
 }
 
 impl RobotSender {
@@ -667,7 +681,7 @@ impl HspoReceiver {
         let ip_of_interest: IpAddr = ip_of_interest.extract()?;
         let connection_timeout = Duration::from_secs_f64(connection_timeout_secs);
         if let Some(server) = HSPO_SERVER.lock().as_ref() {
-            Ok(server.add_robot(ip_of_interest, packet_buffer_size, connection_timeout)?)
+            Ok(server.add_robot(ip_of_interest, packet_buffer_size, connection_timeout, None)?)
         } else {
             Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "HSPO server not initialized. Please initialize the server before creating a driver.",
@@ -684,11 +698,45 @@ impl HspoReceiver {
         packet_buffer_size: usize,
         connection_timeout: Duration,
     ) -> Result<Self, HspoBrokerNotInitializedError> {
+        Self::try_new_inner(
+            ip_of_interest.into(),
+            packet_buffer_size,
+            connection_timeout,
+            None,
+        )
+    }
+
+    /// Like [`try_new`](Self::try_new), with a telemetry sink observing every
+    /// decoded packet from this robot on the broker thread; it is moved into
+    /// the broker on registration. Kernel receive timestamps are used when available.
+    #[cfg(off)]
+    pub fn try_new_with_telemetry<T: Into<IpAddr>, S: crate::TelemetrySink<(), HspoRxPacket>>(
+        ip_of_interest: T,
+        packet_buffer_size: usize,
+        connection_timeout: Duration,
+        telemetry: S,
+    ) -> Result<Self, HspoBrokerNotInitializedError> {
+        Self::try_new_inner(
+            ip_of_interest.into(),
+            packet_buffer_size,
+            connection_timeout,
+            Some(Arc::new(telemetry)),
+        )
+    }
+
+    #[cfg(off)]
+    fn try_new_inner(
+        ip_of_interest: IpAddr,
+        packet_buffer_size: usize,
+        connection_timeout: Duration,
+        telemetry: Option<HspoTelemetry>,
+    ) -> Result<Self, HspoBrokerNotInitializedError> {
         if let Some(server) = HSPO_SERVER.lock().as_ref() {
             server.add_robot(
-                ip_of_interest.into(),
+                ip_of_interest,
                 packet_buffer_size,
                 connection_timeout,
+                telemetry,
             )
         } else {
             Err(HspoBrokerNotInitializedError)
@@ -752,7 +800,7 @@ fn broker_runtime(
     let kernel_ts = match rx_timestamp::enable_rx_timestamping(&socket) {
         Ok(()) => true,
         Err(e) => {
-            log::debug!("HSPO kernel rx timestamps unavailable: {}", e);
+            tracing::debug!(error = %e, "HSPO kernel rx timestamps unavailable");
             false
         }
     };
@@ -785,6 +833,9 @@ fn broker_runtime(
             if rs.connection_timeout < shortest_timeout {
                 shortest_timeout = rs.connection_timeout;
             }
+            if let Some(sink) = &rs.telemetry {
+                sink.warmup();
+            }
             robot_senders.entry(rs.ip_of_interest).or_default().push(rs);
         }
 
@@ -816,8 +867,8 @@ fn broker_runtime(
                         // Determine packet type. 'typ' is at offset 12 (u32,u32,u32 -> 12 bytes).
                         let pkt_type = PacketType::from_bytes(&buf[..n], 12);
                         let now = std::time::Instant::now();
-                        let sys_micros: u64 = rx_ts
-                            .unwrap_or_else(SystemTime::now)
+                        let sys_time = rx_ts.unwrap_or_else(SystemTime::now);
+                        let sys_micros: u64 = sys_time
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap_or(Duration::ZERO)
                             .as_micros()
@@ -835,6 +886,12 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
+                                        if let Some(sink) = &rs.telemetry {
+                                            sink.received(
+                                                &HspoRxPacket::TcpCartesianPosition(p),
+                                                sys_time,
+                                            );
+                                        }
                                         if !rs.accept_packet(
                                             HspoStream::Tcp,
                                             p.index,
@@ -864,6 +921,9 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
+                                        if let Some(sink) = &rs.telemetry {
+                                            sink.received(&HspoRxPacket::JointAngles(p), sys_time);
+                                        }
                                         if !rs.accept_packet(
                                             HspoStream::Joint,
                                             p.index,
@@ -891,6 +951,9 @@ fn broker_runtime(
                                     for rs in listeners.iter_mut() {
                                         rs.last_packet_time = Some(now);
                                         rs.connection_active.store(true, Ordering::Relaxed);
+                                        if let Some(sink) = &rs.telemetry {
+                                            sink.received(&HspoRxPacket::Variables(p), sys_time);
+                                        }
                                         if !rs.accept_packet(
                                             HspoStream::Variables,
                                             p.index,
@@ -920,7 +983,7 @@ fn broker_runtime(
                         break;
                     }
                     Err(e) => {
-                        log::error!("HSPO broker socket recv error: {}", e);
+                        tracing::error!(error = %e, "HSPO broker socket recv error");
                         break;
                     }
                 }
@@ -958,6 +1021,7 @@ impl HspoBroker {
         ip_of_interest: IpAddr,
         packet_buffer_size: usize,
         connection_timeout: Duration,
+        telemetry: Option<HspoTelemetry>,
     ) -> Result<HspoReceiver, HspoBrokerNotInitializedError> {
         let (tcp_tx, tcp_rx) = bounded::<TcpCartesianPositionPacket>(packet_buffer_size);
         let (joint_tx, joint_rx) = bounded::<JointAnglesPacket>(packet_buffer_size);
@@ -982,12 +1046,13 @@ impl HspoBroker {
             tcp_clock: tcp.clock.clone(),
             joint_clock: joint.clock.clone(),
             var_clock: var.clock.clone(),
+            telemetry,
         };
 
-        log::info!(
-            "HSPO registering receiver for {} (buffer_size={})",
-            ip_of_interest,
-            packet_buffer_size
+        tracing::info!(
+            ip = %ip_of_interest,
+            buffer_size = packet_buffer_size,
+            "HSPO registering receiver"
         );
         self.robot_appender
             .send(robot_sender)
@@ -1023,7 +1088,7 @@ impl HspoBroker {
                     thread_kill_switch,
                     waker_tx,
                 ) {
-                    log::error!("HSPO broker thread exited with error: {}", e);
+                    tracing::error!(error = %e, "HSPO broker thread exited with error");
                     thread_err_flag.store(true, Ordering::Relaxed);
                 }
             })
@@ -1051,10 +1116,10 @@ pub fn initialize_broker(
 ) -> Result<(), HspoBrokerNotInitializedError> {
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
-        log::info!("Initializing HSPO broker on {}", listen_on);
+        tracing::info!(addr = %listen_on, "Initializing HSPO broker");
         let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
-        log::info!("HSPO broker initialized");
+        tracing::info!("HSPO broker initialized");
     }
     Ok(())
 }
@@ -1074,10 +1139,10 @@ pub fn initialize_broker(
     })?;
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
-        log::info!("Initializing HSPO broker on {}", listen_on);
+        tracing::info!(addr = %listen_on, "Initializing HSPO broker");
         let server = HspoBroker::create(listen_on, thread_config)?;
         *guard = Some(server);
-        log::info!("HSPO broker initialized");
+        tracing::info!("HSPO broker initialized");
     }
     Ok(())
 }
@@ -1090,12 +1155,12 @@ pub fn initialize_broker(
 pub fn destroy_broker(wait_for_thread: bool) {
     let mut guard = HSPO_SERVER.lock();
     if let Some(broker) = guard.take() {
-        log::info!("Destroying HSPO broker");
+        tracing::info!("Destroying HSPO broker");
         broker.kill_switch.store(true, Ordering::Relaxed);
         if wait_for_thread {
             match broker._thread_handle.join() {
-                Ok(()) => log::info!("HSPO broker thread exited cleanly"),
-                Err(e) => log::error!("HSPO broker thread panicked: {:?}", e),
+                Ok(()) => tracing::info!("HSPO broker thread exited cleanly"),
+                Err(e) => tracing::error!(error = ?e, "HSPO broker thread panicked"),
             }
         }
     }

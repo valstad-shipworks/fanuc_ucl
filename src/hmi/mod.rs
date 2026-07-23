@@ -146,6 +146,9 @@ type DriverResult<T> = pyo3::PyResult<T>;
 #[cfg(not(feature = "py"))]
 type DriverResult<T> = Result<T, HmiError>;
 
+/// Shared sink observing HMI traffic: [`Message`]s in both directions.
+pub type HmiTelemetry = Arc<dyn crate::TelemetrySink<Message, Message>>;
+
 pub(crate) const BINCODE_CFG: config::Configuration<config::LittleEndian, config::Fixint> =
     bincode::config::standard()
         .with_little_endian()
@@ -171,6 +174,7 @@ pub struct HmiDriver {
     connection: Option<HmiConnection>,
     seq: AtomicU8,
     asg_entries: HashMap<String, Arc<AsgEntry>>,
+    telemetry: Option<HmiTelemetry>,
 }
 
 impl HmiDriver {
@@ -183,7 +187,19 @@ impl HmiDriver {
             connection: None,
             seq: AtomicU8::new(0),
             asg_entries: HashMap::new(),
+            telemetry: None,
         }
+    }
+
+    /// Like [`new`](Self::new), with a telemetry sink observing every
+    /// [`Message`] on the wire, from every connection this driver makes.
+    pub fn new_with_telemetry<T: Into<IpAddr>, S: crate::TelemetrySink<Message, Message>>(
+        remote_addr: T,
+        telemetry: S,
+    ) -> Self {
+        let mut driver = Self::new(remote_addr);
+        driver.telemetry = Some(Arc::new(telemetry));
+        driver
     }
 
     /// Connects to the HMI and performs the necessary handshake to establish communication.
@@ -198,7 +214,7 @@ impl HmiDriver {
         timeout: Option<Duration>,
         thread_config: Option<ThreadConfig>,
     ) -> DriverResult<()> {
-        log::info!("Attempting to connect HmiDriver to {}", self.remote_addr);
+        tracing::info!(addr = %self.remote_addr, "Attempting to connect HmiDriver");
         let timeout =
             timeout.unwrap_or_else(|| Duration::from_secs_f64(DEFAULT_CONNECT_TIMEOUT_SECS));
         if timeout.is_zero() {
@@ -210,8 +226,13 @@ impl HmiDriver {
         let addr = SocketAddr::new(self.remote_addr, HMI_DEFAULT_PORT);
         let (to_runner, from_driver) = flume::unbounded();
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker, err_flag) =
-            HmiRunner::start(addr, handle.to_pass_in(), from_driver, thread_config)?;
+        let (join_handle, waker, err_flag) = HmiRunner::start(
+            addr,
+            handle.to_pass_in(),
+            from_driver,
+            thread_config,
+            self.telemetry.clone(),
+        )?;
         handle.set_handle(join_handle);
         self.seq.store(0, Ordering::SeqCst);
         self.connection = Some(HmiConnection {
@@ -229,12 +250,12 @@ impl HmiDriver {
             self.next_seq(); // magic uses seq 1
             self.write::<ports::Command>(0, "CLRASG".to_string())?
                 .wait_timeout(timeout.saturating_sub(start.elapsed()))?;
-            log::info!("HmiDriver connected to {}", self.remote_addr);
+            tracing::info!(addr = %self.remote_addr, "HmiDriver connected");
             Ok(())
         } else {
-            log::error!(
-                "Failed to connect HmiDriver to {}: did not receive expected ACKs",
-                self.remote_addr
+            tracing::error!(
+                addr = %self.remote_addr,
+                "Failed to connect HmiDriver: did not receive expected ACKs"
             );
             Err(HmiError::Other("Failed to receive ACK for INIT".into()).into())
         }
@@ -248,13 +269,13 @@ impl HmiDriver {
     /// Returns [`HmiError::NotConnected`] if no connection is open.
     pub fn disconnect(&mut self, ignore_join: bool) -> DriverResult<()> {
         if let Some(conn) = self.connection.take() {
-            log::info!("HmiDriver disconnecting from {}", self.remote_addr);
+            tracing::info!(addr = %self.remote_addr, "HmiDriver disconnecting");
             let _ = conn.to_runner.send(RunnerMessage::Shutdown);
             let _ = conn.waker.wake();
             if !ignore_join {
                 conn.handle.join();
             }
-            log::info!("HmiDriver disconnected from {}", self.remote_addr);
+            tracing::info!(addr = %self.remote_addr, "HmiDriver disconnected");
             Ok(())
         } else {
             Err(HmiError::NotConnected.into())
@@ -286,9 +307,9 @@ impl HmiDriver {
         match self.connection.as_ref() {
             Some(conn) if conn.handle.is_alive() => Ok(conn),
             Some(_) => {
-                log::error!(
-                    "HMI runner thread is dead, connection to {} lost",
-                    self.remote_addr
+                tracing::error!(
+                    addr = %self.remote_addr,
+                    "HMI runner thread is dead, connection lost"
                 );
                 Err(HmiError::NotConnected.into())
             }
@@ -299,19 +320,20 @@ impl HmiDriver {
     fn send_message(&self, msg: Message) -> DriverResult<HmiHandleGeneric> {
         let conn = self.get_connection()?;
         let seq = msg.seq();
-        log::trace!("Sending message: {:?}", msg);
-        let encoded = bincode::encode_to_vec(msg, BINCODE_CFG).map_err(HmiError::from)?;
+        tracing::trace!(message = ?msg, "Sending message");
+        let encoded = bincode::encode_to_vec(&msg, BINCODE_CFG).map_err(HmiError::from)?;
         let handle = HmiHandleGeneric::new();
         conn.to_runner
             .send(RunnerMessage::Send {
                 seq,
                 data: encoded,
                 handle: handle.clone(),
+                message: msg,
             })
             .map_err(|e| HmiError::Io(IoError::new(ErrorKind::BrokenPipe, e)))?;
-        log::trace!("Sent message");
+        tracing::trace!("Sent message");
         let _ = conn.waker.wake();
-        log::trace!("Woke waker");
+        tracing::trace!("Woke waker");
         Ok(handle)
     }
 
@@ -320,7 +342,7 @@ impl HmiDriver {
             "SETASG {} {} {} {}",
             entry.address, entry.size, entry.var_name, entry.multiply
         );
-        log::debug!("Sending ASG command: {}", cmd);
+        tracing::debug!(command = %cmd, "Sending ASG command");
         self.write::<ports::Command>(0, cmd)?
             .wait_timeout(timeout)
             .map_err(Into::into)
@@ -344,12 +366,7 @@ impl HmiDriver {
         if !T::ZERO_INDEXED && index == 0 {
             return Err(HmiError::ZeroIndex.into());
         }
-        log::trace!(
-            "Writing to port {} at index {} values {:?}",
-            T::NAME,
-            index,
-            values
-        );
+        tracing::trace!(port = T::NAME, index, values = ?values, "Writing to port");
         let seq = self.next_seq();
         let msg = Message::new_write_req::<T>(seq, index, values);
         let generic = self.send_message(msg)?;

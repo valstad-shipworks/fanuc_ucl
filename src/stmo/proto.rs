@@ -774,7 +774,7 @@ impl TxPackets {
                 bincode::encode_into_slice(pkt, data_buf, cfg)?
             }
         };
-        log::trace!("Encoded packet type {} with {} bytes of data", pkt_type, n);
+        tracing::trace!(packet_type = pkt_type, len = n, "Encoded packet");
         Ok(n + 8)
     }
 }
@@ -792,7 +792,7 @@ pub enum RxPackets {
 impl RxPackets {
     pub fn decode_from(buf: &[u8]) -> Option<Self> {
         if buf.len() < 8 {
-            log::warn!("Received packet too short: {} bytes", buf.len());
+            tracing::warn!(len = buf.len(), "Received packet too short");
             return None;
         }
         let packet_type = u32::from_be_bytes(buf[0..4].try_into().ok()?);
@@ -810,10 +810,10 @@ impl RxPackets {
             RobotStatusPacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    log::warn!(
-                        "Warning: RobotStatusPacket decoded length {} does not match data length {}",
-                        n,
-                        data_buf.len()
+                    tracing::warn!(
+                        decoded_len = n,
+                        data_len = data_buf.len(),
+                        "RobotStatusPacket decoded length does not match data length"
                     );
                 }
                 Some(RxPackets::RobotStatus(pkt))
@@ -821,10 +821,10 @@ impl RxPackets {
             ThresholdTableResponsePacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    log::warn!(
-                        "Warning: ThresholdTableResponsePacket decoded length {} does not match data length {}",
-                        n,
-                        data_buf.len()
+                    tracing::warn!(
+                        decoded_len = n,
+                        data_len = data_buf.len(),
+                        "ThresholdTableResponsePacket decoded length does not match data length"
                     );
                 }
                 Some(RxPackets::ThresholdTableResponse(pkt))
@@ -832,10 +832,10 @@ impl RxPackets {
             CommandPositionResponsePacket::PACKET_TYPE => {
                 let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
                 if n != data_buf.len() {
-                    log::warn!(
-                        "Warning: CommandPositionResponsePacket decoded length {} does not match data length {}",
-                        n,
-                        data_buf.len()
+                    tracing::warn!(
+                        decoded_len = n,
+                        data_len = data_buf.len(),
+                        "CommandPositionResponsePacket decoded length does not match data length"
                     );
                 }
                 Some(RxPackets::CommandPositionResponse(pkt))
@@ -1344,7 +1344,7 @@ mod tests {
         // values match input exactly).
         for (i, &v) in joints.iter().enumerate() {
             assert!(
-                (pkt.position[i] - v as f64).abs() < 1e-6,
+                (pkt.position[i] - v).abs() < 1e-6,
                 "axis {i}: got {} expected {}",
                 pkt.position[i],
                 v
@@ -1523,12 +1523,12 @@ mod device_roundtrip_tests {
         ] {
             let n = encode.encode_into(2, &mut b).unwrap();
             let decoded = TxPackets::decode_from(&b[..n]).unwrap();
-            let ok = match (expect, decoded) {
-                ("start", TxPackets::Start(_)) => true,
-                ("stop", TxPackets::Stop(_)) => true,
-                ("version", TxPackets::VersionNumberRequest(_)) => true,
-                _ => false,
-            };
+            let ok = matches!(
+                (expect, decoded),
+                ("start", TxPackets::Start(_))
+                    | ("stop", TxPackets::Stop(_))
+                    | ("version", TxPackets::VersionNumberRequest(_))
+            );
             assert!(ok, "decode mismatch for {expect}");
         }
     }

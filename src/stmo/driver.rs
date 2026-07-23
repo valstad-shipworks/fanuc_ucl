@@ -16,6 +16,7 @@ use event_listener::{Event, Listener};
 use flume::{Receiver, Sender};
 
 use crate::{
+    TelemetrySink,
     joints::JointDataSizeError,
     stmo::{
         JointMovementLimit,
@@ -38,6 +39,9 @@ use pyo3::prelude::*;
 
 const TOK_SOCKET: Token = Token(0);
 const TOK_WAKER: Token = Token(1);
+
+/// Shared sink observing STMO traffic: outgoing [`TxPackets`], incoming [`RxPackets`].
+pub type StmoTelemetry = Arc<dyn TelemetrySink<TxPackets, RxPackets>>;
 
 #[derive(Debug, Clone)]
 enum MaybeMany<T: Clone> {
@@ -62,6 +66,7 @@ struct StreamMotionContext {
     last_command_position_request_time: Instant,
     motion_command_queue: VecDeque<(MaybeMany<MotionCommandPacket>, Option<StmoHandle>)>,
     itl: Arc<(Event, AtomicBool)>,
+    telemetry: Option<StmoTelemetry>,
 }
 
 impl StreamMotionContext {
@@ -73,6 +78,7 @@ impl StreamMotionContext {
         socket: MioUdpSocket,
         itl: Arc<(Event, AtomicBool)>,
         send_last_command: bool,
+        telemetry: Option<StmoTelemetry>,
     ) -> Self {
         Self {
             from_driver,
@@ -83,6 +89,7 @@ impl StreamMotionContext {
             motion_command_queue: VecDeque::new(),
             itl,
             send_last_command,
+            telemetry,
         }
     }
 
@@ -95,7 +102,12 @@ impl StreamMotionContext {
     ) -> Result<(), StreamMotionError> {
         let n = tx.encode_into(version_override.unwrap_or(self.protocol_version), buf)?;
         match self.socket.send(&buf[..n]) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                if let Some(sink) = &self.telemetry {
+                    sink.sent(&tx, std::time::SystemTime::now());
+                }
+                Ok(())
+            }
             Err(ref e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::Interrupted =>
@@ -106,12 +118,12 @@ impl StreamMotionContext {
                         Err(e) => Err(e),
                     }
                 } else {
-                    log::warn!("STMO send would block and no timeout configured");
+                    tracing::warn!("STMO send would block and no timeout configured");
                     Err(StreamMotionError::Timeout)
                 }
             }
             Err(e) => {
-                log::error!("STMO UDP send error: {}", e);
+                tracing::error!(error = %e, "STMO UDP send error");
                 Err(StreamMotionError::from(e))
             }
         }
@@ -137,12 +149,15 @@ impl StreamMotionContext {
                     sleeper.sleep(Duration::from_micros(500));
                 }
                 Err(e) => {
-                    log::error!("Error sending packet: {:?}", e);
+                    tracing::error!(error = %e, "Error sending packet");
                     return Err(StreamMotionError::from(e));
                 }
             }
         }
         if sent {
+            if let Some(sink) = &self.telemetry {
+                sink.sent(&tx, std::time::SystemTime::now());
+            }
             Ok(())
         } else {
             Err(StreamMotionError::Timeout)
@@ -196,7 +211,7 @@ impl StreamMotionContext {
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
-                log::error!("STMO poll error, breaking event loop: {}", e);
+                tracing::error!(error = %e, "STMO poll error, breaking event loop");
                 break;
             }
 
@@ -208,13 +223,16 @@ impl StreamMotionContext {
                             match self.socket.recv(&mut rx_buf) {
                                 Ok(n) if n > 0 => {
                                     if let Some(rx) = RxPackets::decode_from(&rx_buf[..n]) {
+                                        if let Some(sink) = &self.telemetry {
+                                            sink.received(&rx, std::time::SystemTime::now());
+                                        }
                                         let _ = self.to_driver.send(rx);
-                                        log::trace!("Received packet: {:?}", rx);
+                                        tracing::trace!(packet = ?rx, "Received packet");
                                         if let RxPackets::VersionNumberResponse(vn) = &rx {
                                             self.protocol_version = vn.version;
-                                            log::info!(
-                                                "Detected Stream Motion protocol version {}",
-                                                self.protocol_version
+                                            tracing::info!(
+                                                version = self.protocol_version,
+                                                "Detected Stream Motion protocol version"
                                             );
                                         }
                                         // respond with the best matching motion command if applicable
@@ -224,9 +242,9 @@ impl StreamMotionContext {
                                             }
                                             // status_cycle_count = status_cycle_count.wrapping_add(1);
                                             if state.status_bits().packet_rate() as u32 != 0 {
-                                                log::debug!(
-                                                    "Robot status packet rate: {}",
-                                                    state.status_bits().packet_rate()
+                                                tracing::debug!(
+                                                    rate = state.status_bits().packet_rate(),
+                                                    "Robot status packet rate"
                                                 );
                                             }
                                             // status_cycle_count = 0;
@@ -235,18 +253,18 @@ impl StreamMotionContext {
                                             {
                                                 cmd.seq = state.seq;
                                                 if consecutive_fillers > 0 {
-                                                    log::debug!(
-                                                        "STMO queue refilled (seq {}) after {} filler cycle(s) (~{}ms starved)",
-                                                        state.seq,
-                                                        consecutive_fillers,
-                                                        consecutive_fillers * 8
+                                                    tracing::debug!(
+                                                        seq = state.seq,
+                                                        filler_cycles = consecutive_fillers,
+                                                        starved_ms = consecutive_fillers * 8,
+                                                        "STMO queue refilled"
                                                     );
                                                     consecutive_fillers = 0;
                                                 }
                                                 prev_motion_packet = Some(cmd);
                                                 prev_command_was_real = true;
                                                 if cmd.last_command {
-                                                    log::trace!("Last motion command sent");
+                                                    tracing::trace!("Last motion command sent");
                                                 }
                                                 let _ = self.send(
                                                     TxPackets::MotionCommand(cmd),
@@ -271,20 +289,19 @@ impl StreamMotionContext {
                                                     );
                                                     cmd.seq = state.seq;
                                                     consecutive_fillers += 1;
-                                                    let held = prev_motion_packet.position();
-                                                    let actual = state.joints_raw();
-                                                    log::debug!(
-                                                        "STMO queue starved: filler #{} (seq {}, prev_real={}) holding setpoint while robot moves — J1 held={:.4} actual={:.4} (Δ{:.4}), rail held={:.3} actual={:.3} (Δ{:.3})",
-                                                        consecutive_fillers,
-                                                        cmd.seq,
-                                                        prev_command_was_real,
-                                                        held[0],
-                                                        actual[0],
-                                                        actual[0] as f64 - held[0],
-                                                        held[6],
-                                                        actual[6],
-                                                        actual[6] as f64 - held[6],
-                                                    );
+                                                    if consecutive_fillers == 1 {
+                                                        let held = prev_motion_packet.position();
+                                                        let actual = state.joints_raw();
+                                                        tracing::debug!(
+                                                            seq = cmd.seq,
+                                                            prev_real = prev_command_was_real,
+                                                            j1_held = held[0],
+                                                            j1_actual = actual[0],
+                                                            rail_held = held[6],
+                                                            rail_actual = actual[6],
+                                                            "STMO queue starved, holding setpoint"
+                                                        );
+                                                    }
                                                     prev_command_was_real = false;
                                                     let _ = self.send(
                                                         TxPackets::MotionCommand(cmd),
@@ -294,30 +311,32 @@ impl StreamMotionContext {
                                                     );
                                                 }
                                             } else if self.itl.1.load(Ordering::SeqCst) {
-                                                log::trace!(
+                                                tracing::trace!(
                                                     "Notifying in the loop that we got a new status"
                                                 );
                                                 self.itl.0.notify(1);
                                             } else {
-                                                log::trace!("No new status received in the loop");
+                                                tracing::trace!(
+                                                    "No new status received in the loop"
+                                                );
                                             }
                                         }
                                     } else {
-                                        log::warn!(
-                                            "Received unknown packet: ({}) {:02X?}",
-                                            n,
+                                        tracing::warn!(
+                                            len = n,
+                                            "Received unknown packet: {:02X?}",
                                             &rx_buf[..n]
                                         );
                                     }
                                 }
                                 Ok(_) => {
-                                    log::warn!("Received empty packet");
+                                    tracing::warn!("Received empty packet");
                                     break;
                                 }
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
                                 Err(e) => {
-                                    log::error!("Error receiving packet: {:?}", e);
+                                    tracing::error!(error = %e, "Error receiving packet");
                                     break;
                                 }
                             }
@@ -373,7 +392,7 @@ impl StreamMotionContext {
                                         None,
                                         None,
                                     );
-                                    log::info!("Sent ThresholdTableRequest");
+                                    tracing::info!("Sent ThresholdTableRequest");
                                 }
                             }
                         }
@@ -388,7 +407,7 @@ impl StreamMotionContext {
         if thread_handle.should_live() {
             if self.protocol_version == 0 {
                 // never started, nothing to do
-                log::info!("StreamMotionContext exiting (never started)");
+                tracing::info!("StreamMotionContext exiting (never started)");
                 thread_handle.has_died();
                 return;
             }
@@ -398,10 +417,10 @@ impl StreamMotionContext {
                 &mut tx_buf,
             );
             if let Err(e) = stop_res {
-                log::error!("Error sending stop packet during shutdown: {e:?}");
+                tracing::error!(error = ?e, "Error sending stop packet during shutdown");
             }
         }
-        log::info!("StreamMotionContext exited");
+        tracing::info!("StreamMotionContext exited");
         thread_handle.has_died();
     }
 }
@@ -416,9 +435,13 @@ fn stream_motion_runtime(
     waker_tx: Sender<Arc<Waker>>,
     itl: Arc<(Event, AtomicBool)>,
     send_last_command: bool,
+    telemetry: Option<StmoTelemetry>,
 ) -> Result<(), GeneralThreadError> {
     if let Some(cfg) = thread_config {
         cfg.configure_this_thread_print_failure();
+    }
+    if let Some(sink) = &telemetry {
+        sink.warmup();
     }
 
     let mut socket = MioUdpSocket::from_std(socket);
@@ -436,9 +459,16 @@ fn stream_motion_runtime(
     waker_tx.send(waker.clone())?;
     thread_handle.set_waker_mio(waker);
 
-    log::debug!("Stream motion thread started, entering context loop");
+    tracing::debug!("Stream motion thread started, entering context loop");
 
-    let context = StreamMotionContext::new(from_driver, to_driver, socket, itl, send_last_command);
+    let context = StreamMotionContext::new(
+        from_driver,
+        to_driver,
+        socket,
+        itl,
+        send_last_command,
+        telemetry,
+    );
     context.context_loop(thread_handle, poll);
 
     Ok(())
@@ -466,6 +496,7 @@ pub struct StreamMotionDriver {
     connection: Option<StreamMotionConnection>,
     cached_movement_limits: Option<JointMovementLimits>,
     rx_storage: RxStorage,
+    telemetry: Option<StmoTelemetry>,
 }
 
 impl StreamMotionDriver {
@@ -473,7 +504,7 @@ impl StreamMotionDriver {
     fn send_packet(&self, tx: ToThreadMessage) {
         if let Some(conn) = &self.connection {
             if let Err(e) = conn.to_thread.send(tx) {
-                log::error!("Error sending packet to thread: {:?}", e);
+                tracing::error!(error = %e, "Error sending packet to thread");
             }
             let _ = conn.thread_handle.wake();
         }
@@ -506,6 +537,7 @@ impl StreamMotionDriver {
             connection: None,
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
+            telemetry: None,
         })
     }
 
@@ -521,7 +553,21 @@ impl StreamMotionDriver {
             connection: None,
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
+            telemetry: None,
         }
+    }
+
+    /// Like [`new`](Self::new), with a telemetry sink observing every packet on
+    /// the wire, from every connection this driver makes.
+    #[cfg(off)]
+    pub fn new_with_telemetry<T: Into<IpAddr>, S: TelemetrySink<TxPackets, RxPackets>>(
+        remote_addr: T,
+        send_last_command: bool,
+        telemetry: S,
+    ) -> Self {
+        let mut driver = Self::new(remote_addr, send_last_command);
+        driver.telemetry = Some(Arc::new(telemetry));
+        driver
     }
 
     /// Returns the controller's IP address as a string.
@@ -612,10 +658,7 @@ impl StreamMotionDriver {
     /// I/O failure binding or connecting the socket, or failure to spawn the I/O thread.
     #[on(pyo3(signature = (thread_config=None)))]
     pub fn connect(&mut self, thread_config: Option<ThreadConfig>) -> DriverResult<()> {
-        log::info!(
-            "Attempting to connect StreamMotionDriver to {}",
-            self.remote_addr
-        );
+        tracing::info!(addr = %self.remote_addr, "Attempting to connect StreamMotionDriver");
         if let Some(conn) = &self.connection
             && conn.thread_handle.is_alive()
         {
@@ -646,6 +689,7 @@ impl StreamMotionDriver {
         let (waker_tx, waker_rx) = flume::bounded(1);
 
         let send_last_command = self.send_last_command;
+        let telemetry = self.telemetry.clone();
 
         let thread = snare::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
@@ -659,8 +703,9 @@ impl StreamMotionDriver {
                     waker_tx,
                     thread_itl,
                     send_last_command,
+                    telemetry,
                 ) {
-                    log::error!("Stream motion thread error: {:?}", e);
+                    tracing::error!(error = ?e, "Stream motion thread error");
                     thread_err_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             })?;
@@ -680,7 +725,7 @@ impl StreamMotionDriver {
             itl,
         });
 
-        log::info!("StreamMotionDriver connected to {}", self.remote_addr);
+        tracing::info!(addr = %self.remote_addr, "StreamMotionDriver connected");
 
         Ok(())
     }
@@ -716,9 +761,9 @@ impl StreamMotionDriver {
                 }
             }
             if !started {
-                log::error!(
-                    "STMO start timed out after {:.1}s waiting for version response",
-                    timeout.as_secs_f32()
+                tracing::error!(
+                    timeout_secs = timeout.as_secs_f32(),
+                    "STMO start timed out waiting for version response"
                 );
                 Err(StreamMotionError::Timeout)?;
             }
@@ -728,7 +773,7 @@ impl StreamMotionDriver {
         if let Some(conn) = &mut self.connection {
             conn.is_started = true;
         }
-        log::info!("StreamMotionDriver started on {}", self.remote_addr);
+        tracing::info!(addr = %self.remote_addr, "StreamMotionDriver started");
         Ok(())
     }
 
@@ -736,10 +781,10 @@ impl StreamMotionDriver {
     /// Called automatically on drop.
     pub fn disconnect(&mut self) {
         if let Some(conn) = self.connection.take() {
-            log::info!("StreamMotionDriver disconnecting from {}", self.remote_addr);
+            tracing::info!(addr = %self.remote_addr, "StreamMotionDriver disconnecting");
             let _ = conn.to_thread.send(ToThreadMessage::Stop(StopPacket {}));
             conn.thread_handle.join();
-            log::info!("StreamMotionDriver disconnected from {}", self.remote_addr);
+            tracing::info!(addr = %self.remote_addr, "StreamMotionDriver disconnected");
         }
         self.rx_storage.clear();
     }
@@ -811,9 +856,9 @@ impl StreamMotionDriver {
                                 Ok(r) => {
                                     self.send_packet(ToThreadMessage::ThresholdTableRequest(r))
                                 }
-                                Err(e) => log::error!(
-                                    "Invalid ThresholdTableRequestPacket parameters: {:?}",
-                                    e
+                                Err(e) => tracing::error!(
+                                    error = ?e,
+                                    "Invalid ThresholdTableRequestPacket parameters"
                                 ),
                             }
                             std::thread::sleep(Duration::from_millis(24));
@@ -826,11 +871,11 @@ impl StreamMotionDriver {
             self.refresh();
 
             while let Some(pkt) = self.rx_storage.threshold_table.pop_front() {
-                log::debug!(
-                    "Received movement limit: axis {}, type {}, vmax {}",
-                    pkt.axis_number,
-                    pkt.limit_type,
-                    pkt.vmax,
+                tracing::debug!(
+                    axis = pkt.axis_number,
+                    limit_type = pkt.limit_type,
+                    vmax = pkt.vmax,
+                    "Received movement limit"
                 );
                 let axis = pkt.axis_number as usize - 1;
                 let deriv = pkt.limit_type as usize;

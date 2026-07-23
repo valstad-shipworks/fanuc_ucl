@@ -643,8 +643,8 @@ mod tests {
         assert!(approx_eq_f64(rad[0], std::f64::consts::PI));
         assert!(approx_eq_f64(rad[1], std::f64::consts::FRAC_PI_2));
         assert!(approx_eq_f64(rad[2], std::f64::consts::FRAC_PI_2));
-        for i in 3..6 {
-            assert!(approx_eq_f64(rad[i], 0.0));
+        for r in &rad[3..6] {
+            assert!(approx_eq_f64(*r, 0.0));
         }
         // Linear track must not have been multiplied by π/180.
         assert!(

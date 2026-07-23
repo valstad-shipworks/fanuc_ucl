@@ -566,12 +566,12 @@ impl Message {
         let data_count = T::item_count(index, data);
         let data_byte_cnt = T::size_of_array(index, data);
         if data_byte_cnt <= 6 {
-            log::trace!(
-                "Packing write request for port {} at index {} and count {} with data {:?} into inline payload",
-                T::NAME,
+            tracing::trace!(
+                port = T::NAME,
                 index,
-                data_count,
-                data
+                count = data_count,
+                data = ?data,
+                "Packing write request into inline payload"
             );
             let mut payload = [0u8; 6];
             T::pack_array_into(index, data, &mut payload);
@@ -595,15 +595,15 @@ impl Message {
                 },
             }
         } else {
-            log::trace!(
-                "Packing write request for port {} at index {} and count {} with data {:?} into extended payload",
-                T::NAME,
+            tracing::trace!(
+                port = T::NAME,
                 index,
-                data_count,
-                data
+                count = data_count,
+                data = ?data,
+                "Packing write request into extended payload"
             );
             let payload = T::pack_array(index, data);
-            log::debug!("Extended write payload size: {} bytes", payload.len());
+            tracing::debug!(len = payload.len(), "Extended write payload");
             Message {
                 header: Header {
                     seq1: seq as u16,
