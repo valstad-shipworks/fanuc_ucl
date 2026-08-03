@@ -1,7 +1,5 @@
 from enum import IntEnum
-from typing import Generic, TypeVar
-
-from typing_extensions import TypeAlias
+from typing import Generic, TypeAlias, TypeVar
 
 from ..hmi import HmiDriver, HmiHandle
 
@@ -158,7 +156,7 @@ class ReadOnlyAsgInterface(Generic[_V]):
     def read(self, driver: HmiDriver) -> HmiHandle[_V]:
         """Reads the current value of this ASG variable from the controller, returning a handle to the asynchronous response."""
 
-class AsgInterface(Generic[_V], ReadOnlyAsgInterface[_V]):
+class AsgInterface(ReadOnlyAsgInterface[_V], Generic[_V]):
     """A typed interface for reading and writing a registered ASG variable on the controller."""
 
     def read(self, driver: HmiDriver) -> HmiHandle[_V]:

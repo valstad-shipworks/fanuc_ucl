@@ -1,7 +1,6 @@
+from collections.abc import Sequence
 from ipaddress import IPv4Address, IPv6Address
-from typing import Generic, Literal, Protocol, Sequence, TypeVar, overload
-
-from typing_extensions import TypeAlias
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, overload
 
 from fanuc_ucl._common import ThreadConfig
 
@@ -50,11 +49,6 @@ class UnsafelyWriteablePort(Protocol[_T_contra]):
     def __CAN_WRITE_UNSAFE__() -> None: ...
     @staticmethod
     def __USE__(_unused: _T_contra) -> None: ...
-
-# The key change: inherit from the capability protocols.
-class __READONLY__(ReadablePort[_T_co], Protocol[_T_co]):
-    @staticmethod
-    def __CAN_READ__() -> None: ...
 
 class __WRITEONLY__(
     WriteablePort[_T_contra],

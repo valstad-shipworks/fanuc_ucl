@@ -63,9 +63,12 @@ fn main() {
 ```python
 from fanuc_ucl import JointFormat, JointTemplate
 
+
 def main():
     joints = [-90.0, 0.0, 0.0, -180.0, 90.0, 180.0]
-    joints_conv = JointFormat.AbsRad.convert_from(JointFormat.FanucDeg, JointTemplate.SIX, joints)
+    joints_conv = JointFormat.AbsRad.convert_from(
+        JointFormat.FanucDeg, JointTemplate.SIX, joints
+    )
     print(f"Converted joints: {joints_conv}")
 ```
 
@@ -126,6 +129,7 @@ import math
 
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
 
+
 def main():
     driver = stmo.StreamMotionDriver("10.0.0.1")
     driver.connect(ThreadConfig(80, None))
@@ -140,9 +144,13 @@ def main():
     for i in range(500):
         joints = home.copy()
         joints[0] += 10.0 * math.sin(i / 500.0 * math.tau)
-        commands.append(stmo.MotionCommandPacket.try_from_joints(
-            JointFormat.FanucDeg, JointTemplate.SIX, joints,
-        ))
+        commands.append(
+            stmo.MotionCommandPacket.try_from_joints(
+                JointFormat.FanucDeg,
+                JointTemplate.SIX,
+                joints,
+            )
+        )
 
     handle = driver.command_motion(commands)
     # do other work while the batch streams out …
@@ -195,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```python
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
 
+
 def main():
     driver = stmo.StreamMotionDriver("10.0.0.1")
     driver.connect(ThreadConfig(80, None))
@@ -206,9 +215,13 @@ def main():
             joints = list(status.joints(JointFormat.FanucDeg, JointTemplate.SIX))
             # compute the next setpoint from current feedback …
             joints[5] += 0.05
-            ctl.send_command(stmo.MotionCommandPacket.try_from_joints(
-                JointFormat.FanucDeg, JointTemplate.SIX, joints,
-            ))
+            ctl.send_command(
+                stmo.MotionCommandPacket.try_from_joints(
+                    JointFormat.FanucDeg,
+                    JointTemplate.SIX,
+                    joints,
+                )
+            )
 
     driver.stop()
     driver.disconnect()
@@ -267,6 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```python
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, rmi
 
+
 def main():
     driver = rmi.RmiDriver(rmi.RmiDriverConfig("10.0.0.1"))
     driver.connect(ThreadConfig(80, None))
@@ -281,7 +295,7 @@ def main():
         rmi.JointAngles(
             JointFormat.AbsDeg,
             JointTemplate.SIX,
-            *[-90.0, 0.0, 0.0, -180.0, 90.0, 180.0]
+            *[-90.0, 0.0, 0.0, -180.0, 90.0, 180.0],
         ),
         rmi.SpeedType.MilliSeconds,
         528,
@@ -292,7 +306,7 @@ def main():
         rmi.JointAngles(
             JointFormat.AbsDeg,
             JointTemplate.SIX,
-            *[90.0, 0.0, 0.0, 180.0, -90.0, -180.0]
+            *[90.0, 0.0, 0.0, 180.0, -90.0, -180.0],
         ),
         rmi.SpeedType.MilliSeconds,
         528,
@@ -304,7 +318,9 @@ def main():
     driver.send(movement_cmd2).wait_timeout(0.6)
 
     pos_resp = driver.send(rmi.FrcReadJointAngles()).wait_timeout(0.2)
-    print(f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}")
+    print(
+        f"Current joint angles: {pos_resp.joints(JointFormat.AbsDeg, JointTemplate.SIX).as_array()}"
+    )
 ```
 
 ### HSPO
@@ -351,6 +367,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```python
 from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, hspo
 
+
 def main():
     hspo.initialize_broker("0.0.0.0:15000", ThreadConfig(55, None))
 
@@ -358,7 +375,9 @@ def main():
 
     joint_packet = receiver.joint.wait_for(0.016)
     if joint_packet is not None:
-        print(f"Received joint packet: {joint_packet.joints(JointFormat.AbsDeg, JointTemplate.SIX)}")
+        print(
+            f"Received joint packet: {joint_packet.joints(JointFormat.AbsDeg, JointTemplate.SIX)}"
+        )
 
     receiver.tcp.clear()
     tcp_packet = receiver.tcp.try_recv()
@@ -421,6 +440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```python
 from fanuc_ucl import hmi
+
 
 def main():
     driver = hmi.HmiDriver("10.0.0.1")

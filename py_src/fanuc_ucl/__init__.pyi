@@ -32,4 +32,3 @@ def set_log_level(level: LogLevel) -> LogLevel:
     the level below what the ``RUST_LOG`` environment variable established at
     module import. Returns the effective level after the call.
     """
-    ...
