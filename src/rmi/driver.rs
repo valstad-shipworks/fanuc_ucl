@@ -229,7 +229,7 @@ impl RmiRunner {
                                             if let Some(sink) = &self.telemetry {
                                                 sink.received(
                                                     &packet,
-                                                    std::time::SystemTime::now(),
+                                                    crate::time_util::host_now(),
                                                 );
                                             }
                                             let _ = resp_handle.set_generic(packet);
@@ -284,7 +284,7 @@ impl RmiRunner {
                             let is_disc = front.is_disconnect;
                             let handle = front.handle.clone();
                             if let (Some(sink), Some(packet)) = (&self.telemetry, &front.packet) {
-                                sink.sent(packet, std::time::SystemTime::now());
+                                sink.sent(packet, crate::time_util::host_now());
                             }
                             // push response stack entry once the whole request is on the wire
                             self.response_stack.push_back(handle);

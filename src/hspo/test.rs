@@ -1,4 +1,4 @@
-use snare::{TesterAction, TimerState, connect_tester, run_testers};
+use snare::{TesterAction, connect_tester, run_testers};
 
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -254,27 +254,9 @@ fn test_stream_clock_system_time_of_across_wrap() {
 
 const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 60000);
 
-fn hspo_packet_sender(timer: &mut TimerState) -> Option<TesterAction<RawPacket>> {
-    let time = timer.poll_elapsed().as_millis() as u32;
-    Some(TesterAction::Multiple(vec![
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_variables_packet(time))),
-        ),
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_tcp_position_packet(time))),
-        ),
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_joint_angles_packet(time))),
-        ),
-    ]))
-}
-
 /// Stateful sender that emits at most `TARGET_PACKET_COUNT` triplets of
-/// (var, tcp, joint) packets and then stops. Used by `test_drain` so the
-/// expected packet count is deterministic regardless of CI timing.
+/// (var, tcp, joint) packets and then stops, so the expected packet count
+/// is deterministic regardless of CI timing.
 #[derive(Default)]
 struct CountedSender {
     sent: usize,
@@ -323,8 +305,53 @@ fn test_all() {
     test_connection();
     test_drain();
     test_telemetry();
+    test_virtual_clock_connection_timeout();
 
     destroy_broker(false);
+}
+
+/// Proves the broker's liveness sweep runs on snare's virtual clock: a frozen
+/// clock keeps the connection alive through real-time waits far past the
+/// connection timeout, and advancing the clock expires it without any real
+/// packet gap. Sleeps are `std::thread::sleep` on purpose — the broker's poll
+/// cadence is real time, only its `snare::time` reads are virtual.
+fn test_virtual_clock_connection_timeout() {
+    let addr = SocketAddr::from(([10, 0, 0, 5], 60000));
+    snare::add_ip_addr(addr.ip());
+
+    let receiver = HspoReceiver::try_new(addr.ip(), 128, Duration::from_millis(16))
+        .expect("Failed to initialize receiver.");
+
+    snare::pause_time();
+
+    let mut tester = connect_tester::<RawPacket>(addr)
+        .with_stateful_cyclic_action::<CountedSender>(
+            Duration::from_millis(2),
+            counted_packet_sender,
+        )
+        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
+
+    run_testers!(tester);
+
+    assert!(
+        receiver.is_connected(),
+        "Receiver did not receive any packets."
+    );
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        receiver.is_connected(),
+        "Connection expired while the virtual clock was paused."
+    );
+
+    snare::advance_time(Duration::from_millis(50));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        !receiver.is_connected(),
+        "Connection survived a virtual-clock jump past the connection timeout."
+    );
+
+    snare::resume_time();
 }
 
 fn test_telemetry() {
@@ -351,10 +378,11 @@ fn test_telemetry() {
     .expect("Failed to initialize receiver.");
 
     let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<TimerState>(Duration::from_millis(2), hspo_packet_sender)
-        .until_stateful_condition::<TimerState>(|state| {
-            state.poll_elapsed() >= Duration::from_millis(40)
-        });
+        .with_stateful_cyclic_action::<CountedSender>(
+            Duration::from_millis(2),
+            counted_packet_sender,
+        )
+        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
 
     run_testers!(tester);
 
@@ -376,10 +404,11 @@ fn test_connection() {
         .expect("Failed to initialize receiver.");
 
     let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<TimerState>(Duration::from_millis(2), hspo_packet_sender)
-        .until_stateful_condition::<TimerState>(|state| {
-            state.poll_elapsed() >= Duration::from_millis(40)
-        });
+        .with_stateful_cyclic_action::<CountedSender>(
+            Duration::from_millis(2),
+            counted_packet_sender,
+        )
+        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
 
     run_testers!(tester);
 
@@ -408,10 +437,8 @@ fn test_drain() {
 
     run_testers!(tester);
 
-    thread::sleep(Duration::from_millis(50));
-
     assert_eq!(
-        receiver.joint.recv_all().len(),
+        drain_expected(&receiver.joint, TARGET_PACKET_COUNT).len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected joint packet count."
     );
@@ -420,7 +447,7 @@ fn test_drain() {
         "Receiver did not drain joint packets."
     );
     assert_eq!(
-        receiver.tcp.recv_all().len(),
+        drain_expected(&receiver.tcp, TARGET_PACKET_COUNT).len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected TCP packet count."
     );
@@ -429,7 +456,7 @@ fn test_drain() {
         "Receiver did not drain TCP packets."
     );
     assert_eq!(
-        receiver.var.recv_all().len(),
+        drain_expected(&receiver.var, TARGET_PACKET_COUNT).len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected variables packet count."
     );
@@ -437,4 +464,18 @@ fn test_drain() {
         receiver.var.recv_all().is_empty(),
         "Receiver did not drain variables packets."
     );
+}
+
+/// Drains `channel` until `expected` packets have arrived or a real-time
+/// watchdog expires, instead of a fixed settle-sleep after `run_testers!`.
+/// Real clock and real sleep on purpose: the broker delivers on its own
+/// real-time poll cadence.
+fn drain_expected<T>(channel: &HspoChannel<T>, expected: usize) -> Vec<T> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut out = channel.recv_all();
+    while out.len() < expected && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+        out.append(&mut channel.recv_all());
+    }
+    out
 }

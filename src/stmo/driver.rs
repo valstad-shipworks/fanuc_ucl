@@ -29,6 +29,7 @@ use crate::{
         types::{AxisMotionConstraint, JointMovementLimits, RxStorage, StreamMotionError},
     },
     thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
+    time_util::host_now,
 };
 
 use snare::mio::net::UdpSocket as MioUdpSocket;
@@ -63,7 +64,7 @@ struct StreamMotionContext {
     to_driver: Sender<RxPackets>,
     protocol_version: u32,
     send_last_command: bool,
-    last_command_position_request_time: Instant,
+    last_command_position_request_time: snare::time::Instant,
     motion_command_queue: VecDeque<(MaybeMany<MotionCommandPacket>, Option<StmoHandle>)>,
     itl: Arc<(Event, AtomicBool)>,
     telemetry: Option<StmoTelemetry>,
@@ -85,7 +86,12 @@ impl StreamMotionContext {
             to_driver,
             socket,
             protocol_version: 0,
-            last_command_position_request_time: Instant::now() - Self::COMMAND_POSITION_RATE,
+            // Backdated so the first request fires immediately. checked_sub
+            // because the shimmed clock starts near its epoch, where plain
+            // subtraction underflows.
+            last_command_position_request_time: snare::time::Instant::now()
+                .checked_sub(Self::COMMAND_POSITION_RATE)
+                .unwrap_or_else(snare::time::Instant::now),
             motion_command_queue: VecDeque::new(),
             itl,
             send_last_command,
@@ -104,7 +110,7 @@ impl StreamMotionContext {
         match self.socket.send(&buf[..n]) {
             Ok(_) => {
                 if let Some(sink) = &self.telemetry {
-                    sink.sent(&tx, std::time::SystemTime::now());
+                    sink.sent(&tx, host_now());
                 }
                 Ok(())
             }
@@ -135,6 +141,9 @@ impl StreamMotionContext {
         timeout: Duration,
         buf: &mut [u8],
     ) -> Result<(), StreamMotionError> {
+        // Real clock, not snare::time: WouldBlock clears in kernel time and the
+        // spin sleep is real, so a virtual deadline here would spin forever
+        // under a paused shim clock. The timeout is a stuck-socket watchdog.
         let start = Instant::now();
         let mut sent = false;
         let n = tx.encode_into(self.protocol_version, buf)?;
@@ -156,7 +165,7 @@ impl StreamMotionContext {
         }
         if sent {
             if let Some(sink) = &self.telemetry {
-                sink.sent(&tx, std::time::SystemTime::now());
+                sink.sent(&tx, host_now());
             }
             Ok(())
         } else {
@@ -224,7 +233,7 @@ impl StreamMotionContext {
                                 Ok(n) if n > 0 => {
                                     if let Some(rx) = RxPackets::decode_from(&rx_buf[..n]) {
                                         if let Some(sink) = &self.telemetry {
-                                            sink.received(&rx, std::time::SystemTime::now());
+                                            sink.received(&rx, host_now());
                                         }
                                         let _ = self.to_driver.send(rx);
                                         tracing::trace!(packet = ?rx, "Received packet");
@@ -350,7 +359,7 @@ impl StreamMotionContext {
                         {
                             let _ =
                                 self.send(req, &mut tx_buf, Some(Duration::from_millis(2)), None);
-                            self.last_command_position_request_time = Instant::now();
+                            self.last_command_position_request_time = snare::time::Instant::now();
                         }
                     }
 
@@ -747,6 +756,8 @@ impl StreamMotionDriver {
     #[on(pyo3(signature = (timeout_secs=2.0)))]
     pub fn start(&mut self, timeout_secs: f32) -> DriverResult<()> {
         let timeout = Duration::from_secs_f32(timeout_secs);
+        // Real clock: the deadline feeds flume's recv_timeout, which waits in
+        // real time regardless of snare's shim clock.
         let start_time = Instant::now();
         let end_time = start_time + timeout;
         if let Some(conn) = &self.connection {
@@ -837,6 +848,9 @@ impl StreamMotionDriver {
         let mut seen = vec![[false; 3]; axis_cnt];
         let mut limits = JointMovementLimits::default();
 
+        // Real clock throughout this loop: retransmit pacing pairs with the
+        // real sleeps below, and the loop must keep making progress even under
+        // a paused shim clock.
         let mut last_send = Instant::now()
             .checked_sub(Duration::from_millis(50))
             .unwrap_or_else(Instant::now);
@@ -938,6 +952,8 @@ impl StreamMotionDriver {
         &mut self,
         timeout_secs: f64,
     ) -> Option<CommandPositionResponsePacket> {
+        // Real clock watchdog: a virtual deadline would park this loop under a
+        // paused shim clock and stop refresh() from draining responses.
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs_f64(timeout_secs) {
             self.refresh();

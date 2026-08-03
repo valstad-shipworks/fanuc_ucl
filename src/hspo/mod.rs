@@ -18,6 +18,7 @@ use std::{
 use crate::{
     joints::{JointFormat, JointTemplate},
     thread_util::{GeneralThreadError, ThreadConfig},
+    time_util::host_now,
 };
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
@@ -415,7 +416,7 @@ pub type HspoTelemetry = Arc<dyn crate::TelemetrySink<(), HspoRxPacket>>;
 #[derive(Debug)]
 struct RobotSender {
     ip_of_interest: IpAddr,
-    last_packet_time: Option<std::time::Instant>,
+    last_packet_time: Option<snare::time::Instant>,
     connection_active: Arc<AtomicBool>,
     connection_timeout: Duration,
     tcp_tx: Sender<TcpCartesianPositionPacket>,
@@ -866,8 +867,8 @@ fn broker_runtime(
 
                         // Determine packet type. 'typ' is at offset 12 (u32,u32,u32 -> 12 bytes).
                         let pkt_type = PacketType::from_bytes(&buf[..n], 12);
-                        let now = std::time::Instant::now();
-                        let sys_time = rx_ts.unwrap_or_else(SystemTime::now);
+                        let now = snare::time::Instant::now();
+                        let sys_time = rx_ts.unwrap_or_else(host_now);
                         let sys_micros: u64 = sys_time
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap_or(Duration::ZERO)
@@ -991,7 +992,7 @@ fn broker_runtime(
         }
 
         // Update connection-active flags based on last packet timestamp (10ms timeout).
-        let now = std::time::Instant::now();
+        let now = snare::time::Instant::now();
         for listeners in robot_senders.values_mut() {
             for rs in listeners.iter_mut() {
                 let active = rs

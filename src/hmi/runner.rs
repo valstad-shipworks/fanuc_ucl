@@ -186,7 +186,7 @@ impl HmiRunner {
                     front.offset += n;
                     if front.offset == front.buf.len() {
                         if let Some(sink) = &self.telemetry {
-                            sink.sent(&front.message, std::time::SystemTime::now());
+                            sink.sent(&front.message, crate::time_util::host_now());
                         }
                         self.pending_responses
                             .insert(front.seq, front.handle.clone());
@@ -246,7 +246,7 @@ impl HmiRunner {
 
     fn handle_message(&mut self, msg: Message) {
         if let Some(sink) = &self.telemetry {
-            sink.received(&msg, std::time::SystemTime::now());
+            sink.received(&msg, crate::time_util::host_now());
         }
         let seq = msg.seq();
         if let Some(handle) = self.pending_responses.remove(&seq) {
