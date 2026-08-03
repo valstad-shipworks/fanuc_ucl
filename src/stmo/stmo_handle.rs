@@ -8,7 +8,9 @@ use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
-use crate::{ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError};
+use crate::{
+    ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError, time_util::host_now,
+};
 
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone)]
@@ -26,7 +28,7 @@ impl StmoHandle {
     }
 
     pub(crate) fn set(&self) {
-        let _ = self.resp.0.set(SystemTime::now());
+        let _ = self.resp.0.set(host_now());
         self.resp.1.notify(usize::MAX);
         self.resp.2.wake();
     }
@@ -179,9 +181,13 @@ mod tests {
     /// Parking executor + watchdog so a lost wakeup fails slow, not forever.
     #[test]
     fn async_await_wakes_on_late_notify() {
+        // set() stamps host_now(), which under snare's shim resolves the
+        // thread's clock slot — the test and the fulfiller must be in a
+        // registered thread chain or snare panics and the wake is lost.
+        snare::register_test();
         let handle = StmoHandle::new();
         let fulfiller = handle.clone();
-        std::thread::spawn(move || {
+        snare::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             fulfiller.set();
         });

@@ -84,7 +84,7 @@ impl HmiHandleGeneric {
     }
 
     pub(super) fn set_generic(&self, value: Message) -> HmiResult<()> {
-        let now = SystemTime::now();
+        let now = crate::time_util::host_now();
         let _ = self.resp.0.set(ResponseOrError::Response(value, now));
         self.resp.1.notify(usize::MAX);
         self.resp.2.wake();
@@ -95,7 +95,7 @@ impl HmiHandleGeneric {
         let _ = self
             .resp
             .0
-            .set(ResponseOrError::Error(error, SystemTime::now()));
+            .set(ResponseOrError::Error(error, crate::time_util::host_now()));
         self.resp.1.notify(usize::MAX);
         self.resp.2.wake();
         Ok(())

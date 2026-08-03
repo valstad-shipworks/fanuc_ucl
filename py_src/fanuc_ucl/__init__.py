@@ -1,5 +1,6 @@
-from fanuc_ucl import _fanuc_core as _fanuc_core  # type: ignore
 from importlib.metadata import PackageNotFoundError, version
+
+from fanuc_ucl import _fanuc_core as _fanuc_core  # type: ignore
 
 try:
     __version__ = version("fanuc")

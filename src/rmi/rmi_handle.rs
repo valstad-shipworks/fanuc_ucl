@@ -50,7 +50,7 @@ impl RmiHandleGeneric {
         // } else {
         //     0
         // };
-        let now = SystemTime::now();
+        let now = crate::time_util::host_now();
         if Self::ERROR_NAMES.contains(&value.packet_name()) {
             tracing::error!(
                 packet = value.packet_name(),
@@ -83,7 +83,7 @@ impl RmiHandleGeneric {
         let _ = self
             .resp
             .0
-            .set(ResponseOrError::Error(error, SystemTime::now()));
+            .set(ResponseOrError::Error(error, crate::time_util::host_now()));
         self.resp.1.notify(usize::MAX);
         self.resp.2.wake();
         Ok(())
@@ -248,6 +248,8 @@ impl RmiQueueGeneric {
 
     pub fn wait_all_timeout(&self, timeout: Duration) -> RmiResult<Vec<ResponsePacket>> {
         let mut outcome = Vec::with_capacity(self.queue.len());
+        // Real clock: the deadline feeds event_listener's wait_timeout, which
+        // waits in real time regardless of snare's shim clock.
         let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
             let remaining = match deadline {
@@ -583,9 +585,13 @@ mod tests {
     /// forever.
     #[test]
     fn async_await_wakes_on_late_notify() {
+        // set_error() stamps host_now(), which under snare's shim resolves the
+        // thread's clock slot — the test and the fulfiller must be in a
+        // registered thread chain or snare panics and the wake is lost.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("test", 0);
         let fulfiller = handle.clone();
-        std::thread::spawn(move || {
+        snare::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             let _ = fulfiller.set_error(RmiError::Timeout);
         });

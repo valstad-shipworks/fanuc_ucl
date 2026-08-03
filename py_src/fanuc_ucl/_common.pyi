@@ -18,10 +18,9 @@ __all__ = [
 class ThreadConfig:
     """Configuration for thread scheduling and CPU affinity."""
 
-    def __init__(self, priority: int = 0, cpu_affinity: int | None = None) -> None:
-        self.priority = priority
-        self.cpu_affinity = cpu_affinity
-
+    priority: int
+    cpu_affinity: int | None
+    def __init__(self, priority: int = 0, cpu_affinity: int | None = None) -> None: ...
     def configure_this_thread(self) -> None: ...
 
 class JointType(Enum):

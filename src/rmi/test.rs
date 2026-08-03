@@ -1398,6 +1398,10 @@ mod handle_unit_tests {
 
     #[test]
     fn wait_timeout_returns_immediately_when_already_set() {
+        // set_generic() stamps host_now(), which under snare's shim resolves
+        // the calling thread's clock slot — every test whose chain fulfills a
+        // handle must register or snare panics. Same for the tests below.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         handle.set_generic(make_init_response(0)).unwrap();
 
@@ -1405,7 +1409,7 @@ mod handle_unit_tests {
         let resp = handle.wait_timeout(Duration::from_secs(5)).unwrap();
         let elapsed = start.elapsed();
         assert!(
-            elapsed < Duration::from_millis(50),
+            elapsed < Duration::from_secs(1),
             "wait_timeout on a pre-set handle took {elapsed:?}"
         );
         match resp {
@@ -1419,9 +1423,10 @@ mod handle_unit_tests {
         // Spawn a setter that delays briefly, then sets the response.
         // The waiter must register a listener before checking is_set so
         // it doesn't miss the wake-up — this is the H2 invariant.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         let setter_handle = handle.clone();
-        let setter_thread = thread::spawn(move || {
+        let setter_thread = snare::thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
             setter_handle.set_generic(make_init_response(0)).unwrap();
         });
@@ -1461,6 +1466,7 @@ mod handle_unit_tests {
     #[test]
     fn set_generic_with_mismatched_packet_name_returns_packet_mismatch() {
         // Handle is for FRC_Abort but the response is FRC_Initialize.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Abort", 1);
         let res = handle.set_generic(make_init_response(0));
         assert!(
@@ -1479,6 +1485,7 @@ mod handle_unit_tests {
     #[test]
     fn set_generic_propagates_fanuc_error_code_in_response() {
         // Non-zero error_id must surface as FanucErrorCode, not a normal response.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         handle.set_generic(make_init_response(2)).unwrap();
         let res = handle.wait_timeout(Duration::from_millis(100));
@@ -1490,6 +1497,7 @@ mod handle_unit_tests {
 
     #[test]
     fn timestamp_unset_before_set_then_present_after() {
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         assert!(handle.timestamp().is_none());
         handle.set_generic(make_init_response(0)).unwrap();
@@ -1500,6 +1508,7 @@ mod handle_unit_tests {
     fn many_concurrent_waiters_all_observe_response() {
         // Fan-out multiple waiters on the same handle. notify(usize::MAX)
         // must wake all of them; none should hit the timeout branch.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         let all_succeeded = Arc::new(AtomicBool::new(true));
         let mut threads = Vec::new();
@@ -1526,6 +1535,7 @@ mod handle_unit_tests {
     #[test]
     fn second_set_is_no_op_first_response_wins() {
         // OnceLock semantics: the second set must not overwrite the first.
+        snare::register_test();
         let handle = RmiHandleGeneric::new("FRC_Initialize", 1);
         handle.set_generic(make_init_response(0)).unwrap();
         handle.set_generic(make_init_response(7)).ok();

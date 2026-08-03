@@ -241,6 +241,9 @@ impl HmiDriver {
             to_runner,
             err_flag,
         });
+        // Real clock: the handshake deadline feeds event_listener-backed
+        // wait_timeout calls, which wait in real time regardless of snare's
+        // shim clock.
         let start = Instant::now();
         let ack = self.send_message(Message::INIT)?.wait_timeout(timeout)?;
         self.next_seq(); // INIT uses seq 0

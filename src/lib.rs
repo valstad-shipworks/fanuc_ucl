@@ -63,6 +63,8 @@ pub mod stmo;
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
 mod thread_util;
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
+mod time_util;
+#[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
 pub use thread_util::ThreadConfig;
 
 /// Observer for packets crossing a driver's socket. A sink is handed to a
