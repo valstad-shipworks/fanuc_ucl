@@ -465,6 +465,9 @@ impl StreamMotionContext {
         self.counters
             .underruns
             .store(self.buffer.underruns(), Ordering::Relaxed);
+        self.counters
+            .lost_statuses
+            .store(self.buffer.lost_statuses(), Ordering::Relaxed);
     }
 
     /// Answers one status: fills any sequences the controller was never given,

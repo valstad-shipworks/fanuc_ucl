@@ -159,6 +159,7 @@ class StmoStats:
     send_retries: int
     stale_statuses: int
     tx_errors: int
+    lost_statuses: int
     missed_status_cycles: int
     catchup_commands: int
     overflow_skips: int

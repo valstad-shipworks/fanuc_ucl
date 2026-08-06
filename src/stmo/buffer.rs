@@ -53,6 +53,7 @@ pub struct ControllerBuffer {
     last_commanded: Option<u32>,
     stale: u32,
     underruns: u64,
+    lost_statuses: u64,
 }
 
 impl ControllerBuffer {
@@ -75,6 +76,7 @@ impl ControllerBuffer {
             last_commanded: None,
             stale: 0,
             underruns: 0,
+            lost_statuses: 0,
         }
     }
 
@@ -88,6 +90,9 @@ impl ControllerBuffer {
                 if (1..=MAX_MEASURABLE_DELTA).contains(&delta) {
                     let sample = at.saturating_duration_since(prev_at) / delta;
                     self.cycle = blend(self.cycle, sample.clamp(MIN_CYCLE, MAX_CYCLE));
+                    // Every sequence between two received statuses is one the
+                    // controller sent and we never saw.
+                    self.lost_statuses += (delta - 1) as u64;
                     delta
                 } else {
                     // A restart or a reorder: no usable interval, and no
@@ -208,6 +213,17 @@ impl ControllerBuffer {
     /// faults the controller.
     pub fn underruns(&self) -> u64 {
         self.underruns
+    }
+
+    /// Status packets the controller sent that never arrived, counted from
+    /// gaps between consecutively *received* sequence numbers.
+    ///
+    /// Distinct from the cycles the driver did not answer one at a time: when
+    /// the host is loaded, several statuses land in one read and only the
+    /// newest is answered directly, which starves the controller just the same
+    /// but is not packet loss.
+    pub fn lost_statuses(&self) -> u64 {
+        self.lost_statuses
     }
 }
 
@@ -386,6 +402,23 @@ mod test {
             cycle > Duration::from_micros(7_800) && cycle < Duration::from_micros(8_200),
             "cycle estimate {cycle:?} did not converge on 8ms"
         );
+    }
+
+    #[test]
+    fn lost_statuses_counts_only_what_never_arrived() {
+        let mut buf = ControllerBuffer::new(5);
+        run_nominal(&mut buf, 5, 1);
+        assert_eq!(buf.lost_statuses(), 0);
+
+        // Statuses 6 and 7 never arrive.
+        buf.saw_status(8, at(64));
+        assert_eq!(buf.lost_statuses(), 2);
+
+        // A run of received statuses adds nothing.
+        for seq in 9..=20 {
+            buf.saw_status(seq, at(8 * seq as u64));
+        }
+        assert_eq!(buf.lost_statuses(), 2);
     }
 
     #[test]

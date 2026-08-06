@@ -333,8 +333,14 @@ pub struct StmoStats {
     /// Transmit errors read off the kernel error queue. Linux only; these are
     /// the drops that `send` would otherwise have reported as success.
     pub tx_errors: u64,
-    /// Controller cycles whose status packet never arrived, counted from gaps
-    /// in the status sequence number.
+    /// Status packets the controller sent that never arrived, counted from
+    /// gaps between consecutively received sequence numbers. Genuine loss on
+    /// the wire.
+    pub lost_statuses: u64,
+    /// Controller cycles the driver did not answer one at a time. Includes
+    /// [`lost_statuses`](Self::lost_statuses), plus cycles whose status did
+    /// arrive but landed in the same read as a newer one — under host load only
+    /// the newest is answered directly and the rest are refilled in a burst.
     pub missed_status_cycles: u64,
     /// Motion commands sent to refill the controller's buffer after a gap.
     pub catchup_commands: u64,
@@ -360,13 +366,14 @@ impl std::fmt::Display for StmoStats {
         let closing = if cfg!(feature = "py") { ")" } else { "}" };
         write!(
             f,
-            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, buffer_depth: {}, cycle_us: {}{}",
+            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, lost_statuses: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, buffer_depth: {}, cycle_us: {}{}",
             opening,
             self.send_failures,
             self.short_sends,
             self.send_retries,
             self.stale_statuses,
             self.tx_errors,
+            self.lost_statuses,
             self.missed_status_cycles,
             self.catchup_commands,
             self.overflow_skips,
@@ -386,6 +393,7 @@ pub(crate) struct StmoCounters {
     pub send_retries: AtomicU64,
     pub stale_statuses: AtomicU64,
     pub tx_errors: AtomicU64,
+    pub lost_statuses: AtomicU64,
     pub missed_status_cycles: AtomicU64,
     pub catchup_commands: AtomicU64,
     pub overflow_skips: AtomicU64,
@@ -403,6 +411,7 @@ impl StmoCounters {
             send_retries: self.send_retries.load(Ordering::Relaxed),
             stale_statuses: self.stale_statuses.load(Ordering::Relaxed),
             tx_errors: self.tx_errors.load(Ordering::Relaxed),
+            lost_statuses: self.lost_statuses.load(Ordering::Relaxed),
             missed_status_cycles: self.missed_status_cycles.load(Ordering::Relaxed),
             catchup_commands: self.catchup_commands.load(Ordering::Relaxed),
             overflow_skips: self.overflow_skips.load(Ordering::Relaxed),
