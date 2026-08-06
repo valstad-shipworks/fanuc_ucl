@@ -16,6 +16,7 @@ __all__ = [
     "RobotStatusPacket",
     "StatusBitfield",
     "StmoHandle",
+    "StmoStats",
     "StreamMotionDriver",
 ]
 
@@ -150,6 +151,22 @@ class JointMovementLimits:
     def from_json(json_str: str) -> JointMovementLimits: ...
     def __init__(self, vmax: int, joints: list[JointMovementLimit]) -> None: ...
 
+class StmoStats:
+    """I/O health counters for one connection, cumulative since ``connect``."""
+
+    send_failures: int
+    short_sends: int
+    send_retries: int
+    stale_statuses: int
+    tx_errors: int
+    missed_status_cycles: int
+    catchup_commands: int
+    overflow_skips: int
+    underruns: int
+    statuses_during_retry: int
+    buffer_depth: int
+    cycle_us: int
+
 class StmoHandle:
     def is_set(self) -> bool: ...
     def get(self) -> None: ...
@@ -164,7 +181,21 @@ class StmoControlLoop:
     def send_command(self, command: MotionCommandPacket) -> None: ...
 
 class StreamMotionDriver:
-    def __init__(self, addr: str, send_last_command: bool = False) -> None: ...
+    def __init__(
+        self,
+        addr: str,
+        buffer_size_before_drain: int,
+        send_last_command: bool = False,
+    ) -> None:
+        """Create a driver for the controller at ``addr``.
+
+        ``buffer_size_before_drain`` must match the controller's ``$STMO.$START_MOVE``:
+        how many commands it queues before it begins executing them. The driver
+        mirrors that queue to decide how many commands may go out at once and
+        how long a blocked send may be retried before the robot runs out of
+        motion, so a value that disagrees with the controller costs resilience
+        in both directions. Clamped to ``1..=BUFFER_CAPACITY``.
+        """
     def get_remote_addr(self) -> str: ...
     def refresh(self) -> None: ...
     def command_motion(
@@ -195,3 +226,10 @@ class StreamMotionDriver:
         timeout_secs: float = 0.2,
     ) -> CommandPositionResponsePacket | None: ...
     def control_loop(self) -> StmoControlLoop: ...
+    def stats(self) -> StmoStats:
+        """I/O health counters for the current connection, all zero without one.
+
+        Non-zero ``send_failures`` or ``tx_errors`` mean commands did not reach
+        the wire; non-zero ``missed_status_cycles`` means the controller's side
+        dropped; non-zero ``underruns`` means the robot faulted.
+        """

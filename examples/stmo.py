@@ -4,7 +4,7 @@ from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
 
 
 def main():
-    driver = stmo.StreamMotionDriver("10.0.0.1")
+    driver = stmo.StreamMotionDriver("10.0.0.1", 5)  # 5 must match $STMO.$START_MOVE
     driver.connect(ThreadConfig(80, None))
     driver.start(2.0)
 

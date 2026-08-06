@@ -7,7 +7,8 @@ use fanuc_ucl::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], false);
+    // 5 must match the controller's $STMO.$START_MOVE.
+    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
     driver.connect(Some(ThreadConfig::new(80, None)))?;
     driver.start(2.0)?;
 

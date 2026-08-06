@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use cfg_mixin::cfg_mixin;
 use serde::{Deserialize, Serialize};
@@ -307,6 +310,107 @@ impl RxStorage {
         self.status.clear();
         self.command_position.clear();
         self.threshold_table.clear();
+    }
+}
+
+/// I/O health counters for one Stream Motion connection, cumulative since
+/// [`connect`](super::StreamMotionDriver::connect).
+#[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
+#[cfg_attr(feature = "py", pyo3::pyclass(frozen, get_all, str, from_py_object))]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct StmoStats {
+    /// Sends that failed outright, including those whose retry window expired.
+    pub send_failures: u64,
+    /// Sends the kernel accepted for fewer bytes than the encoded packet.
+    pub short_sends: u64,
+    /// Sends that entered the retry loop because the socket refused the packet
+    /// outright. These do not reach the controller twice — the first attempt
+    /// put nothing on the wire.
+    pub send_retries: u64,
+    /// Status packets ignored because answering them would have repeated a
+    /// sequence number the controller already consumed.
+    pub stale_statuses: u64,
+    /// Transmit errors read off the kernel error queue. Linux only; these are
+    /// the drops that `send` would otherwise have reported as success.
+    pub tx_errors: u64,
+    /// Controller cycles whose status packet never arrived, counted from gaps
+    /// in the status sequence number.
+    pub missed_status_cycles: u64,
+    /// Motion commands sent to refill the controller's buffer after a gap.
+    pub catchup_commands: u64,
+    /// Cycles left unanswered because the controller's buffer was full and
+    /// another command would have overflowed it.
+    pub overflow_skips: u64,
+    /// Times the controller's buffer is believed to have run dry mid-motion.
+    /// Non-zero means the robot faulted.
+    pub underruns: u64,
+    /// Status packets received while a send was being retried. These are
+    /// forwarded to consumers as they arrive and commanded once the send lands.
+    pub statuses_during_retry: u64,
+    /// Commands currently believed to be queued on the controller, out of
+    /// [`BUFFER_CAPACITY`](super::BUFFER_CAPACITY). A live gauge, not a total.
+    pub buffer_depth: u8,
+    /// Measured interpolation period in microseconds. A live gauge.
+    pub cycle_us: u64,
+}
+
+impl std::fmt::Display for StmoStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let opening = if cfg!(feature = "py") { "(" } else { "{" };
+        let closing = if cfg!(feature = "py") { ")" } else { "}" };
+        write!(
+            f,
+            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, buffer_depth: {}, cycle_us: {}{}",
+            opening,
+            self.send_failures,
+            self.short_sends,
+            self.send_retries,
+            self.stale_statuses,
+            self.tx_errors,
+            self.missed_status_cycles,
+            self.catchup_commands,
+            self.overflow_skips,
+            self.underruns,
+            self.statuses_during_retry,
+            self.buffer_depth,
+            self.cycle_us,
+            closing
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct StmoCounters {
+    pub send_failures: AtomicU64,
+    pub short_sends: AtomicU64,
+    pub send_retries: AtomicU64,
+    pub stale_statuses: AtomicU64,
+    pub tx_errors: AtomicU64,
+    pub missed_status_cycles: AtomicU64,
+    pub catchup_commands: AtomicU64,
+    pub overflow_skips: AtomicU64,
+    pub underruns: AtomicU64,
+    pub statuses_during_retry: AtomicU64,
+    pub buffer_depth: AtomicU64,
+    pub cycle_us: AtomicU64,
+}
+
+impl StmoCounters {
+    pub fn snapshot(&self) -> StmoStats {
+        StmoStats {
+            send_failures: self.send_failures.load(Ordering::Relaxed),
+            short_sends: self.short_sends.load(Ordering::Relaxed),
+            send_retries: self.send_retries.load(Ordering::Relaxed),
+            stale_statuses: self.stale_statuses.load(Ordering::Relaxed),
+            tx_errors: self.tx_errors.load(Ordering::Relaxed),
+            missed_status_cycles: self.missed_status_cycles.load(Ordering::Relaxed),
+            catchup_commands: self.catchup_commands.load(Ordering::Relaxed),
+            overflow_skips: self.overflow_skips.load(Ordering::Relaxed),
+            underruns: self.underruns.load(Ordering::Relaxed),
+            statuses_during_retry: self.statuses_during_retry.load(Ordering::Relaxed),
+            buffer_depth: self.buffer_depth.load(Ordering::Relaxed) as u8,
+            cycle_us: self.cycle_us.load(Ordering::Relaxed),
+        }
     }
 }
 
