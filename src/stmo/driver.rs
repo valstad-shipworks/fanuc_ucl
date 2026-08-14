@@ -20,13 +20,18 @@ use crate::{
     joints::JointDataSizeError,
     stmo::{
         JointMovementLimit,
+        buffer::{ControllerBuffer, SeqVerdict},
         proto::{
             CommandPositionRequestPacket, CommandPositionResponsePacket, MotionCommandPacket,
             RobotStatusPacket, RxPackets, StartPacket, StopPacket, ThresholdTableRequestPacket,
             TxPackets, VersionNumberRequestPacket,
         },
         stmo_handle::StmoHandle,
-        types::{AxisMotionConstraint, JointMovementLimits, RxStorage, StreamMotionError},
+        tx_errqueue::{TxError, drain_error_queue, enable_tx_error_reporting},
+        types::{
+            AxisMotionConstraint, JointMovementLimits, RxStorage, StmoCounters, StmoStats,
+            StreamMotionError,
+        },
     },
     thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
     time_util::host_now,
@@ -43,6 +48,46 @@ const TOK_WAKER: Token = Token(1);
 
 /// Shared sink observing STMO traffic: outgoing [`TxPackets`], incoming [`RxPackets`].
 pub type StmoTelemetry = Arc<dyn TelemetrySink<TxPackets, RxPackets>>;
+
+/// Whether a failed send left the datagram entirely inside this host.
+///
+/// The controller faults both on a command it never receives and on a sequence
+/// number it receives twice, so a resend is only safe when the first attempt
+/// provably put nothing on the wire. These are those errors, and all of them
+/// clear on their own: the socket buffer or qdisc is momentarily full
+/// (`EAGAIN`, `ENOBUFS`, `ENOMEM`), or a signal interrupted the call
+/// (`EINTR`). Anything else — `ECONNREFUSED` from an ICMP reply, an
+/// unreachable route, a bad argument — either means the peer already saw
+/// something or that retrying cannot help.
+fn is_transient_send_error(e: &io::Error) -> bool {
+    if matches!(
+        e.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Some(raw) = e.raw_os_error() {
+        return raw == libc::ENOBUFS || raw == libc::ENOMEM;
+    }
+    false
+}
+
+/// Scratch buffers for one I/O thread. Held outside the context so the receive
+/// path can be pumped from inside a send retry without aliasing `self`.
+struct IoBufs {
+    rx: [u8; 2048],
+    tx: [u8; 1024],
+}
+
+impl IoBufs {
+    fn new() -> Self {
+        Self {
+            rx: [0; 2048],
+            tx: [0; 1024],
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 enum MaybeMany<T: Clone> {
@@ -68,11 +113,40 @@ struct StreamMotionContext {
     motion_command_queue: VecDeque<(MaybeMany<MotionCommandPacket>, Option<StmoHandle>)>,
     itl: Arc<(Event, AtomicBool)>,
     telemetry: Option<StmoTelemetry>,
+    counters: Arc<StmoCounters>,
+    err_flag: Arc<AtomicBool>,
+    consecutive_send_failures: u32,
+    /// Descriptor to drain transmit errors from, owned by `socket`. `None`
+    /// where the kernel cannot report them.
+    tx_error_fd: Option<i32>,
+    tx_errors: Vec<TxError>,
+    buffer: ControllerBuffer,
+    /// Newest status not yet answered. Only the newest is worth a command —
+    /// answering an older one would command a cycle that has already passed —
+    /// but every status reaches consumers through `to_driver` regardless.
+    pending_status: Option<RobotStatusPacket>,
+    /// Set while inside a send retry, so pumped statuses are attributed there.
+    retrying: bool,
 }
 
 impl StreamMotionContext {
     const COMMAND_POSITION_RATE: Duration = Duration::from_millis(128);
+    /// Failed sends in a row before the connection is declared errored.
+    const SEND_FAILURE_LIMIT: u32 = 4;
+    /// Gap between attempts while a send is blocked. Short enough to land
+    /// several attempts and several receive pumps inside one cycle.
+    const RETRY_INTERVAL: Duration = Duration::from_micros(250);
+    /// Absolute ceiling on one retry, in case the controller model is wrong
+    /// about how much runway is left.
+    const MAX_RETRY: Duration = Duration::from_millis(250);
+    /// Retry window for control packets, which the buffer model says nothing
+    /// about.
+    const CONTROL_SEND_TIMEOUT: Duration = Duration::from_millis(24);
+    /// Responses per poll wakeup, so a peer streaming faster than we can answer
+    /// cannot hold the loop.
+    const MAX_RESPONSES_PER_WAKE: u32 = 32;
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         from_driver: Receiver<ToThreadMessage>,
         to_driver: Sender<RxPackets>,
@@ -80,6 +154,10 @@ impl StreamMotionContext {
         itl: Arc<(Event, AtomicBool)>,
         send_last_command: bool,
         telemetry: Option<StmoTelemetry>,
+        counters: Arc<StmoCounters>,
+        err_flag: Arc<AtomicBool>,
+        tx_error_fd: Option<i32>,
+        buffer_size_before_drain: u8,
     ) -> Self {
         Self {
             from_driver,
@@ -96,80 +174,183 @@ impl StreamMotionContext {
             itl,
             send_last_command,
             telemetry,
+            counters,
+            err_flag,
+            consecutive_send_failures: 0,
+            tx_error_fd,
+            tx_errors: Vec::with_capacity(8),
+            buffer: ControllerBuffer::new(buffer_size_before_drain),
+            pending_status: None,
+            retrying: false,
         }
     }
 
-    fn send(
-        &mut self,
-        tx: TxPackets,
-        buf: &mut [u8],
-        timeout: Option<Duration>,
-        version_override: Option<u32>,
-    ) -> Result<(), StreamMotionError> {
-        let n = tx.encode_into(version_override.unwrap_or(self.protocol_version), buf)?;
-        match self.socket.send(&buf[..n]) {
-            Ok(_) => {
+    /// Offers `tx` to the socket once.
+    fn send_once(&mut self, tx: &TxPackets, buf: &[u8]) -> Result<(), StreamMotionError> {
+        match self.socket.send(buf) {
+            Ok(written) if written == buf.len() => {
                 if let Some(sink) = &self.telemetry {
-                    sink.sent(&tx, host_now());
+                    sink.sent(tx, host_now());
                 }
                 Ok(())
             }
-            Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::Interrupted =>
-            {
-                if let Some(to) = timeout {
-                    match self.retry_sending(tx, to, buf) {
-                        Ok(()) => Ok(()),
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    tracing::warn!("STMO send would block and no timeout configured");
-                    Err(StreamMotionError::Timeout)
-                }
+            Ok(written) => {
+                self.counters.short_sends.fetch_add(1, Ordering::Relaxed);
+                tracing::error!(
+                    written,
+                    expected = buf.len(),
+                    "STMO UDP send truncated the packet"
+                );
+                Err(StreamMotionError::Io(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "short UDP send",
+                )))
             }
-            Err(e) => {
-                tracing::error!(error = %e, "STMO UDP send error");
-                Err(StreamMotionError::from(e))
-            }
+            Err(e) => Err(StreamMotionError::from(e)),
         }
     }
 
-    fn retry_sending(
+    /// Sends `tx`, re-offering the same datagram while the socket refuses it.
+    ///
+    /// Only errors where the packet provably never left this host are retried,
+    /// so the controller can never see a repeated sequence number. `budget`
+    /// bounds the attempt; for motion commands the caller derives it from how
+    /// long the controller's buffer can keep the robot moving without us.
+    ///
+    /// Between attempts the receive path is pumped. A controller whose status
+    /// stream is fine while our transmit side is blocked must not have its
+    /// telemetry starved, and the cycles that arrive meanwhile become the
+    /// catch-up burst once this lands.
+    fn send_retrying(
         &mut self,
+        what: &'static str,
         tx: TxPackets,
-        timeout: Duration,
-        buf: &mut [u8],
-    ) -> Result<(), StreamMotionError> {
-        // Real clock, not snare::time: WouldBlock clears in kernel time and the
-        // spin sleep is real, so a virtual deadline here would spin forever
-        // under a paused shim clock. The timeout is a stuck-socket watchdog.
+        io: &mut IoBufs,
+        budget: Duration,
+        version_override: Option<u32>,
+    ) -> bool {
+        let version = version_override.unwrap_or(self.protocol_version);
+        let n = match tx.encode_into(version, &mut io.tx) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!(packet = what, error = %e, "STMO encode failed");
+                return false;
+            }
+        };
+
+        // Real clock: the socket unblocks in kernel time and the wait between
+        // attempts is real, so a virtual deadline would spin forever under a
+        // paused shim clock.
         let start = Instant::now();
-        let mut sent = false;
-        let n = tx.encode_into(self.protocol_version, buf)?;
         let sleeper = spin_sleep::SpinSleeper::new(1_000_000);
-        while !sent && start.elapsed() < timeout {
-            match self.socket.send(&buf[..n]) {
-                Ok(_) => sent = true,
-                Err(ref e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::Interrupted =>
-                {
-                    sleeper.sleep(Duration::from_micros(500));
+        let mut attempts: u32 = 0;
+
+        let failure = loop {
+            attempts += 1;
+            match self.send_once(&tx, &io.tx[..n]) {
+                Ok(()) => {
+                    if attempts > 1 {
+                        self.counters.send_retries.fetch_add(1, Ordering::Relaxed);
+                        tracing::debug!(
+                            packet = what,
+                            attempts,
+                            elapsed_us = start.elapsed().as_micros(),
+                            "STMO send landed after retry"
+                        );
+                    }
+                    self.consecutive_send_failures = 0;
+                    return true;
+                }
+                Err(StreamMotionError::Io(ref e)) if is_transient_send_error(e) => {
+                    if start.elapsed() >= budget.min(Self::MAX_RETRY) {
+                        break io::Error::from(e.kind()).to_string();
+                    }
+                    // Pumping keeps consumers fed and drains the runway as
+                    // cycles pass, so a command that is already late gives up
+                    // sooner than a fresh one.
+                    self.retrying = true;
+                    self.pump_rx(io);
+                    self.retrying = false;
+                    sleeper.sleep(Self::RETRY_INTERVAL);
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "Error sending packet");
-                    return Err(StreamMotionError::from(e));
+                    tracing::error!(packet = what, error = %e, "STMO UDP send error");
+                    break e.to_string();
                 }
             }
+        };
+
+        self.fail_send(what, &failure);
+        false
+    }
+
+    fn fail_send(&mut self, what: &'static str, detail: &str) {
+        self.consecutive_send_failures += 1;
+        let total = self.counters.send_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::error!(
+            packet = what,
+            detail,
+            consecutive = self.consecutive_send_failures,
+            total,
+            "STMO send failed"
+        );
+        self.drain_tx_errors();
+        if self.consecutive_send_failures >= Self::SEND_FAILURE_LIMIT {
+            self.err_flag.store(true, Ordering::SeqCst);
         }
-        if sent {
-            if let Some(sink) = &self.telemetry {
-                sink.sent(&tx, host_now());
+    }
+
+    /// Sends a queued motion command, returning whether the controller can be
+    /// assumed to have it.
+    ///
+    /// A command that never made it onto the wire goes back to the head of the
+    /// queue with its handle unfulfilled: its sequence number is still unused
+    /// on the controller, so the next cycle can fill the gap rather than skip
+    /// the trajectory point.
+    fn send_motion(
+        &mut self,
+        what: &'static str,
+        cmd: MotionCommandPacket,
+        handle: Option<StmoHandle>,
+        io: &mut IoBufs,
+    ) -> bool {
+        let budget = self.buffer.runway();
+        if self.send_retrying(what, TxPackets::MotionCommand(cmd), io, budget, None) {
+            self.buffer.commanded(cmd.seq);
+            if cmd.last_command {
+                self.buffer.stream_ended();
             }
-            Ok(())
+            if let Some(h) = handle {
+                h.set();
+            }
+            true
         } else {
-            Err(StreamMotionError::Timeout)
+            self.motion_command_queue
+                .push_front((MaybeMany::One(cmd), handle));
+            false
+        }
+    }
+
+    /// Reports transmit errors the kernel would otherwise only have counted
+    /// internally. Also clears the error queue, which the poller needs: while
+    /// it holds an entry the socket stays permanently readable.
+    fn drain_tx_errors(&mut self) {
+        let Some(fd) = self.tx_error_fd else {
+            return;
+        };
+        drain_error_queue(fd, &mut self.tx_errors);
+        if self.tx_errors.is_empty() {
+            return;
+        }
+        self.counters
+            .tx_errors
+            .fetch_add(self.tx_errors.len() as u64, Ordering::Relaxed);
+        for err in self.tx_errors.drain(..) {
+            tracing::error!(
+                errno = err.errno,
+                origin = err.origin_str(),
+                "STMO packet dropped on the transmit path: {err}"
+            );
         }
     }
 
@@ -206,14 +387,235 @@ impl StreamMotionContext {
         }
     }
 
+    /// Drains the socket, forwarding every decoded packet to the driver and the
+    /// telemetry sink and folding each status into the controller model.
+    ///
+    /// This is the only place packets are read, so it is safe to call from
+    /// inside a send retry — consumers keep receiving while the transmit side
+    /// is blocked. Only the newest status is parked for a reply.
+    fn pump_rx(&mut self, io: &mut IoBufs) -> u32 {
+        let mut statuses = 0;
+        loop {
+            match self.socket.recv(&mut io.rx) {
+                Ok(n) if n > 0 => {
+                    let Some(rx) = RxPackets::decode_from(&io.rx[..n]) else {
+                        tracing::warn!(len = n, "Received unknown packet: {:02X?}", &io.rx[..n]);
+                        continue;
+                    };
+                    if let Some(sink) = &self.telemetry {
+                        sink.received(&rx, host_now());
+                    }
+                    tracing::trace!(packet = ?rx, "Received packet");
+                    if let RxPackets::VersionNumberResponse(vn) = &rx {
+                        self.protocol_version = vn.version;
+                        tracing::info!(
+                            version = self.protocol_version,
+                            "Detected Stream Motion protocol version"
+                        );
+                    }
+                    if let RxPackets::RobotStatus(state) = &rx {
+                        statuses += 1;
+                        self.buffer.saw_status(state.seq, Instant::now());
+                        let newer = self
+                            .pending_status
+                            .is_none_or(|p| state.seq.wrapping_sub(p.seq) <= u32::MAX / 2);
+                        if newer {
+                            self.pending_status = Some(*state);
+                        }
+                        // Cycle-driven consumers wait on this; notifying as
+                        // soon as the packet lands keeps them in step even when
+                        // the reply is still being retried.
+                        if self.itl.1.load(Ordering::SeqCst) {
+                            self.itl.0.notify(1);
+                        }
+                    }
+                    let _ = self.to_driver.send(rx);
+                }
+                Ok(_) => {
+                    tracing::warn!("Received empty packet");
+                    break;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    tracing::error!(error = %e, "Error receiving packet");
+                    break;
+                }
+            }
+        }
+        if statuses > 0 {
+            self.publish_gauges();
+            if self.retrying {
+                self.counters
+                    .statuses_during_retry
+                    .fetch_add(statuses as u64, Ordering::Relaxed);
+            }
+        }
+        statuses
+    }
+
+    /// Mirrors the controller model into the counters consumers read.
+    fn publish_gauges(&self) {
+        self.counters
+            .buffer_depth
+            .store(self.buffer.depth() as u64, Ordering::Relaxed);
+        self.counters
+            .cycle_us
+            .store(self.buffer.cycle().as_micros() as u64, Ordering::Relaxed);
+        self.counters
+            .underruns
+            .store(self.buffer.underruns(), Ordering::Relaxed);
+        self.counters
+            .lost_statuses
+            .store(self.buffer.lost_statuses(), Ordering::Relaxed);
+    }
+
+    /// Answers one status: fills any sequences the controller was never given,
+    /// then commands the current cycle.
+    fn respond(&mut self, state: &RobotStatusPacket, io: &mut IoBufs, prev: &mut PrevCommand) {
+        self.respond_inner(state, io, prev);
+        self.publish_gauges();
+    }
+
+    fn respond_inner(
+        &mut self,
+        state: &RobotStatusPacket,
+        io: &mut IoBufs,
+        prev: &mut PrevCommand,
+    ) {
+        let outstanding = match self.buffer.plan(state.seq) {
+            SeqVerdict::Command { outstanding } => outstanding,
+            SeqVerdict::Resync => {
+                tracing::warn!(seq = state.seq, "STMO sequence restarted, resyncing");
+                0
+            }
+            SeqVerdict::Stale => {
+                self.counters.stale_statuses.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(seq = state.seq, "Stale STMO status, not commanding");
+                return;
+            }
+        };
+
+        if !state.status_bits().ready_for_commands() {
+            // Nothing is owed for a cycle the controller was not taking
+            // commands in.
+            self.buffer.settled(state.seq);
+            return;
+        }
+        if state.status_bits().packet_rate() as u32 != 0 {
+            tracing::debug!(
+                rate = state.status_bits().packet_rate(),
+                "Robot status packet rate"
+            );
+        }
+
+        if outstanding > 0 {
+            self.counters
+                .missed_status_cycles
+                .fetch_add(outstanding as u64, Ordering::Relaxed);
+        }
+
+        // Under a control loop the caller owns the cadence; bursting would
+        // desync their status/command pairing.
+        let burst = if self.itl.1.load(Ordering::SeqCst) {
+            0
+        } else {
+            self.buffer.burst_for(outstanding)
+        };
+        if burst > 0 {
+            tracing::warn!(
+                seq = state.seq,
+                outstanding,
+                burst,
+                depth = self.buffer.depth(),
+                "STMO cycles unanswered, refilling controller buffer"
+            );
+        }
+        for i in 0..burst {
+            let Some((mut cmd, handle)) = self.next_motion_command() else {
+                break;
+            };
+            // The missed sequences were never given to the controller, so
+            // filling them is a resend rather than a repeat.
+            cmd.seq = state.seq.wrapping_sub(burst - i);
+            prev.record(cmd, true);
+            self.counters
+                .catchup_commands
+                .fetch_add(1, Ordering::Relaxed);
+            if !self.send_motion("motion_command_catchup", cmd, handle, io) {
+                break;
+            }
+        }
+
+        if self.buffer.headroom() == 0 {
+            // One more would overflow the controller and fault it. It drains a
+            // command this cycle, so the slot reopens on the next.
+            self.counters.overflow_skips.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(seq = state.seq, "STMO controller buffer full, withholding");
+            self.buffer.settled(state.seq);
+            return;
+        }
+
+        if let Some((mut cmd, handle)) = self.next_motion_command() {
+            cmd.seq = state.seq;
+            if prev.fillers > 0 {
+                tracing::debug!(
+                    seq = state.seq,
+                    filler_cycles = prev.fillers,
+                    starved_us = prev.fillers as u128 * self.buffer.cycle().as_micros(),
+                    "STMO queue refilled"
+                );
+            }
+            prev.record(cmd, true);
+            if cmd.last_command {
+                tracing::trace!("Last motion command sent");
+            }
+            self.send_motion("motion_command", cmd, handle, io);
+        } else if state.status_bits().command_received() && !self.itl.1.load(Ordering::SeqCst) {
+            if let Some(held) = prev.packet {
+                let mut cmd = MotionCommandPacket::filler(state, &held, self.send_last_command);
+                cmd.seq = state.seq;
+                if prev.fillers == 0 {
+                    let want = held.position();
+                    let actual = state.joints_raw();
+                    tracing::debug!(
+                        seq = cmd.seq,
+                        prev_real = prev.was_real,
+                        j1_held = want[0],
+                        j1_actual = actual[0],
+                        rail_held = want[6],
+                        rail_actual = actual[6],
+                        "STMO queue starved, holding setpoint"
+                    );
+                }
+                prev.record(cmd, false);
+                if self.send_retrying(
+                    "motion_command_filler",
+                    TxPackets::MotionCommand(cmd),
+                    io,
+                    self.buffer.runway(),
+                    None,
+                ) {
+                    self.buffer.commanded(cmd.seq);
+                    if cmd.last_command {
+                        self.buffer.stream_ended();
+                    }
+                }
+            } else {
+                // Nothing has ever been commanded, so there is no setpoint to
+                // hold and no debt for this cycle.
+                self.buffer.settled(state.seq);
+            }
+        } else {
+            self.buffer.settled(state.seq);
+        }
+    }
+
     pub fn context_loop(mut self, thread_handle: ThreadHandle, mut poll: Poll) {
         let mut events = Events::with_capacity(64);
-        let mut rx_buf = [0u8; 2048];
-        let mut tx_buf = [0u8; 1024];
-        let mut prev_motion_packet: Option<MotionCommandPacket> = None;
-        let mut prev_command_was_real = false;
-        let mut consecutive_fillers: u32 = 0;
-        // let mut status_cycle_count: u32 = 0;
+        let mut io = IoBufs::new();
+        let mut prev = PrevCommand::default();
+        let mut stop_sent = false;
 
         while thread_handle.should_live() {
             if let Err(e) = poll.poll(&mut events, None) {
@@ -227,138 +629,32 @@ impl StreamMotionContext {
             for ev in events.iter() {
                 match ev.token() {
                     TOK_SOCKET => {
-                        // drain UDP
-                        loop {
-                            match self.socket.recv(&mut rx_buf) {
-                                Ok(n) if n > 0 => {
-                                    if let Some(rx) = RxPackets::decode_from(&rx_buf[..n]) {
-                                        if let Some(sink) = &self.telemetry {
-                                            sink.received(&rx, host_now());
-                                        }
-                                        let _ = self.to_driver.send(rx);
-                                        tracing::trace!(packet = ?rx, "Received packet");
-                                        if let RxPackets::VersionNumberResponse(vn) = &rx {
-                                            self.protocol_version = vn.version;
-                                            tracing::info!(
-                                                version = self.protocol_version,
-                                                "Detected Stream Motion protocol version"
-                                            );
-                                        }
-                                        // respond with the best matching motion command if applicable
-                                        if let RxPackets::RobotStatus(state) = &rx {
-                                            if !state.status_bits().ready_for_commands() {
-                                                continue;
-                                            }
-                                            // status_cycle_count = status_cycle_count.wrapping_add(1);
-                                            if state.status_bits().packet_rate() as u32 != 0 {
-                                                tracing::debug!(
-                                                    rate = state.status_bits().packet_rate(),
-                                                    "Robot status packet rate"
-                                                );
-                                            }
-                                            // status_cycle_count = 0;
-                                            if let Some((mut cmd, handle)) =
-                                                self.next_motion_command()
-                                            {
-                                                cmd.seq = state.seq;
-                                                if consecutive_fillers > 0 {
-                                                    tracing::debug!(
-                                                        seq = state.seq,
-                                                        filler_cycles = consecutive_fillers,
-                                                        starved_ms = consecutive_fillers * 8,
-                                                        "STMO queue refilled"
-                                                    );
-                                                    consecutive_fillers = 0;
-                                                }
-                                                prev_motion_packet = Some(cmd);
-                                                prev_command_was_real = true;
-                                                if cmd.last_command {
-                                                    tracing::trace!("Last motion command sent");
-                                                }
-                                                let _ = self.send(
-                                                    TxPackets::MotionCommand(cmd),
-                                                    &mut tx_buf,
-                                                    Some(Duration::from_millis(6)),
-                                                    None,
-                                                );
-                                                if let Some(h) = handle {
-                                                    h.set();
-                                                }
-                                            } else if state.status_bits().command_received()
-                                                && state.status_bits().ready_for_commands()
-                                                && !self.itl.1.load(Ordering::SeqCst)
-                                            {
-                                                if let Some(prev_motion_packet) =
-                                                    &prev_motion_packet
-                                                {
-                                                    let mut cmd = MotionCommandPacket::filler(
-                                                        state,
-                                                        prev_motion_packet,
-                                                        self.send_last_command,
-                                                    );
-                                                    cmd.seq = state.seq;
-                                                    consecutive_fillers += 1;
-                                                    if consecutive_fillers == 1 {
-                                                        let held = prev_motion_packet.position();
-                                                        let actual = state.joints_raw();
-                                                        tracing::debug!(
-                                                            seq = cmd.seq,
-                                                            prev_real = prev_command_was_real,
-                                                            j1_held = held[0],
-                                                            j1_actual = actual[0],
-                                                            rail_held = held[6],
-                                                            rail_actual = actual[6],
-                                                            "STMO queue starved, holding setpoint"
-                                                        );
-                                                    }
-                                                    prev_command_was_real = false;
-                                                    let _ = self.send(
-                                                        TxPackets::MotionCommand(cmd),
-                                                        &mut tx_buf,
-                                                        Some(Duration::from_millis(6)),
-                                                        None,
-                                                    );
-                                                }
-                                            } else if self.itl.1.load(Ordering::SeqCst) {
-                                                tracing::trace!(
-                                                    "Notifying in the loop that we got a new status"
-                                                );
-                                                self.itl.0.notify(1);
-                                            } else {
-                                                tracing::trace!(
-                                                    "No new status received in the loop"
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        tracing::warn!(
-                                            len = n,
-                                            "Received unknown packet: {:02X?}",
-                                            &rx_buf[..n]
-                                        );
-                                    }
-                                }
-                                Ok(_) => {
-                                    tracing::warn!("Received empty packet");
-                                    break;
-                                }
-                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                                Err(e) => {
-                                    tracing::error!(error = %e, "Error receiving packet");
-                                    break;
-                                }
+                        self.drain_tx_errors();
+                        self.pump_rx(&mut io);
+                        // Answering can take most of a cycle when a send is
+                        // being retried, so re-check for a newer status rather
+                        // than waiting for the next wakeup to notice it.
+                        let mut answered = 0;
+                        while let Some(state) = self.pending_status.take() {
+                            self.respond(&state, &mut io, &mut prev);
+                            self.pump_rx(&mut io);
+                            answered += 1;
+                            if answered >= Self::MAX_RESPONSES_PER_WAKE {
+                                break;
                             }
                         }
 
-                        let req =
-                            TxPackets::CommandPositionRequest(CommandPositionRequestPacket {});
                         if self.last_command_position_request_time.elapsed()
                             >= Self::COMMAND_POSITION_RATE
                             && self.protocol_version != 0
                         {
-                            let _ =
-                                self.send(req, &mut tx_buf, Some(Duration::from_millis(2)), None);
+                            self.send_retrying(
+                                "command_position_request",
+                                TxPackets::CommandPositionRequest(CommandPositionRequestPacket {}),
+                                &mut io,
+                                Duration::from_millis(2),
+                                None,
+                            );
                             self.last_command_position_request_time = snare::time::Instant::now();
                         }
                     }
@@ -368,18 +664,20 @@ impl StreamMotionContext {
                         while let Ok(tx) = self.from_driver.try_recv() {
                             match tx {
                                 ToThreadMessage::Start(pkt) => {
-                                    let _ = self.send(
+                                    self.send_retrying(
+                                        "start",
                                         TxPackets::Start(pkt),
-                                        &mut tx_buf,
-                                        Some(Duration::from_millis(24)),
+                                        &mut io,
+                                        Self::CONTROL_SEND_TIMEOUT,
                                         Some(3),
                                     );
-                                    let _ = self.send(
+                                    self.send_retrying(
+                                        "version_number_request",
                                         TxPackets::VersionNumberRequest(
                                             VersionNumberRequestPacket {},
                                         ),
-                                        &mut tx_buf,
-                                        Some(Duration::from_millis(24)),
+                                        &mut io,
+                                        Self::CONTROL_SEND_TIMEOUT,
                                         Some(3),
                                     );
                                 }
@@ -387,18 +685,21 @@ impl StreamMotionContext {
                                     self.motion_command_queue.push_back((pkt, handle));
                                 }
                                 ToThreadMessage::Stop(pkt) => {
-                                    let _ = self.send(
+                                    stop_sent |= self.send_retrying(
+                                        "stop",
                                         TxPackets::Stop(pkt),
-                                        &mut tx_buf,
-                                        Some(Duration::from_millis(24)),
+                                        &mut io,
+                                        Self::CONTROL_SEND_TIMEOUT,
                                         None,
                                     );
+                                    self.buffer.stream_ended();
                                 }
                                 ToThreadMessage::ThresholdTableRequest(pkt) => {
-                                    let _ = self.send(
+                                    self.send_retrying(
+                                        "threshold_table_request",
                                         TxPackets::ThresholdTableRequest(pkt),
-                                        &mut tx_buf,
-                                        None,
+                                        &mut io,
+                                        Self::CONTROL_SEND_TIMEOUT,
                                         None,
                                     );
                                     tracing::info!("Sent ThresholdTableRequest");
@@ -412,25 +713,47 @@ impl StreamMotionContext {
             }
         }
 
-        // graceful shutdown if asked to stop while loop breaks
-        if thread_handle.should_live() {
-            if self.protocol_version == 0 {
-                // never started, nothing to do
-                tracing::info!("StreamMotionContext exiting (never started)");
-                thread_handle.has_died();
-                return;
-            }
-            let stop_res = self.retry_sending(
+        // A stop queued by disconnect() races the death signal: join() stores
+        // should_die before waking us, so the loop can exit without ever
+        // draining it. Cover for that here rather than leave the controller
+        // streaming.
+        if self.protocol_version == 0 {
+            tracing::info!("StreamMotionContext exiting (never started)");
+            thread_handle.has_died();
+            return;
+        }
+        if !stop_sent {
+            self.send_retrying(
+                "stop",
                 TxPackets::Stop(StopPacket {}),
-                Duration::from_millis(24),
-                &mut tx_buf,
+                &mut io,
+                Self::CONTROL_SEND_TIMEOUT,
+                None,
             );
-            if let Err(e) = stop_res {
-                tracing::error!(error = ?e, "Error sending stop packet during shutdown");
-            }
         }
         tracing::info!("StreamMotionContext exited");
         thread_handle.has_died();
+    }
+}
+
+/// The last motion command put on the wire, used to synthesize fillers that
+/// hold the setpoint when the queue runs dry.
+#[derive(Debug, Default)]
+struct PrevCommand {
+    packet: Option<MotionCommandPacket>,
+    was_real: bool,
+    fillers: u32,
+}
+
+impl PrevCommand {
+    fn record(&mut self, cmd: MotionCommandPacket, real: bool) {
+        self.packet = Some(cmd);
+        self.was_real = real;
+        if real {
+            self.fillers = 0;
+        } else {
+            self.fillers += 1;
+        }
     }
 }
 
@@ -445,6 +768,9 @@ fn stream_motion_runtime(
     itl: Arc<(Event, AtomicBool)>,
     send_last_command: bool,
     telemetry: Option<StmoTelemetry>,
+    counters: Arc<StmoCounters>,
+    err_flag: Arc<AtomicBool>,
+    buffer_size_before_drain: u8,
 ) -> Result<(), GeneralThreadError> {
     if let Some(cfg) = thread_config {
         cfg.configure_this_thread_print_failure();
@@ -453,6 +779,9 @@ fn stream_motion_runtime(
         sink.warmup();
     }
 
+    // Taken before the socket moves into mio; the descriptor stays owned by
+    // the socket, which outlives the context loop.
+    let tx_error_fd = enable_tx_error_reporting(&socket);
     let mut socket = MioUdpSocket::from_std(socket);
 
     let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
@@ -477,6 +806,10 @@ fn stream_motion_runtime(
         itl,
         send_last_command,
         telemetry,
+        counters,
+        err_flag,
+        tx_error_fd,
+        buffer_size_before_drain,
     );
     context.context_loop(thread_handle, poll);
 
@@ -491,6 +824,7 @@ struct StreamMotionConnection {
     is_started: bool,
     err_flag: Arc<AtomicBool>,
     itl: Arc<(Event, AtomicBool)>,
+    counters: Arc<StmoCounters>,
 }
 
 /// Driver for FANUC Stream Motion (STMO), a UDP protocol in which the controller
@@ -506,7 +840,11 @@ pub struct StreamMotionDriver {
     cached_movement_limits: Option<JointMovementLimits>,
     rx_storage: RxStorage,
     telemetry: Option<StmoTelemetry>,
+    buffer_size_before_drain: u8,
 }
+
+/// Commands the controller queues before it faults on overflow.
+pub const BUFFER_CAPACITY: u8 = crate::stmo::buffer::CAPACITY;
 
 impl StreamMotionDriver {
     #[inline]
@@ -528,16 +866,32 @@ type DriverResult<T> = Result<T, StreamMotionError>;
 #[cfg_mixin(feature = "py")]
 #[cfg_attr(feature = "py", pyo3::pymethods)]
 impl StreamMotionDriver {
-    /// Creates a driver targeting the controller at `addr`. `send_last_command`
-    /// sets the last-command flag on filler packets, ending the stream once the
-    /// command queue runs dry instead of holding position indefinitely.
+    /// Creates a driver targeting the controller at `addr`.
+    ///
+    /// `buffer_size_before_drain` must match the controller's `$STMO.$START_MOVE`:
+    /// how many commands it queues before it begins executing them. The driver
+    /// mirrors that queue to decide how many commands may go out at once and
+    /// how long a blocked send may be retried before the robot runs out of
+    /// motion, so a value that disagrees with the controller costs resilience
+    /// in both directions — too low and the driver abandons a stalled send
+    /// while the robot still had motion buffered, too high and it keeps
+    /// retrying past the point the robot has already faulted. Clamped to
+    /// `1..=`[`BUFFER_CAPACITY`].
+    ///
+    /// `send_last_command` sets the last-command flag on filler packets, ending
+    /// the stream once the command queue runs dry instead of holding position
+    /// indefinitely.
     ///
     /// # Errors
     /// `addr` is not a valid IP address.
     #[cfg(on)]
-    #[on(pyo3(signature = (addr, send_last_command = false)))]
+    #[on(pyo3(signature = (addr, buffer_size_before_drain, send_last_command = false)))]
     #[on(new)]
-    pub fn new(addr: Bound<PyAny>, send_last_command: bool) -> DriverResult<Self> {
+    pub fn new(
+        addr: Bound<PyAny>,
+        buffer_size_before_drain: u8,
+        send_last_command: bool,
+    ) -> DriverResult<Self> {
         let addr = addr.extract::<IpAddr>()?;
 
         Ok(Self {
@@ -547,14 +901,31 @@ impl StreamMotionDriver {
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
             telemetry: None,
+            buffer_size_before_drain: buffer_size_before_drain.clamp(1, BUFFER_CAPACITY),
         })
     }
 
-    /// Creates a driver targeting the controller at `remote_addr`; `send_last_command`
-    /// sets the last-command flag on filler packets, ending the stream once the
-    /// command queue runs dry instead of holding position indefinitely.
+    /// Creates a driver targeting the controller at `remote_addr`.
+    ///
+    /// `buffer_size_before_drain` must match the controller's `$STMO.$START_MOVE`:
+    /// how many commands it queues before it begins executing them. The driver
+    /// mirrors that queue to decide how many commands may go out at once and
+    /// how long a blocked send may be retried before the robot runs out of
+    /// motion, so a value that disagrees with the controller costs resilience
+    /// in both directions — too low and the driver abandons a stalled send
+    /// while the robot still had motion buffered, too high and it keeps
+    /// retrying past the point the robot has already faulted. Clamped to
+    /// `1..=`[`BUFFER_CAPACITY`].
+    ///
+    /// `send_last_command` sets the last-command flag on filler packets, ending
+    /// the stream once the command queue runs dry instead of holding position
+    /// indefinitely.
     #[cfg(off)]
-    pub fn new<T: Into<IpAddr>>(remote_addr: T, send_last_command: bool) -> Self {
+    pub fn new<T: Into<IpAddr>>(
+        remote_addr: T,
+        buffer_size_before_drain: u8,
+        send_last_command: bool,
+    ) -> Self {
         let remote_addr = remote_addr.into();
         Self {
             remote_addr,
@@ -563,6 +934,7 @@ impl StreamMotionDriver {
             cached_movement_limits: None,
             rx_storage: RxStorage::new(),
             telemetry: None,
+            buffer_size_before_drain: buffer_size_before_drain.clamp(1, BUFFER_CAPACITY),
         }
     }
 
@@ -571,10 +943,11 @@ impl StreamMotionDriver {
     #[cfg(off)]
     pub fn new_with_telemetry<T: Into<IpAddr>, S: TelemetrySink<TxPackets, RxPackets>>(
         remote_addr: T,
+        buffer_size_before_drain: u8,
         send_last_command: bool,
         telemetry: S,
     ) -> Self {
-        let mut driver = Self::new(remote_addr, send_last_command);
+        let mut driver = Self::new(remote_addr, buffer_size_before_drain, send_last_command);
         driver.telemetry = Some(Arc::new(telemetry));
         driver
     }
@@ -700,6 +1073,11 @@ impl StreamMotionDriver {
         let send_last_command = self.send_last_command;
         let telemetry = self.telemetry.clone();
 
+        let counters = Arc::new(StmoCounters::default());
+        let thread_counters = counters.clone();
+        let runtime_err_flag = local_err_flag.clone();
+        let buffer_size_before_drain = self.buffer_size_before_drain;
+
         let thread = snare::thread::Builder::new()
             .name("fanuc-stmo-runner".to_string())
             .spawn(move || {
@@ -713,6 +1091,9 @@ impl StreamMotionDriver {
                     thread_itl,
                     send_last_command,
                     telemetry,
+                    thread_counters,
+                    runtime_err_flag,
+                    buffer_size_before_drain,
                 ) {
                     tracing::error!(error = ?e, "Stream motion thread error");
                     thread_err_flag.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -732,6 +1113,7 @@ impl StreamMotionDriver {
             is_started: false,
             err_flag: local_err_flag,
             itl,
+            counters,
         });
 
         tracing::info!(addr = %self.remote_addr, "StreamMotionDriver connected");
@@ -739,7 +1121,19 @@ impl StreamMotionDriver {
         Ok(())
     }
 
-    /// Returns `true` if the I/O thread exited with an error.
+    /// I/O health counters for the current connection, all zero when there is
+    /// none. Non-zero `send_failures` or `tx_errors` mean commands did not
+    /// reach the wire; non-zero `missed_status_cycles` means the controller's
+    /// side of the exchange dropped.
+    pub fn stats(&self) -> StmoStats {
+        self.connection
+            .as_ref()
+            .map(|conn| conn.counters.snapshot())
+            .unwrap_or_default()
+    }
+
+    /// Returns `true` if the I/O thread exited with an error, or if sends have
+    /// failed for several consecutive interpolation cycles.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.err_flag.load(std::sync::atomic::Ordering::SeqCst)
@@ -769,6 +1163,7 @@ impl StreamMotionDriver {
                     conn.from_thread.recv_timeout(remaining)
                 {
                     started = true;
+                    break;
                 }
             }
             if !started {
@@ -794,6 +1189,7 @@ impl StreamMotionDriver {
         if let Some(conn) = self.connection.take() {
             tracing::info!(addr = %self.remote_addr, "StreamMotionDriver disconnecting");
             let _ = conn.to_thread.send(ToThreadMessage::Stop(StopPacket {}));
+            let _ = conn.thread_handle.wake();
             conn.thread_handle.join();
             tracing::info!(addr = %self.remote_addr, "StreamMotionDriver disconnected");
         }
@@ -1204,6 +1600,7 @@ pub mod py {
         parent_module.add_class::<AxisMotionConstraint>()?;
         parent_module.add_class::<JointMovementLimit>()?;
         parent_module.add_class::<JointMovementLimits>()?;
+        parent_module.add_class::<StmoStats>()?;
         parent_module.add_class::<StreamMotionDriver>()?;
         parent_module.add_class::<PyStmoControlLoop>()?;
 

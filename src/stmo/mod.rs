@@ -1,13 +1,19 @@
 #[warn(missing_docs)]
+mod buffer;
 mod driver;
 pub mod proto;
 pub(crate) mod stmo_handle;
+#[cfg(test)]
+mod test;
+mod tx_errqueue;
 mod types;
 
 pub use self::{
     driver::{StmoControlLoop, StreamMotionDriver},
     stmo_handle::StmoHandle,
-    types::{AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StreamMotionError},
+    types::{
+        AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StmoStats, StreamMotionError,
+    },
 };
 
 #[cfg(feature = "py")]

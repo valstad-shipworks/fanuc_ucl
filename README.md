@@ -78,9 +78,18 @@ def main():
 Stream Motion gives real-time joint-level control of the robot at the interpolation
 rate (typically 8ms). The controller requests a position every cycle and the driver's
 I/O thread answers from a queue of motion commands; `command_motion` returns a handle
-that is set once the whole batch has been transmitted. The second argument to
+that is set once the whole batch has been transmitted. The last argument to
 `StreamMotionDriver::new` controls whether the stream is marked finished when the
 queue runs dry, and individual packets can be flagged with `set_last_command`.
+
+The second argument must equal the controller's `$STMO.$START_MOVE` — how many commands it
+queues before it begins executing them. The controller faults both when it receives a
+command for a cycle it never announced and when its queue runs dry mid-motion, so the
+driver mirrors that queue to decide how many commands may go out at once and how long
+a blocked send may be retried before the robot runs out of motion. A value that
+disagrees with the controller costs resilience in both directions. `driver.stats()`
+reports what the model sees: buffer depth, measured cycle time, dropped cycles,
+refills, send retries, and underruns.
 
 #### Batch streaming
 
@@ -94,7 +103,7 @@ use fanuc_ucl::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], false);
+    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
     driver.connect(Some(ThreadConfig::new(80, None)))?;
     driver.start(2.0)?;
 
@@ -131,7 +140,7 @@ from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
 
 
 def main():
-    driver = stmo.StreamMotionDriver("10.0.0.1")
+    driver = stmo.StreamMotionDriver("10.0.0.1", 5)
     driver.connect(ThreadConfig(80, None))
     driver.start(2.0)
 
@@ -175,7 +184,7 @@ use fanuc_ucl::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], false);
+    let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
     driver.connect(Some(ThreadConfig::new(80, None)))?;
     driver.start(2.0)?;
 
@@ -205,7 +214,7 @@ from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
 
 
 def main():
-    driver = stmo.StreamMotionDriver("10.0.0.1")
+    driver = stmo.StreamMotionDriver("10.0.0.1", 5)
     driver.connect(ThreadConfig(80, None))
     driver.start(2.0)
 
