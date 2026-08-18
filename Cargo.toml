@@ -1,6 +1,6 @@
 [package]
 name = "fanuc_ucl"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
