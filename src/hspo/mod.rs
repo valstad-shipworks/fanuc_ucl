@@ -253,7 +253,8 @@ impl std::fmt::Display for VariablesPacket {
 pub trait HspoPacket: crate::sealed::Sealed {
     /// Per-stream packet sequence index.
     fn index(&self) -> u32;
-    /// Controller clock at send time (wrapping 32-bit, 1µs per unit).
+    /// Controller clock at send time, 1µs per unit. Free-running and wrapping,
+    /// at a modulus that varies by controller and is not the field's full range.
     fn clock(&self) -> u32;
 }
 
@@ -312,9 +313,9 @@ enum HspoStream {
 
 /// Per-stream clock tracker shared between the broker thread and a channel.
 ///
-/// The broker folds each accepted packet's wrapping 32-bit clock into a cumulative
-/// value, recording at which packet index each wrap was first seen and the offset
-/// between the cumulative clock and system time. [`system_time_of`](Self::system_time_of)
+/// The broker folds each accepted packet's wrapping clock into a cumulative value,
+/// recording at which packet index each wrap was first seen and the offset between
+/// the cumulative clock and system time. [`system_time_of`](Self::system_time_of)
 /// reconstructs the receive time of a buffered packet from that record.
 #[derive(Debug, Default)]
 #[cfg_vis(test, pub)]
@@ -326,52 +327,118 @@ struct StreamClock {
 struct StreamClockState {
     last_index: Option<u32>,
     last_clock: u32,
-    wraps: u64,
-    /// `(first packet index seen at this wrap count, wrap count)`, newest last.
-    wrap_points: VecDeque<(u32, u64)>,
+    last_sys_micros: u64,
+    /// Micros contributed by the cycles already folded in, so that `base + clock`
+    /// is the packet's absolute controller time.
+    base: u64,
+    /// Length of one clock cycle as measured at the most recent wrap.
+    cycle: Option<u64>,
+    /// Clock micros per packet index, from the most recent ordinary step.
+    period: Option<u64>,
+    /// Packets rejected in a row for carrying a stale index.
+    stale_run: u32,
+    /// `(first index seen on this base, its clock, base)`, newest last.
+    wrap_points: VecDeque<(u32, u32, u64)>,
     /// System micros minus cumulative clock micros, from the newest accepted packet.
     offset_micros: Option<i64>,
 }
 
 impl StreamClock {
-    const SPAN: u64 = u32::MAX as u64 + 1;
+    /// Cycle length assumed until a wrap has been seen and measured. Only the
+    /// wrap-detection guard band rides on it, so a controller whose counter is
+    /// narrower than this still wraps correctly the first time.
+    const NOMINAL_CYCLE: u64 = u32::MAX as u64 + 1;
     const WRAP_HISTORY: usize = 32;
+    /// Packets rejected in a row before the stream is taken to have restarted
+    /// rather than reordered. Deep enough that no plausible datagram reordering
+    /// reaches it, shallow enough that recovery costs a fraction of a second.
+    const STALE_RUN_LIMIT: u32 = 16;
 
     /// Gates a packet by index and folds its clock into the cumulative value,
-    /// recording wrap points and the clock-to-system offset as it goes.
+    /// recording the offset against `sys_micros`.
     ///
     /// Returns `None` when `index` is older than the newest already seen on this
     /// stream — a reordered or stale datagram the caller must disregard. Otherwise
-    /// returns the absolute cumulative clock `wraps * 2^32 + clock`.
+    /// returns the absolute cumulative clock `base + clock`.
+    ///
+    /// A high-water mark alone would strand the stream for good once a controller
+    /// restarts its stream and counts from zero again, so a backward index that
+    /// persists past [`STALE_RUN_LIMIT`](Self::STALE_RUN_LIMIT) is read as a restart
+    /// instead: the clock re-anchors on the new packet and keeps running forward.
     ///
     /// Because out-of-order packets are gated out here, the accepted samples are in
     /// order, so a backward clock step on a strictly-newer packet is an unambiguous
-    /// 32-bit wrap. The boundary check (previous value near the top of the range, new
-    /// value near the bottom) covers streams whose index does not advance between
-    /// packets, e.g. duplicates or controllers that leave `index` fixed.
+    /// wrap. The boundary check (previous value near the top of the cycle, new value
+    /// near the bottom) covers streams whose index does not advance between packets,
+    /// e.g. duplicates or controllers that leave `index` fixed.
+    ///
+    /// How far the clock jumped at a wrap is MEASURED rather than assumed to be the
+    /// counter's full range. Controllers do not all count to 2^32: the R-30iB cycles
+    /// at roughly 1.29e8µs, and folding in 2^32 there put every packet still buffered
+    /// from before the wrap 4166s adrift.
+    ///
+    /// The measurement takes the packet rate over the receive times wherever it can.
+    /// Kernel rx timestamps carry each datagram's own arrival, but the fallback
+    /// stamps at user-space receive — and a drained backlog stamps a burst of packets
+    /// within the same microsecond, so elapsed reads as zero and is only ever a
+    /// floor. The index delta times the observed period is what holds the spacing
+    /// together when the wrap lands mid-burst.
     #[cfg_vis(test, pub)]
     fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
-        const WRAP_GUARD: u32 = u32::MAX / 4;
         let mut state = self.state.lock();
-        if let Some(last_index) = state.last_index {
-            if index < last_index {
-                return None;
+        match state.last_index {
+            Some(last_index) if index < last_index => {
+                state.stale_run += 1;
+                if state.stale_run < Self::STALE_RUN_LIMIT {
+                    return None;
+                }
+                let elapsed = sys_micros.saturating_sub(state.last_sys_micros);
+                let resumed = state.base + state.last_clock as u64 + elapsed;
+                state.base = resumed.saturating_sub(clock as u64);
+                // Indices start over, so the recorded points can no longer say
+                // which base a buffered packet belongs to. The cycle survives:
+                // it is a property of the controller, not of the stream.
+                state.wrap_points.clear();
+                state.period = None;
             }
-            let crossed_boundary = state.last_clock > u32::MAX - WRAP_GUARD && clock < WRAP_GUARD;
-            if clock < state.last_clock && (index > last_index || crossed_boundary) {
-                state.wraps += 1;
+            Some(last_index) => {
+                let packets = u64::from(index - last_index);
+                if clock < state.last_clock {
+                    let cycle = state.cycle.unwrap_or(Self::NOMINAL_CYCLE);
+                    let guard = cycle / 4;
+                    let crossed_boundary =
+                        state.last_clock as u64 > cycle - guard && (clock as u64) < guard;
+                    if packets > 0 || crossed_boundary {
+                        let elapsed = sys_micros.saturating_sub(state.last_sys_micros);
+                        let by_rate = state.period.map_or(0, |p| p.saturating_mul(packets));
+                        let advance = elapsed.max(by_rate) + state.last_clock as u64 - clock as u64;
+                        state.base = state.base.saturating_add(advance);
+                        // A stalled stream can skip whole cycles, which folds into
+                        // `base` correctly but overstates the cycle itself. The
+                        // shortest advance ever measured is the one that crossed a
+                        // single boundary.
+                        if state.cycle.is_none_or(|c| advance < c) {
+                            state.cycle = Some(advance);
+                        }
+                    }
+                } else if clock > state.last_clock && packets > 0 {
+                    state.period = Some((clock as u64 - state.last_clock as u64) / packets);
+                }
             }
+            None => {}
         }
-        if state.wrap_points.back().map(|&(_, w)| w) != Some(state.wraps) {
-            let wraps = state.wraps;
-            state.wrap_points.push_back((index, wraps));
+        state.stale_run = 0;
+        if state.wrap_points.back().map(|&(_, _, b)| b) != Some(state.base) {
+            let base = state.base;
+            state.wrap_points.push_back((index, clock, base));
             if state.wrap_points.len() > Self::WRAP_HISTORY {
                 state.wrap_points.pop_front();
             }
         }
         state.last_index = Some(index);
         state.last_clock = clock;
-        let absolute = state.wraps * Self::SPAN + clock as u64;
+        state.last_sys_micros = sys_micros;
+        let absolute = state.base + clock as u64;
         state.offset_micros = Some(sys_micros as i64 - absolute as i64);
         Some(absolute)
     }
@@ -379,21 +446,38 @@ impl StreamClock {
     /// Reconstructs the system time at which the packet carrying this index and
     /// clock was received, or `None` before any packet has been accepted.
     ///
-    /// The wrap count is the one in effect at the packet's index per the recorded
-    /// wrap points, so buffered packets resolve correctly even when read after the
-    /// clock has wrapped again. Assumes the controller clock ticks at 1µs per unit.
+    /// The base is the one in effect at the packet's index per the recorded wrap
+    /// points, so buffered packets resolve correctly even when read after the clock
+    /// has wrapped again. Assumes the controller clock ticks at 1µs per unit.
+    ///
+    /// A controller that leaves `index` fixed records every base against the same
+    /// index, so the clock is what separates them: within one base it only climbs,
+    /// which bounds each base below by the clock first seen on it and bounds the
+    /// newest one above by the newest clock accepted.
     #[cfg_vis(test, pub)]
     fn system_time_of(&self, index: u32, clock: u32) -> Option<SystemTime> {
         let state = self.state.lock();
         let offset = state.offset_micros?;
-        let wraps = state
-            .wrap_points
-            .iter()
-            .rev()
-            .find(|&&(first_index, _)| first_index <= index)
-            .map(|&(_, w)| w)
-            .or_else(|| state.wrap_points.front().map(|&(_, w)| w.saturating_sub(1)))?;
-        let micros = (wraps * Self::SPAN + clock as u64) as i128 + offset as i128;
+        let base =
+            state
+                .wrap_points
+                .back()
+                .filter(|&&(first_index, first_clock, _)| {
+                    first_index <= index && first_clock <= clock && clock <= state.last_clock
+                })
+                .or_else(|| {
+                    state.wrap_points.iter().rev().skip(1).find(
+                        |&&(first_index, first_clock, _)| {
+                            first_index <= index && first_clock <= clock
+                        },
+                    )
+                })
+                .map(|&(_, _, b)| b)
+                .or_else(|| {
+                    let &(_, _, oldest) = state.wrap_points.front()?;
+                    Some(oldest.saturating_sub(state.cycle.unwrap_or(Self::NOMINAL_CYCLE)))
+                })?;
+        let micros = (base + clock as u64) as i128 + offset as i128;
         u64::try_from(micros)
             .ok()
             .map(|m| SystemTime::UNIX_EPOCH + Duration::from_micros(m))

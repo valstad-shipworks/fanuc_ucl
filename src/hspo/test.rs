@@ -145,22 +145,83 @@ fn test_stream_clock_index_gate() {
 #[test]
 fn test_stream_clock_wrap() {
     let sc = StreamClock::default();
-    let span = u32::MAX as u64 + 1;
+    let cycle = u32::MAX as u64 + 1;
+    let pre = u32::MAX - 5;
 
-    assert_eq!(sc.accept(0, u32::MAX - 5, 0), Some((u32::MAX - 5) as u64));
+    assert_eq!(sc.accept(0, pre, 0), Some(pre as u64));
     // Strictly-newer packet whose clock stepped backward across the boundary: a wrap.
-    assert_eq!(sc.accept(1, 4, 8), Some(span + 4));
-    assert_eq!(sc.accept(2, 12, 16), Some(span + 12));
+    // 8µs of receive time separates them, so the counter ran `cycle - pre + 4`.
+    assert_eq!(sc.accept(1, 4, 8), Some(pre as u64 + 8));
+    assert_eq!(sc.accept(2, 12, 16), Some(pre as u64 + 16));
+    // The cycle it measured is the full range, since that is what the times say.
+    assert_eq!(sc.accept(3, 20, 24), Some(pre as u64 + 24));
+    assert!(
+        pre as u64 + 24 > cycle - 100,
+        "still inside the first cycle"
+    );
 }
 
 #[test]
 fn test_stream_clock_wrap_fixed_index() {
     let sc = StreamClock::default();
-    let span = u32::MAX as u64 + 1;
+    let pre = u32::MAX - 5;
 
     // Index never advances, so the boundary check alone must catch the wrap.
-    assert_eq!(sc.accept(0, u32::MAX - 5, 0), Some((u32::MAX - 5) as u64));
-    assert_eq!(sc.accept(0, 4, 8), Some(span + 4));
+    assert_eq!(sc.accept(0, pre, 0), Some(pre as u64));
+    assert_eq!(sc.accept(0, 4, 8), Some(pre as u64 + 8));
+}
+
+#[test]
+fn test_stream_clock_wrap_at_a_short_cycle() {
+    // The R-30iB counter cycles at ~1.29e8µs, nowhere near the field's range.
+    // Assuming 2^32 here inserted a 4166s jump into every packet still buffered
+    // from before the wrap, which pinned a sweep's corners onto one pose.
+    let sc = StreamClock::default();
+    let cycle = 128_850_307u64;
+    let pre = (cycle - 341) as u32;
+    let step = 4_000u64;
+    let base_sys = 1_787_083_917_000_000u64;
+
+    assert_eq!(sc.accept(0, pre, base_sys), Some(pre as u64));
+    // 4ms later the counter has rolled to 3659; absolute time must advance by 4ms.
+    let post = (pre as u64 + step - cycle) as u32;
+    assert_eq!(post, 3_659);
+    assert_eq!(
+        sc.accept(1, post, base_sys + step),
+        Some(pre as u64 + step),
+        "the wrap advances the clock by the elapsed time, not by 2^32"
+    );
+    assert_eq!(
+        sc.accept(2, post + step as u32, base_sys + 2 * step),
+        Some(pre as u64 + 2 * step)
+    );
+
+    // The pre-wrap packet, resolved after the wrap, keeps its own receive time.
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+    assert_eq!(sc.system_time_of(0, pre), Some(epoch(base_sys)));
+    assert_eq!(sc.system_time_of(1, post), Some(epoch(base_sys + step)));
+}
+
+#[test]
+fn test_stream_clock_wrap_across_a_stall_of_several_cycles() {
+    // Nothing arrives for long enough that the counter rolls over three times.
+    // Only one backward step is visible, but the receive times still say how
+    // much time actually passed, so both packets keep their own stamps.
+    let sc = StreamClock::default();
+    let cycle = 128_850_307u64;
+    let stall = 2 * cycle + (cycle - 200);
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+
+    assert_eq!(sc.accept(0, 500, 0), Some(500));
+    assert_eq!(sc.accept(1, 300, stall), Some(stall + 500));
+    assert_eq!(sc.system_time_of(0, 500), Some(epoch(0)));
+    assert_eq!(sc.system_time_of(1, 300), Some(epoch(stall)));
+
+    // The skipped cycles must not be learned as the cycle length: a later
+    // single-boundary wrap is the shorter measurement and wins.
+    let next = stall + cycle - 100;
+    assert_eq!(sc.accept(2, 200, next), Some(next + 500));
+    assert_eq!(sc.system_time_of(2, 200), Some(epoch(next)));
 }
 
 #[test]
@@ -250,6 +311,177 @@ fn test_stream_clock_system_time_of_across_wrap() {
     // Post-wrap packets resolve with the folded wrap.
     assert_eq!(sc.system_time_of(1, 4), Some(epoch(span + 4 + offset)));
     assert_eq!(sc.system_time_of(2, 12), Some(epoch(span + 12 + offset)));
+}
+
+#[test]
+fn test_stream_clock_batch_buffered_across_a_wrap() {
+    // The production failure: a consumer drains the channel every 500ms, so at
+    // any moment a batch of packets is buffered and gets resolved only after
+    // the broker has already folded in a wrap. Every one of them has to come
+    // back with its own receive time. Folding in 2^32 instead of the ~1.29e8
+    // the counter really ran put the whole pre-wrap half of the batch 4166s
+    // into the past, and the sweep reading them pinned its corners onto one
+    // pose. Rates and values are the R-30iB's: 1333µs per index, 4000µs per
+    // three, wrapping 128849966 -> 3659.
+    let sc = StreamClock::default();
+    let cycle = 128_850_307u64;
+    let step = 1_333u64;
+    let base_sys = 1_787_083_917_167_106u64;
+    let start_clock = 128_849_966u64;
+    let start_index = 33_905u32;
+
+    // 500ms of packets before the wrap, then 200ms after it.
+    let mut sent: Vec<(u32, u32, u64)> = Vec::new();
+    for i in 0..525u64 {
+        let index = start_index + i as u32;
+        let clock = ((start_clock + i * step) % cycle) as u32;
+        sent.push((index, clock, base_sys + i * step));
+    }
+    // The wrap is in there, and only once.
+    let wraps = sent.windows(2).filter(|w| w[1].1 < w[0].1).count();
+    assert_eq!(wraps, 1, "one rollover in the batch");
+
+    for &(index, clock, sys) in &sent {
+        assert!(
+            sc.accept(index, clock, sys).is_some(),
+            "index {index} gated"
+        );
+    }
+
+    // Now resolve the whole batch, offset anchored on the newest packet — what
+    // a consumer draining after the wrap actually sees.
+    for &(index, clock, sys) in &sent {
+        let at = sc
+            .system_time_of(index, clock)
+            .expect("a packet the broker accepted resolves");
+        let micros = at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        assert_eq!(
+            micros,
+            sys,
+            "packet {index} came back {} µs from its receive time",
+            micros as i64 - sys as i64
+        );
+    }
+}
+
+#[test]
+fn test_stream_clock_wrap_inside_a_drained_backlog() {
+    // Without kernel rx timestamps — a non-unix host, snare's shim socket, or
+    // Linux before its deferred static key turns generation on — every datagram
+    // is stamped at user-space receive, so a drained backlog stamps a burst of
+    // them within the same microsecond. Here the whole burst shares one stamp,
+    // which is the limiting case: the receive times say no time passed and the
+    // spacing has to come from the index instead.
+    let sc = StreamClock::default();
+    let cycle = 128_850_307u64;
+    let step = 4_000u64;
+    let sys = 1_787_083_917_000_000u64;
+    let start = cycle - 3 * step;
+
+    let mut absolute = Vec::new();
+    for i in 0..6u64 {
+        let clock = ((start + i * step) % cycle) as u32;
+        absolute.push(sc.accept(i as u32, clock, sys).expect("accepted"));
+    }
+    for (i, w) in absolute.windows(2).enumerate() {
+        assert_eq!(
+            w[1] - w[0],
+            step,
+            "packet {i} -> {} lost its spacing across the wrap",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn test_stream_clock_recovers_from_a_restarted_stream() {
+    // The controller restarts its stream and counts from zero again. A plain
+    // high-water mark would reject every packet from here on and the stream
+    // would never deliver again.
+    let sc = StreamClock::default();
+    let step = 8_000u64;
+    let sys = 1_787_083_917_000_000u64;
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+
+    for i in 0..4u64 {
+        let at = sc.accept(
+            40_000 + i as u32,
+            (500_000 + i * step) as u32,
+            sys + i * step,
+        );
+        assert!(at.is_some(), "pre-restart packet {i}");
+    }
+    let last_sys = sys + 3 * step;
+    let resumed_at = last_sys + 250_000;
+
+    // The first packets of the new stream still look stale and are dropped.
+    for i in 0..(StreamClock::STALE_RUN_LIMIT - 1) {
+        let dropped = sc.accept(i, 1_000 + i * 10, resumed_at + u64::from(i) * step);
+        assert_eq!(
+            dropped, None,
+            "packet {i} of the restart is not yet a restart"
+        );
+    }
+
+    // Past the limit it is read as a restart, and the stream delivers again.
+    let i = StreamClock::STALE_RUN_LIMIT - 1;
+    let at = resumed_at + u64::from(i) * step;
+    let first = sc.accept(i, 1_000 + i * 10, at).expect("stream recovers");
+    assert_eq!(
+        sc.system_time_of(i, 1_000 + i * 10),
+        Some(epoch(at)),
+        "the resumed packet reports its own receive time"
+    );
+
+    // And it keeps running forward from there rather than jumping backward.
+    let next = sc
+        .accept(i + 1, 1_000 + (i + 1) * 10, at + step)
+        .expect("accepted");
+    assert!(
+        next > first,
+        "device time keeps advancing after the restart"
+    );
+    assert_eq!(
+        sc.system_time_of(i + 1, 1_000 + (i + 1) * 10),
+        Some(epoch(at + step))
+    );
+}
+
+#[test]
+fn test_stream_clock_fixed_index_resolves_buffered_packets() {
+    // A controller that leaves `index` fixed records every base against the same
+    // index, so buffered packets used to resolve against the newest base — putting
+    // the pre-wrap ones a whole cycle into the future. Within one base the clock
+    // only climbs, so it is what separates them.
+    //
+    // The cycle has to be the full range here: a fixed-index stream on a shorter
+    // counter has neither wrap signal available, since the index never moves and
+    // the boundary guard is calibrated to a range the counter never reaches.
+    let sc = StreamClock::default();
+    let cycle = u32::MAX as u64 + 1;
+    let step = 4_000u64;
+    let sys = 1_787_083_917_000_000u64;
+    let epoch = |micros: u64| SystemTime::UNIX_EPOCH + Duration::from_micros(micros);
+    let start = cycle - 2 * step;
+
+    let mut sent = Vec::new();
+    for i in 0..4u64 {
+        let clock = ((start + i * step) % cycle) as u32;
+        let at = sys + i * step;
+        assert!(sc.accept(0, clock, at).is_some(), "packet {i} gated");
+        sent.push((clock, at));
+    }
+
+    for (i, &(clock, at)) in sent.iter().enumerate() {
+        assert_eq!(
+            sc.system_time_of(0, clock),
+            Some(epoch(at)),
+            "packet {i} of a fixed-index stream"
+        );
+    }
 }
 
 const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 60000);
