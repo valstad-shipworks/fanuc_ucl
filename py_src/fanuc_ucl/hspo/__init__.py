@@ -5,5 +5,6 @@ JointAnglesPacket = _hspo.JointAnglesPacket
 VariablesPacket = _hspo.VariablesPacket
 initialize_broker = _hspo.initialize_broker
 destroy_broker = _hspo.destroy_broker
+has_broker_errored = _hspo.has_broker_errored
 HspoReceiver = _hspo.HspoReceiver
 HspoChannel = _hspo.HspoChannel

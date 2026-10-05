@@ -790,6 +790,10 @@ pub enum RxPackets {
 }
 
 impl RxPackets {
+    /// Decodes one datagram from the controller. Every reply has a fixed
+    /// layout for its packet type (the status packet's layout is the same in
+    /// every protocol version), so a datagram of any other length is rejected
+    /// rather than read as that type.
     pub fn decode_from(buf: &[u8]) -> Option<Self> {
         if buf.len() < 8 {
             tracing::warn!(len = buf.len(), "Received packet too short");
@@ -797,51 +801,50 @@ impl RxPackets {
         }
         let packet_type = u32::from_be_bytes(buf[0..4].try_into().ok()?);
         let version = u32::from_be_bytes(buf[4..8].try_into().ok()?);
-        if packet_type == VersionNumberResponsePacket::PACKET_TYPE {
-            return Some(RxPackets::VersionNumberResponse(
-                VersionNumberResponsePacket { version },
-            ));
-        }
         let data_buf = &buf[8..];
-        let cfg = bincode::config::standard()
-            .with_big_endian()
-            .with_fixed_int_encoding();
         match packet_type {
             RobotStatusPacket::PACKET_TYPE => {
-                let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
-                if n != data_buf.len() {
-                    tracing::warn!(
-                        decoded_len = n,
-                        data_len = data_buf.len(),
-                        "RobotStatusPacket decoded length does not match data length"
-                    );
-                }
-                Some(RxPackets::RobotStatus(pkt))
+                Self::decode_body(data_buf, "RobotStatusPacket").map(RxPackets::RobotStatus)
             }
             ThresholdTableResponsePacket::PACKET_TYPE => {
-                let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
-                if n != data_buf.len() {
-                    tracing::warn!(
-                        decoded_len = n,
-                        data_len = data_buf.len(),
-                        "ThresholdTableResponsePacket decoded length does not match data length"
-                    );
-                }
-                Some(RxPackets::ThresholdTableResponse(pkt))
+                Self::decode_body(data_buf, "ThresholdTableResponsePacket")
+                    .map(RxPackets::ThresholdTableResponse)
             }
             CommandPositionResponsePacket::PACKET_TYPE => {
-                let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
-                if n != data_buf.len() {
+                Self::decode_body(data_buf, "CommandPositionResponsePacket")
+                    .map(RxPackets::CommandPositionResponse)
+            }
+            VersionNumberResponsePacket::PACKET_TYPE => {
+                if !data_buf.is_empty() {
                     tracing::warn!(
-                        decoded_len = n,
                         data_len = data_buf.len(),
-                        "CommandPositionResponsePacket decoded length does not match data length"
+                        "VersionNumberResponsePacket has a body; dropping it"
                     );
+                    return None;
                 }
-                Some(RxPackets::CommandPositionResponse(pkt))
+                Some(RxPackets::VersionNumberResponse(
+                    VersionNumberResponsePacket { version },
+                ))
             }
             _ => None,
         }
+    }
+
+    fn decode_body<T: bincode::Decode<()>>(data_buf: &[u8], name: &'static str) -> Option<T> {
+        let cfg = bincode::config::standard()
+            .with_big_endian()
+            .with_fixed_int_encoding();
+        let (pkt, n) = bincode::decode_from_slice(data_buf, cfg).ok()?;
+        if n != data_buf.len() {
+            tracing::warn!(
+                packet = name,
+                decoded_len = n,
+                data_len = data_buf.len(),
+                "Packet length does not match its type; dropping it"
+            );
+            return None;
+        }
+        Some(pkt)
     }
 }
 

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use fanuc_ucl::{
-    ThreadConfig,
+    ThreadOption,
     joints::{JointFormat, JointTemplate},
     stmo::{StreamMotionDriver, proto::MotionCommandPacket},
 };
@@ -9,7 +9,7 @@ use fanuc_ucl::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 5 must match the controller's $STMO.$START_MOVE.
     let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.connect(&[ThreadOption::RtPriority(80)], &[])?;
     driver.start(2.0)?;
 
     let limits = driver.fetch_movement_limits(0)?;

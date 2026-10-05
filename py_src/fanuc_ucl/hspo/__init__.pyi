@@ -1,7 +1,8 @@
 from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, TypeVar
 
-from fanuc_ucl._common import JointFormat, JointTemplate, ThreadConfig
+from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
 
 _T = TypeVar("_T")
 
@@ -72,13 +73,21 @@ class HspoChannel(Generic[_T]):
         """
 
 def initialize_broker(
-    listen_on: str, thread_config: ThreadConfig | None = None
+    listen_on: str,
+    thread: ThreadOptionsLike = None,
+    socket: SocketOptionsLike = None,
 ) -> None:
     """Initializes the global HSPO broker, binding a socket to ``listen_on`` and spawning a background listener thread.
 
     This must be called before creating any ``HspoReceiver``. Calling it again after initialization is a no-op.
 
-    Pass ``thread_config=None`` (the default) to leave the broker thread on the default scheduler with no priority or affinity adjustments.
+    ``thread`` is applied by the broker thread to itself and ``socket`` to the
+    receive socket right after it is bound; ``None`` (the default) applies
+    nothing. Every thread option is accepted except ``macos_time_constraint``.
+    Socket options accepted: ``recv_buffer``, ``bind_device``,
+    ``linux_busy_poll``, ``linux_prefer_busy_poll``, ``linux_busy_poll_budget``
+    and ``win_cpu_affinity``; the rest only shape outgoing traffic, which this
+    socket has none of. A refused option raises ``ValueError``.
     """
 
 def destroy_broker(wait_for_thread: bool = True) -> None:

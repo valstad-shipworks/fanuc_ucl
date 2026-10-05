@@ -54,7 +54,11 @@ pub trait HmiWireable: Sized + __private::Sealed {
     ) -> Result<usize, HmiError> {
         let mut filler = [0u8; N];
         let packed_size = self.pack(&mut filler);
-        if view_size > packed_size || start_offset + view_size > N {
+        if view_size > packed_size
+            || start_offset
+                .checked_add(view_size)
+                .is_none_or(|end| end > N)
+        {
             tracing::error!(
                 view_size,
                 packed_size,
@@ -80,10 +84,8 @@ pub trait HmiWireable: Sized + __private::Sealed {
         view_size: usize,
     ) -> Result<(Self, usize), HmiError> {
         let mut filler = [0u8; N];
-        if view_size > src.len()
-            || start_offset + view_size > N
-            || start_offset + view_size > Self::PACKED_SIZE
-        {
+        let end = start_offset.checked_add(view_size);
+        if view_size > src.len() || end.is_none_or(|end| end > N || end > Self::PACKED_SIZE) {
             tracing::error!(
                 view_size,
                 src_len = src.len(),
@@ -289,9 +291,37 @@ impl HmiWireable for String {
 
 pub(crate) fn bytes_to_i16(bytes: &[u8]) -> Vec<i16> {
     bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| i16::from_le_bytes(*c))
         .collect()
+}
+
+/// A malformed error unless the reply holds at least `size` bytes.
+fn need(src: &[u8], size: usize) -> Result<(), crate::hmi::HmiError> {
+    if src.len() < size {
+        tracing::error!(
+            expected = size,
+            len = src.len(),
+            "Malformed response: reply shorter than its value"
+        );
+        return Err(crate::hmi::HmiError::MalformedResponse);
+    }
+    Ok(())
+}
+
+/// The bytes of a reply from `offset` on, or a malformed error when the reply
+/// ends before it.
+fn tail(src: &[u8], offset: usize) -> Result<&[u8], crate::hmi::HmiError> {
+    src.get(offset..).ok_or_else(|| {
+        tracing::error!(
+            offset,
+            len = src.len(),
+            "Malformed response: reply ends before the field"
+        );
+        crate::hmi::HmiError::MalformedResponse
+    })
 }
 
 pub mod position_struct {
@@ -456,45 +486,46 @@ pub mod position_struct {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (x, sz) = f32::unpack(&src[offset..])?;
+            let (x, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (y, sz) = f32::unpack(&src[offset..])?;
+            let (y, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (z, sz) = f32::unpack(&src[offset..])?;
+            let (z, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (w, sz) = f32::unpack(&src[offset..])?;
+            let (w, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (p, sz) = f32::unpack(&src[offset..])?;
+            let (p, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (r, sz) = f32::unpack(&src[offset..])?;
+            let (r, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (e1, sz) = f32::unpack(&src[offset..])?;
+            let (e1, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (e2, sz) = f32::unpack(&src[offset..])?;
+            let (e2, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (e3, sz) = f32::unpack(&src[offset..])?;
+            let (e3, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (flip_u16, sz) = u16::unpack(&src[offset..])?;
+            let (flip_u16, sz) = u16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let flip = FlipState::try_from(flip_u16).map_err(|_| HmiError::MalformedResponse)?;
-            let (lr_u16, sz) = u16::unpack(&src[offset..])?;
+            let (lr_u16, sz) = u16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let lr = LeftRight::try_from(lr_u16).map_err(|_| HmiError::MalformedResponse)?;
-            let (ud_u16, sz) = u16::unpack(&src[offset..])?;
+            let (ud_u16, sz) = u16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let ud = UpDown::try_from(ud_u16).map_err(|_| HmiError::MalformedResponse)?;
-            let (fb_u16, sz) = u16::unpack(&src[offset..])?;
+            let (fb_u16, sz) = u16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let fb = FrontBack::try_from(fb_u16).map_err(|_| HmiError::MalformedResponse)?;
-            let (turn4, sz) = i16::unpack(&src[offset..])?;
+            let (turn4, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (turn5, sz) = i16::unpack(&src[offset..])?;
+            let (turn5, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (turn6, sz) = i16::unpack(&src[offset..])?;
+            let (turn6, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             offset += 1;
-            let (is_valid, sz) = bool::unpack(&src[offset..])?;
+            let (is_valid, sz) = bool::unpack(super::tail(src, offset)?)?;
             offset += sz;
             Ok((
                 CartesianData {
@@ -558,9 +589,10 @@ pub mod position_struct {
         }
     }
 
+    /// %R 27-45 of a position: J1-J9 and VALIDJ, 19 registers.
     impl HmiWireable for JointData {
-        const PACKED_SIZE: usize = 40;
-        const SYS_VAR_SIZE: usize = 40;
+        const PACKED_SIZE: usize = 38;
+        const SYS_VAR_SIZE: usize = 38;
         fn pack(&self, dst: &mut [u8]) -> usize {
             let mut offset = 0;
             offset += self.j1.pack(&mut dst[offset..]);
@@ -577,27 +609,28 @@ pub mod position_struct {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (j1, sz) = f32::unpack(&src[offset..])?;
+            let (j1, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j2, sz) = f32::unpack(&src[offset..])?;
+            let (j2, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j3, sz) = f32::unpack(&src[offset..])?;
+            let (j3, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j4, sz) = f32::unpack(&src[offset..])?;
+            let (j4, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j5, sz) = f32::unpack(&src[offset..])?;
+            let (j5, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j6, sz) = f32::unpack(&src[offset..])?;
+            let (j6, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j7, sz) = f32::unpack(&src[offset..])?;
+            let (j7, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j8, sz) = f32::unpack(&src[offset..])?;
+            let (j8, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (j9, sz) = f32::unpack(&src[offset..])?;
+            let (j9, sz) = f32::unpack(super::tail(src, offset)?)?;
             offset += sz;
             offset += 1;
-            let (is_valid, sz) = bool::unpack(&src[offset..])?;
+            let (is_valid, sz) = bool::unpack(super::tail(src, offset)?)?;
             offset += sz;
             Ok((
                 JointData {
@@ -652,14 +685,15 @@ pub mod position_struct {
         }
         #[allow(clippy::needless_range_loop)]
         fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (uf, sz) = i16::unpack(&src[offset..])?;
+            let (uf, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (ut, sz) = i16::unpack(&src[offset..])?;
+            let (ut, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let mut reserved = [0u16; 3];
             for i in 0..3 {
-                let (val, sz) = u16::unpack(&src[offset..])?;
+                let (val, sz) = u16::unpack(super::tail(src, offset)?)?;
                 offset += sz;
                 reserved[i] = val;
             }
@@ -699,12 +733,13 @@ pub mod position_struct {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (cartesian, sz) = CartesianData::unpack(&src[offset..])?;
+            let (cartesian, sz) = CartesianData::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (joint, sz) = JointData::unpack(&src[offset..])?;
+            let (joint, sz) = JointData::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (frame, sz) = FrameData::unpack(&src[offset..])?;
+            let (frame, sz) = FrameData::unpack(super::tail(src, offset)?)?;
             offset += sz;
             Ok((
                 PositionData {
@@ -741,6 +776,18 @@ pub mod alarm_struct {
         AbortGlobal = 43,
         ServoAlarm2 = 58,
         SystemAlarm = 123,
+    }
+
+    /// `AlarmSeverity.None` cannot be written in Python, where `None` is a
+    /// keyword, so the variant is also exposed as `None_`.
+    #[cfg(feature = "py")]
+    #[pyo3::pymethods]
+    impl AlarmSeverity {
+        #[classattr]
+        #[pyo3(name = "None_")]
+        fn none_variant() -> Self {
+            AlarmSeverity::None
+        }
     }
 
     impl std::fmt::Display for AlarmSeverity {
@@ -800,18 +847,19 @@ pub mod alarm_struct {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (year, sz) = i16::unpack(&src[offset..])?;
+            let (year, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (month, sz) = i16::unpack(&src[offset..])?;
+            let (month, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (day, sz) = i16::unpack(&src[offset..])?;
+            let (day, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (hour, sz) = i16::unpack(&src[offset..])?;
+            let (hour, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (minute, sz) = i16::unpack(&src[offset..])?;
+            let (minute, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (second, sz) = i16::unpack(&src[offset..])?;
+            let (second, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             Ok((
                 TimeData {
@@ -882,26 +930,28 @@ pub mod alarm_struct {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (id, sz) = i16::unpack(&src[offset..])?;
+            let (id, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (number, sz) = i16::unpack(&src[offset..])?;
+            let (number, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (cause_id, sz) = i16::unpack(&src[offset..])?;
+            let (cause_id, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (cause_cnt, sz) = i16::unpack(&src[offset..])?;
+            let (cause_cnt, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (severity_i16, sz) = i16::unpack(&src[offset..])?;
+            let (severity_i16, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let severity = AlarmSeverity::try_from(severity_i16)
                 .map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
-            let (time, sz) = TimeData::unpack(&src[offset..])?;
+            let (time, sz) = TimeData::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (msg, sz) = String::unpack(&src[offset..])?;
+            let (msg, sz) = String::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (cause_msg, sz) = String::unpack(&src[offset..])?;
+            let (cause_msg, sz) = String::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (severity_msg, sz) = String::partial_unpack::<80>(&src[offset..], 0, 18)?;
+            let (severity_msg, sz) =
+                String::partial_unpack::<80>(super::tail(src, offset)?, 0, 18)?;
             offset += sz;
             Ok((
                 AlarmData {
@@ -989,16 +1039,17 @@ pub mod prog_status {
             offset
         }
         fn unpack(src: &[u8]) -> Result<(Self, usize), crate::hmi::HmiError> {
+            super::need(src, Self::PACKED_SIZE)?;
             let mut offset = 0;
-            let (name, sz) = String::partial_unpack::<80>(&src[offset..], 0, 16)?;
+            let (name, sz) = String::partial_unpack::<80>(super::tail(src, offset)?, 0, 16)?;
             offset += sz;
-            let (line_number, sz) = i16::unpack(&src[offset..])?;
+            let (line_number, sz) = i16::unpack(super::tail(src, offset)?)?;
             offset += sz;
-            let (state_u16, sz) = u16::unpack(&src[offset..])?;
+            let (state_u16, sz) = u16::unpack(super::tail(src, offset)?)?;
             offset += sz;
             let state = ProgramState::try_from(state_u16)
                 .map_err(|_| crate::hmi::HmiError::MalformedResponse)?;
-            let (parent_name, sz) = String::partial_unpack::<80>(&src[offset..], 0, 16)?;
+            let (parent_name, sz) = String::partial_unpack::<80>(super::tail(src, offset)?, 0, 16)?;
             offset += sz;
             Ok((
                 ProgramStatus {

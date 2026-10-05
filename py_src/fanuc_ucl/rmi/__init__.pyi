@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Generic, TypeVar, overload
 
-from fanuc_ucl._common import ThreadConfig
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
 
 # Explicit imports (no wildcard) to avoid the per-symbol provenance hops
 # that pyright/pylance pays on every overload type-check. Cuts re-resolution
@@ -244,8 +244,20 @@ class RmiDriver:
     def __init__(self, config: RmiDriverConfig) -> None: ...
     def connect(
         self,
-        thread_config: ThreadConfig | None = None,
-    ) -> FrcConnectResponse: ...
+        thread: ThreadOptionsLike = None,
+        socket: SocketOptionsLike = None,
+    ) -> FrcConnectResponse:
+        """Performs the FRC_Connect handshake and spawns the I/O thread.
+
+        ``thread`` is applied by the I/O thread to itself and ``socket`` to both
+        TCP connections once made; ``None`` (the default) applies nothing.
+        Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
+        ``linux_nice``, ``unix_scheduler`` (``other``/``batch``/``idle``),
+        ``win_priority`` below ``time_critical``,
+        ``win_disable_power_throttling`` and ``macos_qos``; real-time classes
+        are refused. Socket options accepted: ``dscp`` and ``linux_priority``.
+        A refused option raises ``ValueError``.
+        """
     def disconnect(self) -> RmiHandle[FrcDisconnectResponse]: ...
     def is_connected(self) -> bool: ...
     def has_connection_errored(self) -> bool:

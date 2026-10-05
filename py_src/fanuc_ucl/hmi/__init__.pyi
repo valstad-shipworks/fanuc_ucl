@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, overload
 
-from fanuc_ucl._common import ThreadConfig
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
 
 from .asg import *
 
@@ -128,14 +128,25 @@ class HmiDriver:
     Manages the connection to the HMI, sending commands, reading/writing data ports, and registering ASG variables.
     """
 
-    def __init__(self, address: str | IPv4Address | IPv6Address) -> None:
+    def __init__(self, addr: str | IPv4Address | IPv6Address) -> None:
         """Creates a new HmiDriver instance. Does not connect; call ``connect()`` to establish a connection."""
     def connect(
         self,
         timeout_secs: float = 1.0,
-        thread_config: ThreadConfig | None = None,
+        thread: ThreadOptionsLike = None,
+        socket: SocketOptionsLike = None,
     ) -> None:
-        """Connects to the HMI and performs the necessary handshake to establish communication."""
+        """Connects to the HMI and performs the necessary handshake to establish communication.
+
+        ``thread`` is applied by the I/O thread to itself and ``socket`` to the
+        TCP connection once made; ``None`` (the default) applies nothing.
+        Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
+        ``linux_nice``, ``unix_scheduler`` (``other``/``batch``/``idle``),
+        ``win_priority`` below ``time_critical``,
+        ``win_disable_power_throttling`` and ``macos_qos``; real-time classes
+        are refused. Socket options accepted: ``dscp`` and ``linux_priority``.
+        A refused option raises ``ValueError``.
+        """
     def disconnect(self) -> None:
         """Disconnects from the HMI, shutting down the runner thread and cleaning up resources."""
     def is_connected(self) -> bool:

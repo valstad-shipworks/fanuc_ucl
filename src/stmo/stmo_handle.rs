@@ -4,33 +4,33 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
 use crate::{
-    ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError, time_util::host_now,
+    ResponseHandle, ResponseNotFulfilled, stmo::types::StreamMotionError, thread_util::WakerSet,
+    time_util::host_now,
 };
 
 #[cfg_attr(feature = "py", pyo3::pyclass(str, from_py_object))]
 #[derive(Debug, Clone)]
 pub struct StmoHandle {
-    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
-    // the async `poll` waiter. Both are signalled after `.0` is set.
-    resp: Arc<(OnceLock<SystemTime>, Event, AtomicWaker)>,
+    // `.1` Event wakes blocking wall-clock waiters; `.2` wakes every task
+    // polling a clone. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<SystemTime>, Event, WakerSet)>,
 }
 
 impl StmoHandle {
     pub(crate) fn new() -> Self {
         Self {
-            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
+            resp: Arc::new((OnceLock::new(), Event::new(), WakerSet::new())),
         }
     }
 
     pub(crate) fn set(&self) {
         let _ = self.resp.0.set(host_now());
         self.resp.1.notify(usize::MAX);
-        self.resp.2.wake();
+        self.resp.2.wake_all();
     }
 }
 
@@ -64,7 +64,7 @@ impl ResponseHandle for StmoHandle {
             return Ok(());
         }
         let listener = self.resp.1.listen();
-        if listener.wait_timeout(timeout).is_some() {
+        if self.is_set() || listener.wait_timeout(timeout).is_some() {
             self.get()
         } else {
             Err(StreamMotionError::Timeout)
@@ -83,12 +83,7 @@ impl Future for StmoHandle {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        if self.is_set() {
-            return std::task::Poll::Ready(Ok(()));
-        }
         self.resp.2.register(cx.waker());
-        // Re-check after registering: a set() between the check above and the
-        // register would otherwise wake a waker we hadn't stored yet.
         if self.is_set() {
             std::task::Poll::Ready(self.get())
         } else {
@@ -117,14 +112,15 @@ impl StmoHandle {
     }
 
     #[pyo3(name = "wait_timeout", signature = (timeout_secs = 10.0))]
-    pub fn py_wait_timeout(&self, timeout_secs: f64) -> pyo3::PyResult<()> {
+    pub fn py_wait_timeout(&self, py: pyo3::Python<'_>, timeout_secs: f64) -> pyo3::PyResult<()> {
         let timeout = Duration::from_secs_f64(timeout_secs);
-        ResponseHandle::wait_timeout(self, timeout).map_err(Into::into)
+        py.detach(|| ResponseHandle::wait_timeout(self, timeout))
+            .map_err(Into::into)
     }
 
     #[pyo3(name = "wait")]
-    pub fn py_wait(&self) -> pyo3::PyResult<()> {
-        ResponseHandle::wait(self).map_err(Into::into)
+    pub fn py_wait(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<()> {
+        py.detach(|| ResponseHandle::wait(self)).map_err(Into::into)
     }
 
     #[pyo3(name = "timestamp")]
@@ -181,13 +177,9 @@ mod tests {
     /// Parking executor + watchdog so a lost wakeup fails slow, not forever.
     #[test]
     fn async_await_wakes_on_late_notify() {
-        // set() stamps host_now(), which under snare's shim resolves the
-        // thread's clock slot — the test and the fulfiller must be in a
-        // registered thread chain or snare panics and the wake is lost.
-        snare::register_test();
         let handle = StmoHandle::new();
         let fulfiller = handle.clone();
-        snare::thread::spawn(move || {
+        std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             fulfiller.set();
         });

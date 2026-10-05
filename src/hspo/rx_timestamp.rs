@@ -9,9 +9,8 @@ const CMSG_CAP: usize = 256;
 /// Requests kernel receive timestamps on the socket.
 ///
 /// Linux uses `SO_TIMESTAMPING` (rx software, CLOCK_REALTIME); other unix uses
-/// `SO_TIMESTAMP`. Fails with `Unsupported` on non-unix targets and with
-/// `EBADF` against snare's shim socket — callers fall back to `recv_from` and
-/// stamping at user-space receive.
+/// `SO_TIMESTAMP`. Fails with `Unsupported` on non-unix targets — callers
+/// fall back to `recv_from` and stamping at user-space receive.
 ///
 /// Even after success individual datagrams may carry no timestamp: Linux
 /// turns generation on through a deferred static key, so the first packets

@@ -52,16 +52,11 @@ impl std::fmt::Display for TxError {
 
 /// Turns on transmit-error reporting, returning the descriptor to drain later.
 ///
-/// `None` where the kernel cannot answer: non-Linux targets, or snare's shim
-/// socket, whose `as_raw_fd` is `-1` because no kernel socket backs it. The
-/// returned descriptor stays owned by `socket` and is only valid for its
-/// lifetime.
+/// `None` on non-Linux targets, where the kernel cannot answer. The returned
+/// descriptor stays owned by `socket` and is only valid for its lifetime.
 #[cfg(target_os = "linux")]
-pub(crate) fn enable_tx_error_reporting(socket: &snare::net::UdpSocket) -> Option<i32> {
+pub(crate) fn enable_tx_error_reporting(socket: &std::net::UdpSocket) -> Option<i32> {
     let fd = socket.as_raw_fd();
-    if fd < 0 {
-        return None;
-    }
     let on: libc::c_int = 1;
     let rc = unsafe {
         libc::setsockopt(
@@ -83,7 +78,7 @@ pub(crate) fn enable_tx_error_reporting(socket: &snare::net::UdpSocket) -> Optio
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn enable_tx_error_reporting(_socket: &snare::net::UdpSocket) -> Option<i32> {
+pub(crate) fn enable_tx_error_reporting(_socket: &std::net::UdpSocket) -> Option<i32> {
     None
 }
 

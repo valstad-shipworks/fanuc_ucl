@@ -12,16 +12,7 @@ __all__ = [
     "JointFormat",
     "JointTemplate",
     "JointType",
-    "ThreadConfig",
 ]
-
-class ThreadConfig:
-    """Configuration for thread scheduling and CPU affinity."""
-
-    priority: int
-    cpu_affinity: int | None
-    def __init__(self, priority: int = 0, cpu_affinity: int | None = None) -> None: ...
-    def configure_this_thread(self) -> None: ...
 
 class JointType(Enum):
     """The unit quantity for a joint and how to handle conversions between different formats."""

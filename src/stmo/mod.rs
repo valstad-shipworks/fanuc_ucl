@@ -1,6 +1,8 @@
 #[warn(missing_docs)]
 mod buffer;
 mod driver;
+#[cfg(test)]
+mod fuzz_test;
 pub mod proto;
 pub(crate) mod stmo_handle;
 #[cfg(test)]
@@ -12,7 +14,8 @@ pub use self::{
     driver::{StmoControlLoop, StreamMotionDriver},
     stmo_handle::StmoHandle,
     types::{
-        AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StmoStats, StreamMotionError,
+        AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StmoStats, StmoStatsHandle,
+        StreamMotionError,
     },
 };
 

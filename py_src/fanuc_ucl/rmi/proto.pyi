@@ -1,8 +1,9 @@
 from enum import Enum
 
-from fanuc_ucl._common import JointFormat, JointTemplate
+from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 
 __all__ = [
+    "ApplicationType",
     "Command",
     "CommandResponse",
     "Communication",
@@ -96,6 +97,7 @@ __all__ = [
     "LocalConditionBlock",
     "OffsetRegisterNumbers",
     "OnOff",
+    "PalletizingMode",
     "PortType",
     "Position",
     "ResponsePacket",
@@ -107,6 +109,20 @@ __all__ = [
 class OnOff(Enum):
     ON = 0
     OFF = 1
+
+class ApplicationType(Enum):
+    Handling = 0
+    Arc = 1
+    Spot = 2
+    Dispense = 3
+
+class PalletizingMode(Enum):
+    ZERODN = 0
+    ZEROUP = 1
+    PSPIDN = 2
+    PSPIUP = 3
+    MSPIDN = 4
+    MSPIUP = 5
 
 class FrameData:
     x: float
@@ -198,25 +214,31 @@ class SpeedType(Enum):
     MilliSeconds = 3
 
 class ResponsePacket:
+    @property
     def packet_name(self) -> str: ...
 
 class SendPacket:
+    @property
     def packet_name(self) -> str: ...
 
 class Command(SendPacket): ...
 
 class CommandResponse(ResponsePacket):
+    @property
     def error_id(self) -> int: ...
 
 class Instruction(SendPacket): ...
 
 class InstructionResponse(ResponsePacket):
+    @property
     def error_id(self) -> int: ...
+    @property
     def sequence_id(self) -> int: ...
 
 class Communication(SendPacket): ...
 
 class CommunicationResponse(ResponsePacket):
+    @property
     def error_id(self) -> int: ...
 
 class FrcWriteUToolData(Command):
@@ -388,9 +410,19 @@ class FrcPause(Command):
 class FrcPauseResponse(CommandResponse): ...
 
 class FrcInitialize(Command):
-    group_mask: int
+    group_mask: int | None
+    application: ApplicationType | None
+    equipment: int | None
+    palletizing_mode: PalletizingMode | None
 
-    def __init__(self, group_mask: int | None = None) -> None: ...
+    def __init__(
+        self,
+        group_mask: int | None = None,
+        application: ApplicationType | None = None,
+        equipment: int | None = None,
+        rtsa: bool = False,
+        palletizing_mode: PalletizingMode | None = None,
+    ) -> None: ...
 
 class FrcInitializeResponse(CommandResponse):
     group_mask: int

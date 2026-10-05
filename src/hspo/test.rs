@@ -1,26 +1,9 @@
-use snare::{TesterAction, connect_tester, run_testers};
+#![cfg(unix)]
+
+use snare::{Bytes, Sim, TesterAction, run_testers, udp_tester};
 
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-#[derive(Debug, Clone)]
-struct RawPacket(Vec<u8>);
-impl snare::Packetable for RawPacket {
-    const CAN_BE_FLATTENED: bool = false;
-    const SOCKET_TYPE: snare::SocketType = snare::SocketType::Udp;
-
-    fn encode(&self) -> Vec<u8> {
-        self.0.clone()
-    }
-
-    fn decode(data: &[u8]) -> Option<(Self, usize)> {
-        if data.is_empty() {
-            None
-        } else {
-            Some((Self(data.to_vec()), data.len()))
-        }
-    }
-}
 
 fn encode_packet<T: bincode::Encode>(packet: &T) -> Vec<u8> {
     let config = bincode::config::standard()
@@ -69,8 +52,6 @@ fn make_variables_packet(clock: u32) -> VariablesPacket {
         data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
     }
 }
-
-// ---- Pure unit tests (no broker needed) ----
 
 #[test]
 fn test_packet_type_from_bytes() {
@@ -236,7 +217,6 @@ fn test_stream_clock_reorder_dropped() {
     assert_eq!(sc.accept(13, 1024, 32), Some(1024));
 }
 
-#[cfg(feature = "async")]
 #[test]
 fn test_channel_recv_async() {
     use std::task::{Context, Poll, Wake, Waker};
@@ -484,106 +464,126 @@ fn test_stream_clock_fixed_index_resolves_buffered_packets() {
     }
 }
 
-const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 60000);
+/// The broker is process-global, so tests that start one take turns.
+static BROKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Stateful sender that emits at most `TARGET_PACKET_COUNT` triplets of
-/// (var, tcp, joint) packets and then stops, so the expected packet count
-/// is deterministic regardless of CI timing.
-#[derive(Default)]
-struct CountedSender {
-    sent: usize,
+/// Holds the broker for one test and destroys whatever it started, even when
+/// the test fails, so the next one starts from nothing.
+struct BrokerTurn(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+impl BrokerTurn {
+    fn take() -> Self {
+        let turn = BrokerTurn(BROKER.lock().unwrap_or_else(|e| e.into_inner()));
+        destroy_broker(false);
+        turn
+    }
 }
 
+impl Drop for BrokerTurn {
+    fn drop(&mut self) {
+        destroy_broker(false);
+    }
+}
+
+const BROKER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 60000);
+const CONNECTION_TIMEOUT: Duration = Duration::from_millis(16);
+
+/// How many (var, tcp, joint) triplets a robot sends before it stops, so the
+/// expected packet count is exact.
 const TARGET_PACKET_COUNT: usize = 21;
 
-fn counted_packet_sender(state: &mut CountedSender) -> Option<TesterAction<RawPacket>> {
-    if state.sent >= TARGET_PACKET_COUNT {
-        return None;
-    }
-    let clock = state.sent as u32;
-    state.sent += 1;
-    Some(TesterAction::Multiple(vec![
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_variables_packet(clock))),
-        ),
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_tcp_position_packet(clock))),
-        ),
-        TesterAction::Send(
-            BROKER_ADDR,
-            RawPacket(encode_packet(&make_joint_angles_packet(clock))),
-        ),
-    ]))
+/// A robot at `addr` that sends `TARGET_PACKET_COUNT` triplets of (var, tcp,
+/// joint) packets to the broker, one triplet every 2 ms, then stops.
+fn robot(addr: SocketAddr) -> snare::Tester<Bytes, usize> {
+    udp_tester::<Bytes>(addr)
+        .with_state(0usize)
+        .with_stateful_cyclic_action(Duration::from_millis(2), |sent| {
+            let clock = *sent as u32;
+            *sent += 1;
+            TesterAction::Multiple(vec![
+                TesterAction::SendTo(
+                    BROKER_ADDR,
+                    Bytes(encode_packet(&make_variables_packet(clock))),
+                ),
+                TesterAction::SendTo(
+                    BROKER_ADDR,
+                    Bytes(encode_packet(&make_tcp_position_packet(clock))),
+                ),
+                TesterAction::SendTo(
+                    BROKER_ADDR,
+                    Bytes(encode_packet(&make_joint_angles_packet(clock))),
+                ),
+            ])
+        })
+        .until_state(|sent| *sent >= TARGET_PACKET_COUNT)
 }
 
+/// Lets the broker thread take in everything already sent: virtual time
+/// cannot pass this sleep while the broker still has datagrams to read.
+fn settle() {
+    std::thread::sleep(Duration::from_millis(1));
+}
+
+/// Deterministic: under snare 2.0.0-alpha.1 a plain sim can wake a joining
+/// thread late, at the broker's next poll timeout, which would push the
+/// connection checks past the timeout they measure.
 #[test]
 fn test_all() {
-    snare::register_test();
+    let _turn = BrokerTurn::take();
+    Sim::builder()
+        .deterministic()
+        .strict_sockopts()
+        .stuck_after(Duration::from_secs(30))
+        .build()
+        .run(|| {
+            assert!(
+                HspoReceiver::try_new([0, 0, 0, 1], 128, CONNECTION_TIMEOUT).is_err(),
+                "Receiver initialized before the broker was started."
+            );
 
-    snare::add_ip_addr(BROKER_ADDR.ip());
+            initialize_broker(BROKER_ADDR, &[], &[]).expect("Failed to initialize broker.");
 
-    if HspoReceiver::try_new([0, 0, 0, 1], 128, Duration::from_millis(16)).is_ok() {
-        panic!("Failed to initialize receiver after broker was started.");
-    }
+            assert!(
+                HspoReceiver::try_new([0, 0, 0, 2], 128, CONNECTION_TIMEOUT).is_ok(),
+                "Failed to initialize receiver after broker was started."
+            );
 
-    initialize_broker(BROKER_ADDR, None).expect("Failed to initialize broker.");
+            test_connection();
+            test_drain();
+            test_telemetry();
+            test_connection_times_out_on_the_virtual_clock();
 
-    if HspoReceiver::try_new([0, 0, 0, 2], 128, Duration::from_millis(16)).is_err() {
-        panic!("Failed to initialize receiver after broker was started.");
-    }
-
-    test_connection();
-    test_drain();
-    test_telemetry();
-    test_virtual_clock_connection_timeout();
-
-    destroy_broker(false);
+            destroy_broker(true);
+        });
 }
 
-/// Proves the broker's liveness sweep runs on snare's virtual clock: a frozen
-/// clock keeps the connection alive through real-time waits far past the
-/// connection timeout, and advancing the clock expires it without any real
-/// packet gap. Sleeps are `std::thread::sleep` on purpose — the broker's poll
-/// cadence is real time, only its `snare::time` reads are virtual.
-fn test_virtual_clock_connection_timeout() {
+/// The broker's liveness sweep runs on the sim's clock: a robot that stops
+/// sending stays connected within its timeout and is dropped once that much
+/// virtual time has passed, with no real time spent waiting.
+fn test_connection_times_out_on_the_virtual_clock() {
     let addr = SocketAddr::from(([10, 0, 0, 5], 60000));
-    snare::add_ip_addr(addr.ip());
-
-    let receiver = HspoReceiver::try_new(addr.ip(), 128, Duration::from_millis(16))
+    let receiver = HspoReceiver::try_new(addr.ip(), 128, CONNECTION_TIMEOUT)
         .expect("Failed to initialize receiver.");
 
-    snare::pause_time();
-
-    let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<CountedSender>(
-            Duration::from_millis(2),
-            counted_packet_sender,
-        )
-        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
-
+    let tester = robot(addr);
     run_testers!(tester);
-
+    settle();
     assert!(
         receiver.is_connected(),
         "Receiver did not receive any packets."
     );
 
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(CONNECTION_TIMEOUT / 2);
     assert!(
         receiver.is_connected(),
-        "Connection expired while the virtual clock was paused."
+        "Connection expired inside its timeout."
     );
 
-    snare::advance_time(Duration::from_millis(50));
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(CONNECTION_TIMEOUT * 3);
     assert!(
         !receiver.is_connected(),
-        "Connection survived a virtual-clock jump past the connection timeout."
+        "Connection survived three timeouts without a packet."
     );
-
-    snare::resume_time();
 }
 
 fn test_telemetry() {
@@ -598,51 +598,38 @@ fn test_telemetry() {
     }
 
     let addr = SocketAddr::from(([10, 0, 0, 4], 60000));
-    snare::add_ip_addr(addr.ip());
-
     let received = Arc::new(AtomicUsize::new(0));
     let receiver = HspoReceiver::try_new_with_telemetry(
         addr.ip(),
         128,
-        Duration::from_millis(16),
+        CONNECTION_TIMEOUT,
         CountingSink(received.clone()),
     )
     .expect("Failed to initialize receiver.");
 
-    let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<CountedSender>(
-            Duration::from_millis(2),
-            counted_packet_sender,
-        )
-        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
-
+    let tester = robot(addr);
     run_testers!(tester);
+    settle();
 
     assert!(
         receiver.is_connected(),
         "Receiver did not receive any packets."
     );
-    assert!(
-        received.load(Ordering::Relaxed) > 0,
-        "received hook never fired"
+    assert_eq!(
+        received.load(Ordering::Relaxed),
+        3 * TARGET_PACKET_COUNT,
+        "received hook did not fire once per packet"
     );
 }
 
 fn test_connection() {
     let addr = SocketAddr::from(([10, 0, 0, 2], 60000));
-    snare::add_ip_addr(addr.ip());
-
-    let receiver = HspoReceiver::try_new(addr.ip(), 128, Duration::from_millis(16))
+    let receiver = HspoReceiver::try_new(addr.ip(), 128, CONNECTION_TIMEOUT)
         .expect("Failed to initialize receiver.");
 
-    let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<CountedSender>(
-            Duration::from_millis(2),
-            counted_packet_sender,
-        )
-        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
-
+    let tester = robot(addr);
     run_testers!(tester);
+    settle();
 
     assert!(
         receiver.is_connected(),
@@ -652,25 +639,15 @@ fn test_connection() {
 
 fn test_drain() {
     let addr = SocketAddr::from(([10, 0, 0, 3], 60000));
-    snare::add_ip_addr(addr.ip());
-
-    let receiver = HspoReceiver::try_new(addr.ip(), 128, Duration::from_millis(16))
+    let receiver = HspoReceiver::try_new(addr.ip(), 128, CONNECTION_TIMEOUT)
         .expect("Failed to initialize receiver.");
 
-    // Send exactly TARGET_PACKET_COUNT triplets, terminated by counter not
-    // wall-clock — the previous wall-clock-bounded version flaked on slow
-    // CI runners that didn't fire all 21 cycles within the 40ms window.
-    let mut tester = connect_tester::<RawPacket>(addr)
-        .with_stateful_cyclic_action::<CountedSender>(
-            Duration::from_millis(2),
-            counted_packet_sender,
-        )
-        .until_stateful_condition::<CountedSender>(|state| state.sent >= TARGET_PACKET_COUNT);
-
+    let tester = robot(addr);
     run_testers!(tester);
+    settle();
 
     assert_eq!(
-        drain_expected(&receiver.joint, TARGET_PACKET_COUNT).len(),
+        receiver.joint.recv_all().len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected joint packet count."
     );
@@ -679,7 +656,7 @@ fn test_drain() {
         "Receiver did not drain joint packets."
     );
     assert_eq!(
-        drain_expected(&receiver.tcp, TARGET_PACKET_COUNT).len(),
+        receiver.tcp.recv_all().len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected TCP packet count."
     );
@@ -688,7 +665,7 @@ fn test_drain() {
         "Receiver did not drain TCP packets."
     );
     assert_eq!(
-        drain_expected(&receiver.var, TARGET_PACKET_COUNT).len(),
+        receiver.var.recv_all().len(),
         TARGET_PACKET_COUNT,
         "Receiver did not receive expected variables packet count."
     );
@@ -698,16 +675,349 @@ fn test_drain() {
     );
 }
 
-/// Drains `channel` until `expected` packets have arrived or a real-time
-/// watchdog expires, instead of a fixed settle-sleep after `run_testers!`.
-/// Real clock and real sleep on purpose: the broker delivers on its own
-/// real-time poll cadence.
-fn drain_expected<T>(channel: &HspoChannel<T>, expected: usize) -> Vec<T> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    let mut out = channel.recv_all();
-    while out.len() < expected && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-        out.append(&mut channel.recv_all());
+fn hspo_sim() -> Sim {
+    Sim::builder()
+        .deterministic()
+        .strict_sockopts()
+        .stuck_after(Duration::from_secs(30))
+        .build()
+}
+
+fn joint_datagram(index: u32, clock: u32) -> Vec<u8> {
+    let mut packet = make_joint_angles_packet(clock);
+    packet.index = index;
+    encode_packet(&packet)
+}
+
+/// Kernel receive stamps of the joint packets one receiver's broker decoded,
+/// by packet index.
+#[derive(Clone, Default)]
+struct JointStamps(Arc<parking_lot::Mutex<Vec<(u32, SystemTime)>>>);
+
+impl crate::TelemetrySink<(), HspoRxPacket> for JointStamps {
+    fn sent(&self, _tx: &(), _timestamp: SystemTime) {}
+    fn received(&self, rx: &HspoRxPacket, timestamp: SystemTime) {
+        if let HspoRxPacket::JointAngles(p) = rx {
+            self.0.lock().push((p.index, timestamp));
+        }
     }
-    out
+}
+
+impl JointStamps {
+    fn of(&self, index: u32) -> SystemTime {
+        self.0
+            .lock()
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, t)| *t)
+            .unwrap_or_else(|| panic!("packet {index} was never stamped"))
+    }
+}
+
+/// `a` and `b` within `slack` of each other, either way.
+fn close(a: SystemTime, b: SystemTime, slack: Duration) -> bool {
+    a.duration_since(b)
+        .or_else(|e| Ok::<_, ()>(e.duration()))
+        .unwrap()
+        <= slack
+}
+
+/// The R-30iB's controller clock cycle, in µs.
+const R30IB_CYCLE: u64 = 128_850_307;
+
+/// Sends `count` joint packets from `socket` to the broker every `period`,
+/// stamping each with a controller clock that runs at 1 µs per µs of virtual
+/// time from `clock0`, wrapping at `cycle`. Returns each packet's send time.
+fn emit_joints(
+    socket: &std::net::UdpSocket,
+    count: u32,
+    period: Duration,
+    clock0: u64,
+    cycle: u64,
+) -> Vec<SystemTime> {
+    let t0 = SystemTime::now();
+    (0..count)
+        .map(|index| {
+            let at = SystemTime::now();
+            let elapsed = at.duration_since(t0).unwrap().as_micros() as u64;
+            let clock = ((clock0 + elapsed) % cycle) as u32;
+            socket
+                .send_to(&joint_datagram(index, clock), BROKER_ADDR)
+                .unwrap();
+            std::thread::sleep(period);
+            at
+        })
+        .collect()
+}
+
+#[test]
+fn rx_timestamps_are_the_virtual_arrival_time() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 20], 60000));
+        let stamps = JointStamps::default();
+        let receiver = HspoReceiver::try_new_with_telemetry(
+            robot.ip(),
+            256,
+            Duration::from_millis(100),
+            stamps.clone(),
+        )
+        .unwrap();
+        let latency = Duration::from_millis(3);
+        snare::set_udp_policy(BROKER_ADDR, |p| p.latency = latency);
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        let sent = emit_joints(&socket, 50, Duration::from_millis(2), 1_000, R30IB_CYCLE);
+        std::thread::sleep(Duration::from_millis(5));
+
+        let packets = receiver.joint.recv_all();
+        assert_eq!(packets.len(), 50);
+        for p in &packets {
+            let expected = sent[p.index as usize] + latency;
+            let stamp = stamps.of(p.index);
+            assert!(
+                close(stamp, expected, Duration::from_micros(3)),
+                "packet {} sent at {:?} stamped {:?}, {latency:?} of latency",
+                p.index,
+                sent[p.index as usize],
+                stamp
+            );
+            let at = receiver.joint.received_at(p).unwrap();
+            assert!(
+                close(at, stamp, Duration::from_micros(3)),
+                "packet {} received_at {at:?}, stamped {stamp:?}",
+                p.index
+            );
+        }
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn received_at_survives_a_controller_clock_wrap_on_the_wire() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 21], 60000));
+        let stamps = JointStamps::default();
+        let receiver = HspoReceiver::try_new_with_telemetry(
+            robot.ip(),
+            256,
+            Duration::from_millis(100),
+            stamps.clone(),
+        )
+        .unwrap();
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        // The clock wraps 100 ms in; nothing is read until 240 ms of packets
+        // from both sides of it are buffered.
+        emit_joints(
+            &socket,
+            60,
+            Duration::from_millis(4),
+            R30IB_CYCLE - 100_000,
+            R30IB_CYCLE,
+        );
+        std::thread::sleep(Duration::from_millis(1));
+
+        let packets = receiver.joint.recv_all();
+        assert_eq!(packets.len(), 60);
+        let wraps = packets
+            .windows(2)
+            .filter(|w| w[1].clock < w[0].clock)
+            .count();
+        assert_eq!(wraps, 1, "the stream did not wrap exactly once");
+        for p in &packets {
+            let at = receiver.joint.received_at(p).unwrap();
+            let stamp = stamps.of(p.index);
+            assert!(
+                close(at, stamp, Duration::from_micros(3)),
+                "packet {} (clock {}) resolved to {at:?}, received at {stamp:?}",
+                p.index,
+                p.clock
+            );
+        }
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn a_robot_that_stops_sending_drops_out_alone() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let (ip_a, ip_b) = ([10, 0, 0, 22], [10, 0, 0, 23]);
+        let a = HspoReceiver::try_new(ip_a, 256, CONNECTION_TIMEOUT).unwrap();
+        let b = HspoReceiver::try_new(ip_b, 256, CONNECTION_TIMEOUT).unwrap();
+        let sock_a = std::net::UdpSocket::bind(SocketAddr::from((ip_a, 60000))).unwrap();
+        let sock_b = std::net::UdpSocket::bind(SocketAddr::from((ip_b, 60000))).unwrap();
+
+        // Both robots every 2 ms; b goes quiet after packet 19 and comes back
+        // at 40.
+        let mut seen = Vec::new();
+        for i in 0..60u32 {
+            sock_a
+                .send_to(&joint_datagram(i, i * 2000), BROKER_ADDR)
+                .unwrap();
+            if !(20..40).contains(&i) {
+                sock_b
+                    .send_to(&joint_datagram(i, i * 2000), BROKER_ADDR)
+                    .unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(2));
+            seen.push((i, a.is_connected(), b.is_connected()));
+        }
+
+        for &(i, a_up, b_up) in &seen {
+            assert!(a_up, "robot a dropped out at {i}");
+            // b's last packet before the gap went out at 19; the timeout is 16 ms.
+            let quiet_for = i.saturating_sub(19) * 2;
+            match i {
+                0..=19 => assert!(b_up, "robot b down at {i} while sending"),
+                20..=39 if quiet_for < 16 => {
+                    assert!(b_up, "robot b down {quiet_for} ms into its timeout")
+                }
+                20..=39 if quiet_for > 18 => assert!(
+                    !b_up,
+                    "robot b still up {quiet_for} ms after its last packet"
+                ),
+                40.. => assert!(b_up, "robot b did not come back at {i}"),
+                _ => {}
+            }
+        }
+        assert_eq!(a.joint.recv_all().len(), 60);
+        assert_eq!(b.joint.recv_all().len(), 40);
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn malformed_and_foreign_datagrams_are_ignored() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 24], 60000));
+        let stamps = JointStamps::default();
+        let receiver = HspoReceiver::try_new_with_telemetry(
+            robot.ip(),
+            16,
+            Duration::from_millis(100),
+            stamps.clone(),
+        )
+        .unwrap();
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        let stranger =
+            std::net::UdpSocket::bind(SocketAddr::from(([10, 0, 0, 99], 60000))).unwrap();
+
+        let valid = joint_datagram(3, 3000);
+        let mut unknown_type = valid.clone();
+        unknown_type[12..14].copy_from_slice(&99u16.to_be_bytes());
+        let mut tcp_typed_joint = valid.clone();
+        tcp_typed_joint[12..14].copy_from_slice(&1u16.to_be_bytes());
+        tcp_typed_joint.truncate(40);
+        for junk in [
+            &[][..],
+            &valid[..20],
+            &valid[..valid.len() - 1],
+            &unknown_type[..],
+            &tcp_typed_joint[..],
+            &[0xff; 7][..],
+        ] {
+            socket.send_to(junk, BROKER_ADDR).unwrap();
+        }
+        stranger
+            .send_to(&joint_datagram(1, 1000), BROKER_ADDR)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(receiver.joint.recv_all().is_empty());
+        assert!(receiver.tcp.recv_all().is_empty());
+        assert!(receiver.var.recv_all().is_empty());
+        assert!(
+            stamps.0.lock().is_empty(),
+            "a malformed datagram reached telemetry"
+        );
+
+        socket.send_to(&valid, BROKER_ADDR).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        let got = receiver.joint.recv_all();
+        assert_eq!(got.len(), 1, "the broker stopped after junk");
+        assert_eq!(got[0].index, 3);
+        assert!(!has_broker_errored());
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn reordered_packets_never_reach_a_channel_out_of_order() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 25], 60000));
+        let receiver = HspoReceiver::try_new(robot.ip(), 256, Duration::from_millis(100)).unwrap();
+        snare::set_udp_policy(BROKER_ADDR, |p| p.jitter = Duration::from_millis(6));
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        emit_joints(&socket, 100, Duration::from_millis(2), 0, R30IB_CYCLE);
+        std::thread::sleep(Duration::from_millis(10));
+
+        let indices: Vec<u32> = receiver.joint.recv_all().iter().map(|p| p.index).collect();
+        assert!(
+            indices.windows(2).all(|w| w[0] < w[1]),
+            "a channel delivered out of order: {indices:?}"
+        );
+        assert!(
+            indices.len() < 100,
+            "nothing was reordered, so nothing was tested"
+        );
+        assert!(
+            indices.len() > 50,
+            "only {} of 100 packets survived",
+            indices.len()
+        );
+        assert_eq!(indices.last(), Some(&99));
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn a_full_buffer_keeps_the_newest_packets() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 26], 60000));
+        let receiver = HspoReceiver::try_new(robot.ip(), 4, Duration::from_millis(100)).unwrap();
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        emit_joints(&socket, 10, Duration::from_millis(1), 0, R30IB_CYCLE);
+        let indices: Vec<u32> = receiver.joint.recv_all().iter().map(|p| p.index).collect();
+        assert_eq!(indices, vec![6, 7, 8, 9]);
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn destroying_the_broker_frees_its_port_and_ends_its_receivers() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        let robot = SocketAddr::from(([10, 0, 0, 27], 60000));
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let old = HspoReceiver::try_new(robot.ip(), 16, Duration::from_millis(100)).unwrap();
+        destroy_broker(true);
+        assert!(
+            snare::sockets_bound(BROKER_ADDR).is_empty(),
+            "the destroyed broker's socket is still open"
+        );
+        let t0 = Instant::now();
+        assert!(old.joint.wait_for(Duration::from_secs(1)).is_none());
+        assert!(
+            t0.elapsed() < Duration::from_millis(1),
+            "a receiver of a destroyed broker waited {:?} instead of ending",
+            t0.elapsed()
+        );
+
+        initialize_broker(BROKER_ADDR, &[], &[]).expect("the port was not freed");
+        let new = HspoReceiver::try_new(robot.ip(), 16, Duration::from_millis(100)).unwrap();
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        emit_joints(&socket, 3, Duration::from_millis(1), 0, R30IB_CYCLE);
+        assert_eq!(new.joint.recv_all().len(), 3);
+        assert!(old.joint.recv_all().is_empty());
+        destroy_broker(true);
+    });
 }

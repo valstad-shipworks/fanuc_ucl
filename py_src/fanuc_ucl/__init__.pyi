@@ -1,14 +1,13 @@
 from enum import Enum
 
-from . import hspo, rmi, stmo
-from ._common import JointFormat, JointTemplate, JointType, ThreadConfig
+from .....fanuc_ucl.py_src.fanuc_ucl import hspo, rmi, stmo
+from ._common import JointFormat, JointTemplate, JointType
 
 __all__ = [
     "JointFormat",
     "JointTemplate",
     "JointType",
     "LogLevel",
-    "ThreadConfig",
     "hspo",
     "rmi",
     "set_log_level",

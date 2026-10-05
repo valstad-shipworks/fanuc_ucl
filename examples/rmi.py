@@ -1,9 +1,9 @@
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, rmi
+from fanuc_ucl import JointFormat, JointTemplate, rmi
 
 
 def main():
     driver = rmi.RmiDriver(rmi.RmiDriverConfig("10.0.0.1"))
-    driver.connect(ThreadConfig(80, None))
+    driver.connect()
 
     driver.send_full_reset().wait_timeout(20.0)
     driver.send(rmi.FrcInitialize()).wait_timeout(20.0)

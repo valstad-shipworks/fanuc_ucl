@@ -9,6 +9,7 @@ JointData = __hmi.JointData
 FrameData = __hmi.FrameData
 PositionData = __hmi.PositionData
 AlarmSeverity = __hmi.AlarmSeverity
+TimeData = __hmi.TimeData
 AlarmData = __hmi.AlarmData
 AlarmSource = __hmi.AlarmSource
 ProgramStatus = __hmi.ProgramStatus

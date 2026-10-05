@@ -1,18 +1,21 @@
 //! Integration tests against an emulated Stream Motion controller.
 //!
-//! The emulator is a real in-process socket on snare's virtual network rather
-//! than a tester-framework handler, so it can hold the state a controller
-//! actually has: a command queue with a drain threshold, and a cycle clock.
-//! It enforces the four rules the hardware faults on — the queue may not
-//! overflow, it may not run dry once the robot is moving, no sequence number
-//! may arrive twice, and every announced cycle must be answered. Anything the
-//! driver does that would trip an e-stop shows up here as a recorded fault.
+//! The emulator is a plain UDP socket inside the sim rather than a tester
+//! handler, so it can hold the state a controller actually has: a command
+//! queue with a drain threshold, and a cycle clock. It enforces the four rules
+//! the hardware faults on — the queue may not overflow, it may not run dry
+//! once the robot is moving, no sequence number may arrive twice, and every
+//! announced cycle must be answered. Anything the driver does that would trip
+//! an e-stop shows up here as a recorded fault.
+#![cfg(unix)]
 
 use std::collections::{HashSet, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use snare::Sim;
 
 use crate::joints::{JointFormat, JointTemplate};
 use crate::stmo::buffer::CAPACITY;
@@ -37,6 +40,8 @@ struct ControllerCfg {
     drop_from: u32,
     /// How many consecutive statuses to drop from `drop_from`.
     drop_count: u32,
+    /// Sequence of the first status after a start packet.
+    first_seq: u32,
 }
 
 impl ControllerCfg {
@@ -45,12 +50,18 @@ impl ControllerCfg {
             drain_threshold,
             drop_from: u32::MAX,
             drop_count: 0,
+            first_seq: 1,
         }
     }
 
     fn dropping(mut self, from: u32, count: u32) -> Self {
         self.drop_from = from;
         self.drop_count = count;
+        self
+    }
+
+    fn starting_at(mut self, first_seq: u32) -> Self {
+        self.first_seq = first_seq;
         self
     }
 }
@@ -69,10 +80,14 @@ struct Report {
     dropped_seqs: Vec<u32>,
     /// The driver's source address, so tests can apply link policy to it.
     driver_addr: Option<SocketAddr>,
+    stops_received: u32,
+    /// While set the controller stops cycling: it neither executes nor
+    /// announces anything, as a controller held in a fault does.
+    paused: bool,
 }
 
 struct Controller {
-    socket: snare::net::UdpSocket,
+    socket: std::net::UdpSocket,
     cfg: ControllerCfg,
     report: Arc<Mutex<Report>>,
     peer: Option<SocketAddr>,
@@ -105,7 +120,7 @@ impl Controller {
         self.queue.clear();
         self.draining = false;
         self.seen.clear();
-        self.seq = 0;
+        self.seq = self.cfg.first_seq.wrapping_sub(1);
     }
 
     fn handle(&mut self, data: &[u8], src: SocketAddr) {
@@ -124,6 +139,7 @@ impl Controller {
             TxPackets::Stop(_) => {
                 self.started = false;
                 self.reset_stream();
+                self.report.lock().unwrap().stops_received += 1;
             }
             TxPackets::VersionNumberRequest(_) => self.send(
                 RxPackets::VersionNumberResponse(VersionNumberResponsePacket {
@@ -166,7 +182,7 @@ impl Controller {
     /// One interpolation cycle: execute a queued command, then announce it.
     fn cycle(&mut self) {
         let Some(peer) = self.peer else { return };
-        if !self.started {
+        if !self.started || self.report.lock().unwrap().paused {
             return;
         }
         if self.draining && self.queue.pop_front().is_none() {
@@ -176,8 +192,8 @@ impl Controller {
             self.fault(format!("queue ran dry at cycle {}", self.seq));
         }
 
-        self.seq += 1;
-        if self.seq >= self.cfg.drop_from && self.seq < self.cfg.drop_from + self.cfg.drop_count {
+        self.seq = self.seq.wrapping_add(1);
+        if self.seq.wrapping_sub(self.cfg.drop_from) < self.cfg.drop_count {
             let mut r = self.report.lock().unwrap();
             r.statuses_dropped += 1;
             r.dropped_seqs.push(self.seq);
@@ -189,17 +205,14 @@ impl Controller {
     }
 }
 
+/// Runs the controller until `stop`: reads whatever arrives until the next
+/// cycle is due, then runs that cycle.
 fn run_controller(
-    ip: IpAddr,
+    socket: UdpSocket,
     cfg: ControllerCfg,
     report: Arc<Mutex<Report>>,
-    ready: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) {
-    let socket = snare::net::UdpSocket::bind(SocketAddr::new(ip, STMO_PORT)).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    ready.store(true, Ordering::SeqCst);
-
     let mut c = Controller {
         socket,
         cfg,
@@ -216,51 +229,50 @@ fn run_controller(
     let mut next_cycle = Instant::now() + CYCLE;
 
     while !stop.load(Ordering::Relaxed) {
-        loop {
-            match c.socket.recv_from(&mut buf) {
-                Ok((n, src)) if n > 0 => {
-                    let data = buf[..n].to_vec();
-                    c.handle(&data, src);
-                }
-                Ok(_) => break,
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
-            }
-        }
-        if Instant::now() >= next_cycle {
-            next_cycle = Instant::now() + CYCLE;
+        let now = Instant::now();
+        if now >= next_cycle {
+            next_cycle += CYCLE;
             c.cycle();
+            continue;
         }
-        std::thread::sleep(Duration::from_micros(200));
+        c.socket.set_read_timeout(Some(next_cycle - now)).unwrap();
+        if let Ok((n, src)) = c.socket.recv_from(&mut buf) {
+            let data = buf[..n].to_vec();
+            c.handle(&data, src);
+        }
     }
 }
 
+/// Runs `client` beside the emulator in a deterministic sim: under snare
+/// 2.0.0-alpha.1 a plain sim can skip a sleeper's deadline while other sims in
+/// the process are polling, which here would show up as a skipped cycle.
 fn run_stmo_test<F, R>(ip: Ipv4Addr, cfg: ControllerCfg, client: F) -> (Report, R)
 where
     F: FnOnce(IpAddr, &Arc<Mutex<Report>>) -> R,
 {
-    snare::register_test();
-    let addr = IpAddr::V4(ip);
-    snare::add_ip_addr(addr);
+    let sim = Sim::builder()
+        .deterministic()
+        .strict_sockopts()
+        .stuck_after(Duration::from_secs(30))
+        .build();
+    sim.run(|| {
+        let addr = IpAddr::V4(ip);
+        let report = Arc::new(Mutex::new(Report::default()));
+        let stop = Arc::new(AtomicBool::new(false));
 
-    let report = Arc::new(Mutex::new(Report::default()));
-    let ready = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
+        let socket = UdpSocket::bind(SocketAddr::new(addr, STMO_PORT)).unwrap();
+        let handle = {
+            let (report, stop) = (report.clone(), stop.clone());
+            std::thread::spawn(move || run_controller(socket, cfg, report, stop))
+        };
 
-    let handle = {
-        let (report, ready, stop) = (report.clone(), ready.clone(), stop.clone());
-        snare::thread::spawn(move || run_controller(addr, cfg, report, ready, stop))
-    };
-    while !ready.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        let result = client(addr, &report);
 
-    let result = client(addr, &report);
-
-    stop.store(true, Ordering::Relaxed);
-    handle.join().unwrap();
-    let taken = std::mem::take(&mut *report.lock().unwrap());
-    (taken, result)
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        let taken = std::mem::take(&mut *report.lock().unwrap());
+        (taken, result)
+    })
 }
 
 fn trajectory(points: usize) -> Vec<MotionCommandPacket> {
@@ -279,30 +291,21 @@ fn trajectory(points: usize) -> Vec<MotionCommandPacket> {
 
 fn connected_driver(addr: IpAddr, buffer_size_before_drain: u8) -> StreamMotionDriver {
     let mut driver = StreamMotionDriver::new(addr, buffer_size_before_drain, false);
-    driver.connect(None).unwrap();
+    driver.connect(&[], &[]).unwrap();
     driver.start(2.0).unwrap();
     driver
 }
 
-/// Generous ceiling on how long a test waits for the emulator to work through
-/// its cycles. Only reached if something has genuinely stalled — a loaded CI
-/// runner is slower per cycle but still makes progress.
-const CYCLE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Waits for the emulator to announce `cycles` more cycles, draining received
 /// statuses meanwhile so the consumer side is exercised too. Returns how many
 /// statuses reached the consumer.
-///
-/// Progress is measured in controller cycles rather than wall time: a loaded
-/// host completes far fewer per second, and every assertion here is about what
-/// happened over a number of cycles, not over an interval.
 fn drain_for_cycles(
     driver: &mut StreamMotionDriver,
     report: &Arc<Mutex<Report>>,
     cycles: u32,
 ) -> usize {
     let target = report.lock().unwrap().statuses_sent + cycles;
-    let deadline = Instant::now() + CYCLE_WAIT_TIMEOUT;
+    let deadline = Instant::now() + CYCLE * (2 * cycles + 10);
     let mut seen = 0;
     loop {
         seen += driver.pull_states().len();
@@ -375,17 +378,10 @@ fn a_shallow_drain_threshold_is_honoured() {
         |addr, report| stream_trajectory(addr, 2, 150, report),
     );
 
-    // A two-deep buffer is only two cycles of runway, so a host stall that long
-    // starves the robot no matter what the driver does — real hardware would
-    // fault too. Only the faults the driver is responsible for are asserted on.
-    let driver_faults: Vec<&String> = report
-        .faults
-        .iter()
-        .filter(|f| !f.contains("ran dry"))
-        .collect();
     assert!(
-        driver_faults.is_empty(),
-        "controller faulted on the driver's account: {driver_faults:?}"
+        report.faults.is_empty(),
+        "controller faulted: {:?}",
+        report.faults
     );
     // The robot starts moving after two commands rather than the default five,
     // and the driver keeps feeding it from that much shallower a buffer.
@@ -535,4 +531,381 @@ fn block_transmit(addr: SocketAddr, blocked: bool) {
     snare::set_udp_policy(addr, |p| {
         p.send_queue_depth = if blocked { Some(0) } else { None }
     });
+}
+
+fn controller_addr(addr: IpAddr) -> SocketAddr {
+    SocketAddr::new(addr, STMO_PORT)
+}
+
+/// The driver's own socket, found by the controller it is connected to.
+fn driver_socket(addr: IpAddr) -> snare::SocketEntry {
+    snare::socket_table()
+        .into_iter()
+        .find(|s| s.kind == snare::SocketKind::Udp && s.peer == Some(controller_addr(addr)))
+        .expect("the driver has no socket connected to the controller")
+}
+
+/// The address the driver's socket is bound at: link policy there shapes
+/// only what arrives at the driver, the status stream.
+fn status_path(addr: IpAddr) -> SocketAddr {
+    driver_socket(addr)
+        .local
+        .expect("the driver's socket is unbound")
+}
+
+fn assert_no_faults(report: &Report) {
+    assert!(
+        report.faults.is_empty(),
+        "controller faulted: {:?}",
+        report.faults
+    );
+}
+
+#[test]
+fn random_status_loss_is_counted_exactly() {
+    let (report, (stats, lost_on_wire)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 6),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver.command_motion(trajectory(600)).unwrap();
+            drain_for_cycles(&mut driver, report, 10);
+            let path = status_path(addr);
+            snare::set_udp_policy(path, |p| p.loss_rate = 0.15);
+            drain_for_cycles(&mut driver, report, 150);
+            snare::set_udp_policy(path, |p| p.loss_rate = 0.0);
+            drain_for_cycles(&mut driver, report, 5);
+            let lost = driver_socket(addr).wire_lost;
+            let stats = driver.stats();
+            driver.disconnect();
+            (stats, lost)
+        },
+    );
+
+    assert!(lost_on_wire >= 10, "only {lost_on_wire} statuses were lost");
+    assert_eq!(stats.lost_statuses, lost_on_wire, "{stats}");
+    assert_no_faults(&report);
+    assert_eq!(stats.underruns, 0, "{stats}");
+    assert!(stats.catchup_commands > 0, "{stats}");
+}
+
+#[test]
+fn duplicated_statuses_never_repeat_a_sequence() {
+    let (report, stats) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 7),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver.command_motion(trajectory(400)).unwrap();
+            drain_for_cycles(&mut driver, report, 10);
+            // Each copy draws its own jitter, so a duplicate usually lands in
+            // a later read than its original, but never after the next cycle.
+            snare::set_udp_policy(status_path(addr), |p| {
+                p.duplicate_rate = 0.5;
+                p.jitter = Duration::from_millis(3);
+            });
+            drain_for_cycles(&mut driver, report, 120);
+            let stats = driver.stats();
+            driver.disconnect();
+            stats
+        },
+    );
+
+    assert_no_faults(&report);
+    assert!(
+        stats.stale_statuses > 0,
+        "no duplicate reached the driver: {stats}"
+    );
+    assert_eq!(stats.lost_statuses, 0, "{stats}");
+    assert_eq!(stats.missed_status_cycles, 0, "{stats}");
+    assert_eq!(stats.underruns, 0, "{stats}");
+}
+
+#[test]
+fn reordered_statuses_are_never_answered_twice() {
+    let (report, stats) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 8),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver.command_motion(trajectory(400)).unwrap();
+            drain_for_cycles(&mut driver, report, 10);
+            // Up to 14 ms of jitter against an 8 ms cycle: statuses overtake
+            // each other.
+            snare::set_udp_policy(status_path(addr), |p| p.jitter = Duration::from_millis(14));
+            drain_for_cycles(&mut driver, report, 150);
+            let stats = driver.stats();
+            driver.disconnect();
+            stats
+        },
+    );
+
+    assert_no_faults(&report);
+    assert!(
+        stats.stale_statuses > 0,
+        "no status arrived out of order: {stats}"
+    );
+    assert!(stats.catchup_commands > 0, "{stats}");
+    assert_eq!(stats.underruns, 0, "{stats}");
+}
+
+/// Streams with `latency` and `jitter` on both directions of the link.
+fn stream_over_a_slow_link(
+    ip: Ipv4Addr,
+    latency: Duration,
+    jitter: Duration,
+) -> (Report, StmoStats) {
+    run_stmo_test(ip, ControllerCfg::new(5), move |addr, report| {
+        let mut driver = connected_driver(addr, 5);
+        driver.command_motion(trajectory(500)).unwrap();
+        drain_for_cycles(&mut driver, report, 10);
+        for path in [status_path(addr), controller_addr(addr)] {
+            snare::set_udp_policy(path, |p| {
+                p.latency = latency;
+                p.jitter = jitter;
+            });
+        }
+        drain_for_cycles(&mut driver, report, 150);
+        let stats = driver.stats();
+        driver.disconnect();
+        stats
+    })
+}
+
+fn assert_every_cycle_answered_once(report: &Report, stats: &StmoStats) {
+    assert_no_faults(report);
+    assert_eq!(stats.lost_statuses, 0, "{stats}");
+    assert_eq!(stats.missed_status_cycles, 0, "{stats}");
+    assert_eq!(stats.catchup_commands, 0, "{stats}");
+    assert_eq!(stats.stale_statuses, 0, "{stats}");
+    assert_eq!(stats.underruns, 0, "{stats}");
+}
+
+#[test]
+fn latency_and_jitter_inside_a_cycle_keep_every_cycle_answered() {
+    let (report, stats) = stream_over_a_slow_link(
+        Ipv4Addr::new(10, 0, 5, 9),
+        Duration::from_millis(3),
+        Duration::from_millis(1),
+    );
+    assert_every_cycle_answered_once(&report, &stats);
+    assert!(
+        (7_700..=8_300).contains(&stats.cycle_us),
+        "measured a {} µs cycle through 1 ms of jitter",
+        stats.cycle_us
+    );
+}
+
+#[test]
+fn a_round_trip_longer_than_a_cycle_is_absorbed_by_the_buffer() {
+    let (report, stats) = stream_over_a_slow_link(
+        Ipv4Addr::new(10, 0, 5, 10),
+        Duration::from_millis(10),
+        Duration::from_millis(2),
+    );
+    assert_every_cycle_answered_once(&report, &stats);
+}
+
+#[test]
+fn a_stream_across_the_u32_sequence_wrap_never_faults() {
+    let first = u32::MAX - 40;
+    let (report, (stats, _)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 14),
+        ControllerCfg::new(5)
+            .starting_at(first)
+            .dropping(u32::MAX - 1, 3),
+        |addr, report| stream_trajectory(addr, 5, 120, report),
+    );
+
+    assert_no_faults(&report);
+    assert_eq!(report.dropped_seqs, vec![u32::MAX - 1, u32::MAX, 0]);
+    assert_eq!(stats.lost_statuses, 3, "{stats}");
+    assert_eq!(stats.stale_statuses, 0, "{stats}");
+    for seq in &report.dropped_seqs {
+        assert!(
+            report.commanded_seqs.contains(seq),
+            "sequence {seq} lost across the wrap was not refilled"
+        );
+    }
+    assert!(
+        report.commanded_seqs.iter().any(|&s| s > first) && report.commanded_seqs.contains(&5),
+        "the stream did not run through the wrap: {:?}",
+        report.commanded_seqs
+    );
+}
+
+#[test]
+fn a_gap_longer_than_sixteen_cycles_is_still_counted() {
+    let (report, (stats, _)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 11),
+        ControllerCfg::new(5).dropping(20, 20),
+        |addr, report| stream_trajectory(addr, 5, 80, report),
+    );
+
+    assert_eq!(report.statuses_dropped, 20);
+    assert!(
+        report.faults.iter().any(|f| f.contains("ran dry")),
+        "twenty unanswered cycles should have starved the controller"
+    );
+    assert_eq!(stats.lost_statuses, 20, "{stats}");
+    assert!(
+        stats.underruns > 0,
+        "the controller ran dry but the driver counted no underrun: {stats}"
+    );
+}
+
+#[test]
+fn a_controller_that_goes_silent_holds_the_stream_until_it_returns() {
+    let (report, (silence, waited, done, stats)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 12),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            let batch = driver.command_motion(trajectory(40)).unwrap();
+            drain_for_cycles(&mut driver, report, 10);
+
+            report.lock().unwrap().paused = true;
+            let t0 = Instant::now();
+            let silence = driver
+                .recv_status_timeout(Duration::from_millis(50))
+                .unwrap();
+            let waited = t0.elapsed();
+            assert!(!batch.is_set(), "a batch completed with nobody answering");
+            assert!(driver.is_connected());
+            assert!(!driver.has_connection_errored());
+
+            report.lock().unwrap().paused = false;
+            let done = batch.wait_timeout(Duration::from_secs(2)).is_ok();
+            let stats = driver.stats();
+            driver.disconnect();
+            (silence, waited, done, stats)
+        },
+    );
+
+    assert!(
+        silence.is_none(),
+        "a status arrived from a silent controller"
+    );
+    assert!(
+        waited >= Duration::from_millis(50) && waited < Duration::from_millis(51),
+        "a 50 ms status wait returned after {waited:?}"
+    );
+    assert!(done, "the stream did not resume once the controller did");
+    assert_no_faults(&report);
+    assert_eq!(stats.lost_statuses, 0, "{stats}");
+    assert_eq!(stats.missed_status_cycles, 0, "{stats}");
+    assert_eq!(stats.underruns, 0, "{stats}");
+}
+
+#[test]
+fn an_icmp_port_unreachable_mid_stream_is_survived() {
+    let (report, (landed, cleared, stats, errored, seen)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 13),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver.command_motion(trajectory(400)).unwrap();
+            drain_for_cycles(&mut driver, report, 20);
+            let socket = driver_socket(addr);
+            snare::inject_icmp_port_unreachable(socket.local.unwrap(), controller_addr(addr));
+            let landed = snare::socket_entry(socket.id).unwrap().pending_error;
+            let seen = drain_for_cycles(&mut driver, report, 60);
+            let cleared = snare::socket_entry(socket.id).unwrap().pending_error;
+            let stats = driver.stats();
+            let errored = driver.has_connection_errored();
+            driver.disconnect();
+            (landed, cleared, stats, errored, seen)
+        },
+    );
+
+    assert_eq!(
+        landed,
+        Some(libc::ECONNREFUSED),
+        "the ICMP error never reached the socket"
+    );
+    assert_eq!(cleared, None, "the driver never consumed the error");
+    assert!(!errored, "one unreachable marked the connection errored");
+    assert!(
+        seen > 30,
+        "only {seen} statuses reached the consumer afterwards"
+    );
+    assert_no_faults(&report);
+    assert!(stats.send_failures <= 1, "{stats}");
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        stats.tx_errors, 1,
+        "IP_RECVERR did not report the unreachable: {stats}"
+    );
+}
+
+#[test]
+fn a_transmit_blocked_past_the_runway_marks_the_connection_errored() {
+    let (_, (before, stats, errored)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 14),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver.command_motion(trajectory(600)).unwrap();
+            drain_for_cycles(&mut driver, report, 20);
+            let before = driver.has_connection_errored();
+            let sut = report.lock().unwrap().driver_addr.unwrap();
+            block_transmit(sut, true);
+            drain_for_cycles(&mut driver, report, 120);
+            block_transmit(sut, false);
+            let stats = driver.stats();
+            let errored = driver.has_connection_errored();
+            driver.disconnect();
+            (before, stats, errored)
+        },
+    );
+
+    assert!(!before);
+    assert!(
+        stats.send_failures >= 4,
+        "a second of blocked transmit failed only {} sends",
+        stats.send_failures
+    );
+    assert!(
+        errored,
+        "sends failed for a second without the connection erroring"
+    );
+}
+
+#[test]
+fn reconnecting_starts_a_fresh_stream_on_a_fresh_socket() {
+    let (report, (first_closed, stops_after_first, second_done)) = run_stmo_test(
+        Ipv4Addr::new(10, 0, 5, 15),
+        ControllerCfg::new(5),
+        |addr, report| {
+            let mut driver = connected_driver(addr, 5);
+            driver
+                .command_motion(trajectory(30))
+                .unwrap()
+                .wait_timeout(Duration::from_secs(2))
+                .unwrap();
+            let first = driver_socket(addr).id;
+            driver.disconnect();
+            assert!(!driver.is_connected());
+            let first_closed = snare::socket_entry(first).unwrap().closed_at.is_some();
+            let stops_after_first = report.lock().unwrap().stops_received;
+
+            driver.connect(&[], &[]).unwrap();
+            driver.start(2.0).unwrap();
+            assert_ne!(driver_socket(addr).id, first);
+            let second_done = driver
+                .command_motion(trajectory(30))
+                .unwrap()
+                .wait_timeout(Duration::from_secs(2))
+                .is_ok();
+            drain_for_cycles(&mut driver, report, 5);
+            driver.disconnect();
+            (first_closed, stops_after_first, second_done)
+        },
+    );
+
+    assert!(first_closed, "disconnect left the first socket open");
+    assert_eq!(stops_after_first, 1, "disconnect did not stop the stream");
+    assert!(second_done, "the second connection never streamed");
+    assert_eq!(report.stops_received, 2);
+    assert_no_faults(&report);
 }

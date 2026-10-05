@@ -17,14 +17,14 @@ Has been tested with Linux(x86_64 and arm64), Windows(x86_64) and MacOS(arm64) a
 Add the following to your Cargo.toml:
 ```toml
 [dependencies]
-fanuc_ucl = "1"
+fanuc_ucl = "2"
 ```
 or run `cargo add fanuc_ucl` in your project directory.
 
 ### Python
 The library is available on PyPI as `fanuc_ucl`, so you can install it using pip:
 ```bash
-pip install fanuc_ucl==1
+pip install fanuc_ucl==2
 ```
 
 ## Usage
@@ -97,14 +97,14 @@ refills, send retries, and underruns.
 use std::time::Duration;
 
 use fanuc_ucl::{
-    ThreadConfig,
+    ThreadOption,
     joints::{JointFormat, JointTemplate},
     stmo::{StreamMotionDriver, proto::MotionCommandPacket},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.connect(&[ThreadOption::RtPriority(80)], &[])?;
     driver.start(2.0)?;
 
     let limits = driver.fetch_movement_limits(0)?;
@@ -136,12 +136,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```python
 import math
 
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
+from fanuc_ucl import JointFormat, JointTemplate, stmo
 
 
 def main():
     driver = stmo.StreamMotionDriver("10.0.0.1", 5)
-    driver.connect(ThreadConfig(80, None))
+    driver.connect(thread=[("rt_priority", 80)])
     driver.start(2.0)
 
     limits = driver.fetch_movement_limits(0)
@@ -178,14 +178,14 @@ as it arrives — useful for sensor-based feedback or adaptive trajectories.
 use std::time::Duration;
 
 use fanuc_ucl::{
-    ThreadConfig,
+    ThreadOption,
     joints::{JointFormat, JointTemplate},
     stmo::{StreamMotionDriver, proto::MotionCommandPacket},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = StreamMotionDriver::new([10, 0, 0, 1], 5, false);
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.connect(&[ThreadOption::RtPriority(80)], &[])?;
     driver.start(2.0)?;
 
     {
@@ -210,12 +210,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ```python
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
+from fanuc_ucl import JointFormat, JointTemplate, stmo
 
 
 def main():
     driver = stmo.StreamMotionDriver("10.0.0.1", 5)
-    driver.connect(ThreadConfig(80, None))
+    driver.connect(thread=[("rt_priority", 80)])
     driver.start(2.0)
 
     with driver.control_loop() as ctl:
@@ -245,7 +245,7 @@ use fanuc_ucl::{rmi::{RmiDriver, RmiDriverConfig, proto}, joints::{JointFormat, 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = RmiDriver::new(RmiDriverConfig::default_with_ip([10, 0, 0, 1]));
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.connect(&[], &[])?;
 
     driver.send_full_reset()?.wait_timeout(Duration::from_secs(15))?;
     driver.send(proto::FrcInitialize::default())?.wait_timeout(Duration::from_secs(15))?;
@@ -287,12 +287,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ```python
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, rmi
+from fanuc_ucl import JointFormat, JointTemplate, rmi
 
 
 def main():
     driver = rmi.RmiDriver(rmi.RmiDriverConfig("10.0.0.1"))
-    driver.connect(ThreadConfig(80, None))
+    driver.connect()
 
     driver.send_full_reset().wait_timeout(20.0)
     driver.send(rmi.FrcInitialize()).wait_timeout(20.0)
@@ -337,12 +337,13 @@ def main():
 ```rust
 use std::{net::SocketAddr, thread::sleep, time::Duration};
 
-use fanuc_ucl::{ThreadConfig, hspo::{HspoReceiver, destroy_broker, initialize_broker}, joints::{JointFormat, JointTemplate}};
+use fanuc_ucl::{ThreadOption, hspo::{HspoReceiver, destroy_broker, initialize_broker}, joints::{JointFormat, JointTemplate}};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     initialize_broker(
         SocketAddr::from(([0, 0, 0, 0], 15000)),
-        Some(ThreadConfig::new(55, None)),
+        &[ThreadOption::RtPriority(55)],
+        &[],
     ).expect("Broker couldnt be started");
 
     let receiver = HspoReceiver::try_new([10, 0, 0, 1], 128, Duration::from_millis(10))?;
@@ -374,11 +375,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ```python
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, hspo
+from fanuc_ucl import JointFormat, JointTemplate, hspo
 
 
 def main():
-    hspo.initialize_broker("0.0.0.0:15000", ThreadConfig(55, None))
+    hspo.initialize_broker("0.0.0.0:15000", thread=[("rt_priority", 55)])
 
     receiver = hspo.HspoReceiver("10.0.0.1", 128)
 
@@ -409,7 +410,7 @@ use fanuc_ucl::hmi::{DigitalOutput, GroupInput, GroupOutput, HmiDriver, SysVarAr
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = HmiDriver::new([10, 0, 0, 1]);
-    driver.connect(Some(Duration::from_secs(1)), None)?;
+    driver.connect(Some(Duration::from_secs(1)), &[], &[])?;
 
     if driver.read::<DigitalOutput>(1)?.wait_timeout(Duration::from_millis(10))? {
         println!("DO1 is on");
@@ -477,6 +478,51 @@ def main():
 
     # ASG has ALOT of functionality, so we won't cover it all here.
     # When the Rustdocs are finished it will delve more into it.
+```
+
+## Real-time tuning
+
+Every driver's `connect` (and `hspo::initialize_broker`) takes two lists of
+[fast-talker](https://docs.rs/fast-talker) options, re-exported as
+`fanuc_ucl::ThreadOption` and `fanuc_ucl::SocketOption`: `thread` is applied
+by the driver's I/O thread to itself before it starts, and `socket` to the
+driver's socket. Both default to empty, meaning no tuning. An option a driver
+does not accept fails `connect` before anything is spawned, and one that is
+attempted and fails (`RtPriority` without `CAP_SYS_NICE`, say) fails `connect`
+too. Options for another platform, or that this platform cannot do, are
+skipped with a warning, so one configuration works on Linux, macOS and
+Windows.
+
+| Driver | Thread options | Socket options |
+|---|---|---|
+| stmo | all | all (UDP, sent and received every cycle; applied right after bind) |
+| hspo | all except `MacOsTimeConstraint` | `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`, `LinuxBusyPollBudget`, `WinCpuAffinity` (applied right after bind) |
+| rmi | `CpuAffinity`, `PrefaultStack`, `LinuxNice`, `UnixScheduler` (`Other`/`Batch`/`Idle`), `WinPriority` (not `TimeCritical`), `WinDisablePowerThrottling`, `MacOsQos` | `Dscp`, `LinuxPriority` (applied after connect) |
+| hmi | same as rmi | same as rmi |
+
+Why the rest are refused:
+
+- `MacOsTimeConstraint` reserves a computation slice per period; only stmo's
+  loop has a period.
+- hspo's socket only receives, so `SendBuffer`, `DontFragment`, `Dscp` and
+  `LinuxPriority`, which shape outgoing traffic, do nothing for it.
+- rmi and hmi threads block on TCP round-trips: a real-time class
+  (`RtPriority`, `UnixScheduler` `Fifo`/`RoundRobin`, `WinPriority(TimeCritical)`,
+  `WinMmcss`, `MacOsTimeConstraint`) there only risks starving the rest of the
+  system.
+- Their TCP sockets are tuned after `connect`, too late for `BindDevice`;
+  setting buffer sizes would turn off TCP autotuning; busy polling burns a
+  core on a slow loop; `DontFragment` and `WinCpuAffinity` do nothing useful
+  for this traffic.
+
+Process-wide settings (memory locking, `cpu_dma_latency`, the Windows
+priority class, timer resolution and working set) belong to the application,
+which applies them once with `fast_talker::options::ProcessOption::apply_all`.
+
+From Python, the lists take any shape fast-talker accepts:
+
+```python
+driver.connect(thread=[("cpu_affinity", [3]), ("rt_priority", 80)], socket={"dscp": 46})
 ```
 
 ## Roadmap

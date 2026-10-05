@@ -1,8 +1,8 @@
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, hspo
+from fanuc_ucl import JointFormat, JointTemplate, hspo
 
 
 def main():
-    hspo.initialize_broker("0.0.0.0:15000", ThreadConfig(55, None))
+    hspo.initialize_broker("0.0.0.0:15000", thread=[("rt_priority", 55)])
 
     receiver = hspo.HspoReceiver("10.0.0.1", 128)
 

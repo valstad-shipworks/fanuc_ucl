@@ -23,8 +23,8 @@ const MIN_CYCLE: Duration = Duration::from_millis(1);
 const MAX_CYCLE: Duration = Duration::from_millis(100);
 /// Inverse weight of each new interval in the cycle estimate.
 const CYCLE_ALPHA: u64 = 8;
-/// Sequence deltas beyond this are treated as a restart or a reorder rather
-/// than a run of lost cycles, and contribute no rate sample.
+/// Sequence deltas beyond this contribute no rate sample: the interval spans
+/// too many cycles to say anything about one of them.
 const MAX_MEASURABLE_DELTA: u32 = 16;
 
 /// What to do with an incoming status, given what the controller already has.
@@ -51,7 +51,9 @@ pub struct ControllerBuffer {
     cycle: Duration,
     last_status: Option<(u32, Instant)>,
     last_commanded: Option<u32>,
-    stale: u32,
+    stale: BackwardsRun,
+    /// Statuses not ahead of the newest one seen.
+    behind: BackwardsRun,
     underruns: u64,
     lost_statuses: u64,
 }
@@ -61,9 +63,10 @@ impl ControllerBuffer {
     /// count as forward progress. Past this the controller restarted its
     /// counter or the datagram arrived out of order.
     const FORWARD_WINDOW: u32 = 1024;
-    /// Statuses outside the forward window before the sequence is accepted as
-    /// restarted. Sustained backwards motion is a restart; one or two packets
-    /// is reordering, and answering those would repeat a sequence number.
+    /// Statuses outside the forward window, each ahead of the one before it,
+    /// before the sequence is accepted as restarted. A restarted counter counts
+    /// up again; one or two reordered packets or a burst of duplicates does
+    /// not, and answering those would repeat a sequence number.
     const RESYNC_STATUSES: u32 = 4;
 
     pub fn new(drain_threshold: u8) -> Self {
@@ -74,7 +77,8 @@ impl ControllerBuffer {
             cycle: NOMINAL_CYCLE,
             last_status: None,
             last_commanded: None,
-            stale: 0,
+            stale: BackwardsRun::default(),
+            behind: BackwardsRun::default(),
             underruns: 0,
             lost_statuses: 0,
         }
@@ -83,21 +87,35 @@ impl ControllerBuffer {
     /// Folds a status into the model. Called for every status received,
     /// including those seen while a send is being retried — the drain clock
     /// runs whether or not the driver is in a position to answer.
-    pub fn saw_status(&mut self, seq: u32, at: Instant) {
+    ///
+    /// Returns `false` for a status that is not ahead of the newest one seen,
+    /// which must not be answered.
+    pub fn saw_status(&mut self, seq: u32, at: Instant) -> bool {
         let elapsed = match self.last_status {
             Some((prev_seq, prev_at)) => {
                 let delta = seq.wrapping_sub(prev_seq);
-                if (1..=MAX_MEASURABLE_DELTA).contains(&delta) {
-                    let sample = at.saturating_duration_since(prev_at) / delta;
-                    self.cycle = blend(self.cycle, sample.clamp(MIN_CYCLE, MAX_CYCLE));
+                if delta == 0 || delta > u32::MAX / 2 {
+                    // A duplicate or a status overtaken by a newer one: the
+                    // cycle it announces is already accounted for.
+                    if delta == 0 || !self.behind.restarted(seq) {
+                        return false;
+                    }
+                    1
+                } else if delta > Self::FORWARD_WINDOW {
+                    self.behind.clear();
+                    // A restart: no usable interval, and no grounds to claim
+                    // that many cycles were drained.
+                    1
+                } else {
+                    self.behind.clear();
+                    if delta <= MAX_MEASURABLE_DELTA {
+                        let sample = at.saturating_duration_since(prev_at) / delta;
+                        self.cycle = blend(self.cycle, sample.clamp(MIN_CYCLE, MAX_CYCLE));
+                    }
                     // Every sequence between two received statuses is one the
                     // controller sent and we never saw.
                     self.lost_statuses += (delta - 1) as u64;
                     delta
-                } else {
-                    // A restart or a reorder: no usable interval, and no
-                    // grounds to claim that many cycles were drained.
-                    1
                 }
             }
             None => 0,
@@ -116,27 +134,26 @@ impl ControllerBuffer {
                 self.depth -= drained;
             }
         }
+        true
     }
 
     /// Decides whether this status may be answered, and how many sequences
     /// before it the controller is still owed.
     pub fn plan(&mut self, seq: u32) -> SeqVerdict {
         let Some(prev) = self.last_commanded else {
-            self.stale = 0;
+            self.stale.clear();
             return SeqVerdict::Command { outstanding: 0 };
         };
         let advance = seq.wrapping_sub(prev);
         if advance != 0 && advance <= Self::FORWARD_WINDOW {
-            self.stale = 0;
+            self.stale.clear();
             return SeqVerdict::Command {
                 outstanding: advance - 1,
             };
         }
-        self.stale += 1;
-        if self.stale < Self::RESYNC_STATUSES {
+        if advance == 0 || !self.stale.restarted(seq) {
             return SeqVerdict::Stale;
         }
-        self.stale = 0;
         self.last_commanded = None;
         SeqVerdict::Resync
     }
@@ -164,7 +181,7 @@ impl ControllerBuffer {
         self.depth = 0;
         self.draining = false;
         self.last_commanded = None;
-        self.stale = 0;
+        self.stale.clear();
     }
 
     /// Commands that may still be queued without faulting the controller.
@@ -224,6 +241,42 @@ impl ControllerBuffer {
     /// but is not packet loss.
     pub fn lost_statuses(&self) -> u64 {
         self.lost_statuses
+    }
+}
+
+/// A run of statuses that each step forward from the one before, all of them
+/// outside the window of the sequence being tracked: the signature of a
+/// counter that restarted elsewhere.
+#[derive(Debug, Default)]
+struct BackwardsRun {
+    last: Option<u32>,
+    len: u32,
+}
+
+impl BackwardsRun {
+    /// Adds `seq` to the run and reports whether the run is now long enough
+    /// to be a restart, clearing it if so. A repeat of the run's newest
+    /// sequence adds nothing; any other step that is not forward starts a new
+    /// run at `seq`.
+    fn restarted(&mut self, seq: u32) -> bool {
+        match self.last {
+            Some(last) if last == seq => return false,
+            Some(last) if seq.wrapping_sub(last) <= ControllerBuffer::FORWARD_WINDOW => {
+                self.len += 1;
+            }
+            _ => self.len = 1,
+        }
+        self.last = Some(seq);
+        if self.len < ControllerBuffer::RESYNC_STATUSES {
+            return false;
+        }
+        self.clear();
+        true
+    }
+
+    fn clear(&mut self) {
+        self.last = None;
+        self.len = 0;
     }
 }
 
@@ -468,3 +521,6 @@ mod test {
         assert_eq!(huge.burst_for(CAPACITY as u32), CAPACITY as u32 - 1);
     }
 }
+
+#[cfg(test)]
+mod wrap_test;

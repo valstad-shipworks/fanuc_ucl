@@ -1,16 +1,18 @@
+use fast_talker::options::{SocketOption, ThreadOption};
 use flume::{Receiver, Sender};
 use std::collections::{HashMap, VecDeque};
-use std::io::{Error as IoError, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
+use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 
 use crate::hmi::proto::wire::{Body, Header, Message};
-use crate::hmi::{BINCODE_CFG, DriverResult, HmiError, HmiTelemetry};
-use crate::thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle};
+use crate::hmi::{BINCODE_CFG, DRIVER, DriverResult, HmiError, HmiTelemetry};
+use crate::thread_util::ThreadHandle;
+use crate::tuning::{self, SocketRole, ThreadRole};
 
 use super::hmi_handle::{HmiHandleGeneric, HmiResult};
 
@@ -39,6 +41,9 @@ pub(super) struct HmiRunner {
     tcp_stream: TcpStream,
     from_driver: Receiver<RunnerMessage>,
     pending_responses: HashMap<u8, HmiHandleGeneric>,
+    /// Writes waiting for a sequence number to free up: every one of the 256 is
+    /// still awaiting its response.
+    held: VecDeque<PendingWrite>,
     read_buffer: Vec<u8>,
     shutting_down: bool,
     telemetry: Option<HmiTelemetry>,
@@ -48,62 +53,78 @@ impl HmiRunner {
     const TOK_SOCKET: Token = Token(0);
     const TOK_WAKER: Token = Token(1);
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start(
         addr: SocketAddr,
+        connect_timeout: Duration,
         handle: ThreadHandle,
         from_driver: Receiver<RunnerMessage>,
-        thread_config: Option<ThreadConfig>,
+        thread: Vec<ThreadOption>,
+        socket: &[SocketOption],
         telemetry: Option<HmiTelemetry>,
     ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
-        let tcp_stream = TcpStream::connect(addr)?;
-        #[cfg(test)]
-        {
-            tcp_stream.set_nonblocking(true)?;
-        }
+        let std_stream = std::net::TcpStream::connect_timeout(&addr, connect_timeout)?;
+        std_stream.set_nonblocking(true)?;
+        let mut tcp_stream = TcpStream::from_std(std_stream);
+        tuning::apply_socket(DRIVER, SocketRole::TcpControl, &tcp_stream, socket)
+            .map_err(HmiError::from)?;
         tracing::trace!(addr = %addr, "HMI runner connected");
-        let (waker_tx, waker_rx) = flume::bounded(1);
+        let poll = Poll::new().map_err(HmiError::from)?;
+        poll.registry()
+            .register(
+                &mut tcp_stream,
+                HmiRunner::TOK_SOCKET,
+                Interest::READABLE.add(Interest::WRITABLE),
+            )
+            .map_err(HmiError::from)?;
+        let waker =
+            Arc::new(Waker::new(poll.registry(), HmiRunner::TOK_WAKER).map_err(HmiError::from)?);
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
-        let join_handle = snare::thread::Builder::new()
+        let (started_tx, started_rx) = flume::bounded(1);
+        let join_handle = std::thread::Builder::new()
             .name("fanuc-hmi-runner".to_string())
             .spawn(move || {
-                if let Err(e) = hmi_runner_runtime(
+                hmi_runner_runtime(
                     handle,
                     tcp_stream,
+                    poll,
                     from_driver,
-                    thread_config,
-                    waker_tx,
+                    thread,
+                    started_tx,
                     telemetry,
-                ) {
-                    tracing::error!(error = ?e, "HMI runner thread setup failed");
-                    thread_err_flag.store(true, Ordering::Relaxed);
-                }
-            })?;
-        let waker = waker_rx
+                    thread_err_flag,
+                )
+            })
+            .map_err(HmiError::from)?;
+        let started = started_rx
             .recv()
-            .map_err(|e| HmiError::Io(IoError::other(e)))?;
+            .unwrap_or_else(|_| Err(std::io::Error::other("HMI runner exited during startup")));
+        if let Err(e) = started {
+            let _ = join_handle.join();
+            return Err(HmiError::from(e).into());
+        }
         tracing::trace!("HMI runner started");
         Ok((join_handle, waker, local_err_flag))
     }
 
-    fn run(&mut self, mut poll: Poll) -> HmiResult<()> {
+    fn run(&mut self, mut poll: Poll, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
         let mut events = Events::with_capacity(64);
-        let mut queue: VecDeque<PendingWrite> = VecDeque::new();
         let mut scratch = [0u8; 2048];
         let mut connection_established = false;
+        let timeout = Some(Duration::from_millis(96));
 
         loop {
-            self.drain_channel(&mut queue)?;
+            self.drain_channel(queue)?;
             if self.shutting_down {
                 break;
             }
 
-            if !queue.is_empty() && connection_established {
-                self.write_from_queue(&mut queue)?;
+            if (!queue.is_empty() || !self.held.is_empty()) && connection_established {
+                self.write_from_queue(queue)?;
             }
 
-            poll.poll(&mut events, Some(Duration::from_millis(96)))
-                .map_err(HmiError::from)?;
+            poll.poll(&mut events, timeout).map_err(HmiError::from)?;
 
             for event in events.iter() {
                 if event.is_writable()
@@ -118,33 +139,34 @@ impl HmiRunner {
                 }
                 match event.token() {
                     HmiRunner::TOK_WAKER => {
-                        self.drain_channel(&mut queue)?;
+                        self.drain_channel(queue)?;
                     }
                     HmiRunner::TOK_SOCKET => {
                         if event.is_readable() {
                             self.read_stream(&mut scratch)?;
                         }
-                        self.drain_channel(&mut queue)?;
+                        self.drain_channel(queue)?;
                     }
                     _ => {}
                 }
             }
 
-            if !queue.is_empty() && connection_established {
-                self.write_from_queue(&mut queue)?;
+            if (!queue.is_empty() || !self.held.is_empty()) && connection_established {
+                self.write_from_queue(queue)?;
             }
 
             if self.shutting_down {
                 break;
             }
 
-            if !self.handle.should_live() && queue.is_empty() && self.pending_responses.is_empty() {
+            if !self.handle.should_live()
+                && queue.is_empty()
+                && self.held.is_empty()
+                && self.pending_responses.is_empty()
+            {
                 break;
             }
         }
-
-        self.fail_all(&mut queue, HmiError::NotConnected);
-        self.handle.has_died();
         Ok(())
     }
 
@@ -176,7 +198,28 @@ impl HmiRunner {
 
     fn write_from_queue(&mut self, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
         tracing::trace!("Writing to HMI tcp stream");
+        while let Some(write) = self.held.pop_back() {
+            queue.push_front(write);
+        }
         while let Some(front) = queue.front_mut() {
+            // Responses are routed by sequence number alone, so a request may
+            // not go out under one that is still awaiting its response.
+            if front.offset == 0 && self.pending_responses.contains_key(&front.seq) {
+                let free = (1..=u8::MAX)
+                    .map(|k| front.seq.wrapping_add(k))
+                    .find(|seq| !self.pending_responses.contains_key(seq));
+                let Some(seq) = free else {
+                    tracing::debug!(
+                        held = queue.len(),
+                        "All 256 HMI sequence numbers are awaiting responses; holding writes"
+                    );
+                    self.held.extend(queue.drain(..));
+                    break;
+                };
+                front.message.set_seq(seq);
+                front.buf = bincode::encode_to_vec(&front.message, BINCODE_CFG)?;
+                front.seq = seq;
+            }
             match self.tcp_stream.write(&front.buf[front.offset..]) {
                 Ok(0) => {
                     tracing::error!("HMI TCP write returned 0, peer closed connection");
@@ -257,7 +300,7 @@ impl HmiRunner {
     }
 
     fn fail_all(&mut self, queue: &mut VecDeque<PendingWrite>, error: HmiError) {
-        let pending_count = self.pending_responses.len() + queue.len();
+        let pending_count = self.pending_responses.len() + self.held.len() + queue.len();
         if pending_count > 0 {
             tracing::warn!(
                 pending = pending_count,
@@ -268,50 +311,59 @@ impl HmiRunner {
         for (_, handle) in self.pending_responses.drain() {
             let _ = handle.set_error(error.clone());
         }
-        while let Some(pending) = queue.pop_front() {
+        for pending in self.held.drain(..).chain(queue.drain(..)) {
             let _ = pending.handle.set_error(error.clone());
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hmi_runner_runtime(
     handle: ThreadHandle,
-    mut tcp_stream: TcpStream,
+    tcp_stream: TcpStream,
+    poll: Poll,
     from_driver: Receiver<RunnerMessage>,
-    thread_config: Option<ThreadConfig>,
-    waker_tx: Sender<Arc<Waker>>,
+    thread: Vec<ThreadOption>,
+    started: Sender<std::io::Result<()>>,
     telemetry: Option<HmiTelemetry>,
-) -> Result<(), GeneralThreadError> {
-    if let Some(cfg) = thread_config {
-        cfg.configure_this_thread_print_failure();
-    }
+    err_flag: Arc<AtomicBool>,
+) {
+    let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
+        Ok(report) => {
+            let _ = started.send(Ok(()));
+            report
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            return;
+        }
+    };
     if let Some(sink) = &telemetry {
         sink.warmup();
     }
-    let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
-    poll.registry()
-        .register(
-            &mut tcp_stream,
-            HmiRunner::TOK_SOCKET,
-            Interest::READABLE.add(Interest::WRITABLE),
-        )
-        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
-    let waker = Arc::new(
-        Waker::new(poll.registry(), HmiRunner::TOK_WAKER)
-            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
-    );
-    waker_tx.send(waker.clone())?;
     let mut runner = HmiRunner {
         handle,
         tcp_stream,
         from_driver,
         pending_responses: HashMap::new(),
+        held: VecDeque::new(),
         read_buffer: Vec::with_capacity(2048),
         shutting_down: false,
         telemetry,
     };
-    if let Err(e) = runner.run(poll) {
+    let mut queue = VecDeque::new();
+    if let Err(e) = runner.run(poll, &mut queue) {
         tracing::error!(error = %e, "HMI runner terminated with error");
+        err_flag.store(true, Ordering::Relaxed);
     }
-    Ok(())
+    runner.handle.has_died();
+    runner.fail_all(&mut queue, HmiError::NotConnected);
+    while let Ok(msg) = runner.from_driver.try_recv() {
+        if let RunnerMessage::Send { handle, .. } = msg {
+            let _ = handle.set_error(HmiError::NotConnected);
+        }
+    }
 }
+
+#[cfg(test)]
+mod fuzz_test;
