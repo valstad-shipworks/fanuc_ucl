@@ -988,9 +988,10 @@ impl RmiDriver {
     /// back to 1.
     fn next_sequence_id(&self) -> u32 {
         let step = |seq: u32| seq.checked_add(1).unwrap_or(1);
+        #[allow(deprecated)]
         let previous = self
             .seq
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |seq| Some(step(seq)))
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |seq| Some(step(seq)))
             .unwrap_or_else(|seq| seq);
         step(previous)
     }
