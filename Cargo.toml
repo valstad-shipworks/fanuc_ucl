@@ -50,6 +50,9 @@ fast-talker = { version = "0.1.1", default-features = false, features = ["option
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
 
+[target.'cfg(any(all(target_os = "linux", target_env = "gnu", any(target_arch = "x86_64", target_arch = "aarch64")), target_os = "macos", windows))'.dev-dependencies]
+snare = "2"
+
 
 [features]
 default = ["stmo", "rmi", "hspo", "hmi"]
@@ -92,4 +95,3 @@ debug = "full"
 
 [dev-dependencies]
 proptest = "1.11.0"
-snare = "2"
