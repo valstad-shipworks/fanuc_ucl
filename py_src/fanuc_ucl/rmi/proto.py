@@ -93,6 +93,8 @@ FrcTerminateResponse = __rmi.FrcTerminateResponse
 FrcSystemFaultResponse = __rmi.FrcSystemFaultResponse
 # member structs
 OnOff = __rmi.OnOff
+ApplicationType = __rmi.ApplicationType
+PalletizingMode = __rmi.PalletizingMode
 FrameData = __rmi.FrameData
 Configuration = __rmi.Configuration
 Position = __rmi.Position

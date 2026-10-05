@@ -1,9 +1,10 @@
 from collections.abc import Sequence
 from enum import IntEnum
 
+from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 from typing_extensions import Self
 
-from fanuc_ucl._common import JointFormat, JointTemplate, ThreadConfig
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike, TuningReportDict
 
 __all__ = [
     "AxisMotionConstraint",
@@ -179,7 +180,7 @@ class StmoControlLoop:
     def __enter__(self) -> Self: ...
     def __exit__(self, exc_type, exc_value, traceback) -> None: ...
     def wait_for_status(self, timeout_secs: float) -> RobotStatusPacket: ...
-    def send_command(self, command: MotionCommandPacket) -> None: ...
+    def send_command(self, motion: MotionCommandPacket) -> None: ...
 
 class StreamMotionDriver:
     def __init__(
@@ -201,14 +202,31 @@ class StreamMotionDriver:
     def refresh(self) -> None: ...
     def command_motion(
         self,
-        commands: Sequence[MotionCommandPacket],
+        motions: Sequence[MotionCommandPacket],
     ) -> StmoHandle: ...
-    def connect(self, thread_config: ThreadConfig | None = None) -> None:
-        """Connect the streaming-motion driver. Pass ``thread_config=None`` (the default) to leave the runner thread on the default scheduler with no priority or affinity adjustments."""
+    def connect(
+        self,
+        thread: ThreadOptionsLike = None,
+        socket: SocketOptionsLike = None,
+    ) -> None:
+        """Binds the local UDP socket and spawns the I/O thread.
+
+        ``thread`` is applied by the I/O thread to itself and ``socket`` to the
+        UDP socket before it is bound; ``None`` (the default) applies nothing.
+        The I/O thread answers every interpolation cycle, so every thread and
+        socket option is accepted. Options for another platform, or that this
+        platform cannot do, are skipped with a warning; one that is attempted
+        and fails raises. ``tuning_report()`` lists what was applied, adjusted
+        and skipped. Process-wide settings are the application's to make with
+        ``fanuc_ucl.apply_process_options``.
+        """
     def disconnect(self) -> None: ...
     def start(self, timeout_secs: float = 2.0): ...
     def stop(self) -> None: ...
     def is_connected(self) -> bool: ...
+    def tuning_report(self) -> TuningReportDict | None:
+        """What the connection's thread and socket options did, or ``None``
+        while disconnected."""
     def has_connection_errored(self) -> bool:
         """Returns ``True`` if the background runner thread failed during setup.
 

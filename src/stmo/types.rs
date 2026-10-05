@@ -313,8 +313,9 @@ impl RxStorage {
     }
 }
 
-/// I/O health counters for one Stream Motion connection, cumulative since
-/// [`connect`](super::StreamMotionDriver::connect).
+/// I/O health counters for a Stream Motion driver, cumulative across every
+/// connection it has made. `buffer_depth` and `cycle_us` describe the current
+/// connection.
 #[cfg_attr(feature = "valuable", derive(valuable::Valuable))]
 #[cfg_attr(feature = "py", pyo3::pyclass(frozen, get_all, str, from_py_object))]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -353,6 +354,11 @@ pub struct StmoStats {
     /// Status packets received while a send was being retried. These are
     /// forwarded to consumers as they arrive and commanded once the send lands.
     pub statuses_during_retry: u64,
+    /// Hold fillers sent while the last finished batch said more motion
+    /// follows: the caller fell behind the controller mid-stream.
+    pub mid_stream_fillers: u64,
+    /// Hold fillers sent with no stream in progress.
+    pub idle_holds: u64,
     /// Commands currently believed to be queued on the controller, out of
     /// [`BUFFER_CAPACITY`](super::BUFFER_CAPACITY). A live gauge, not a total.
     pub buffer_depth: u8,
@@ -366,7 +372,7 @@ impl std::fmt::Display for StmoStats {
         let closing = if cfg!(feature = "py") { ")" } else { "}" };
         write!(
             f,
-            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, lost_statuses: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, buffer_depth: {}, cycle_us: {}{}",
+            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, lost_statuses: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, mid_stream_fillers: {}, idle_holds: {}, buffer_depth: {}, cycle_us: {}{}",
             opening,
             self.send_failures,
             self.short_sends,
@@ -379,6 +385,8 @@ impl std::fmt::Display for StmoStats {
             self.overflow_skips,
             self.underruns,
             self.statuses_during_retry,
+            self.mid_stream_fillers,
+            self.idle_holds,
             self.buffer_depth,
             self.cycle_us,
             closing
@@ -399,6 +407,8 @@ pub(crate) struct StmoCounters {
     pub overflow_skips: AtomicU64,
     pub underruns: AtomicU64,
     pub statuses_during_retry: AtomicU64,
+    pub mid_stream_fillers: AtomicU64,
+    pub idle_holds: AtomicU64,
     pub buffer_depth: AtomicU64,
     pub cycle_us: AtomicU64,
 }
@@ -417,9 +427,22 @@ impl StmoCounters {
             overflow_skips: self.overflow_skips.load(Ordering::Relaxed),
             underruns: self.underruns.load(Ordering::Relaxed),
             statuses_during_retry: self.statuses_during_retry.load(Ordering::Relaxed),
+            mid_stream_fillers: self.mid_stream_fillers.load(Ordering::Relaxed),
+            idle_holds: self.idle_holds.load(Ordering::Relaxed),
             buffer_depth: self.buffer_depth.load(Ordering::Relaxed) as u8,
             cycle_us: self.cycle_us.load(Ordering::Relaxed),
         }
+    }
+}
+
+/// A shareable view of a driver's [`StmoStats`], readable from any thread
+/// while the driver itself is borrowed elsewhere.
+#[derive(Debug, Clone)]
+pub struct StmoStatsHandle(pub(crate) std::sync::Arc<StmoCounters>);
+
+impl StmoStatsHandle {
+    pub fn snapshot(&self) -> StmoStats {
+        self.0.snapshot()
     }
 }
 
@@ -445,10 +468,24 @@ pub enum StreamMotionError {
     ResponseNotFulfilled(#[from] ResponseNotFulfilled),
     #[error("Other Error: {0}")]
     Other(String),
+    #[error("{driver} does not accept option {option}")]
+    InvalidOption {
+        option: String,
+        driver: &'static str,
+    },
 }
 
 #[cfg(feature = "valuable")]
 error_valuable!(StreamMotionError, "StreamMotionError");
+
+impl From<crate::tuning::RefusedOption> for StreamMotionError {
+    fn from(r: crate::tuning::RefusedOption) -> Self {
+        StreamMotionError::InvalidOption {
+            option: r.option,
+            driver: r.driver,
+        }
+    }
+}
 impl From<std::io::Error> for StreamMotionError {
     fn from(err: std::io::Error) -> Self {
         if err.kind() == std::io::ErrorKind::TimedOut {
@@ -478,6 +515,9 @@ impl From<StreamMotionError> for pyo3::PyErr {
             StreamMotionError::Timeout => pyo3::exceptions::PyTimeoutError::new_err("Timeout"),
             StreamMotionError::Io(e) => {
                 pyo3::exceptions::PyIOError::new_err(format!("I/O Error: {}", e))
+            }
+            StreamMotionError::InvalidOption { .. } => {
+                pyo3::exceptions::PyValueError::new_err(err.to_string())
             }
             _ => pyo3::exceptions::PyException::new_err(format!("StreamMotionError: {}", err)),
         }

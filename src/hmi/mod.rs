@@ -15,22 +15,23 @@ use bincode::config;
 use flume::Sender;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::{Error as IoError, ErrorKind};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::hmi::asg::AsgEntry;
 use crate::hmi::proto::ports::{
     self, ReadableDataPort, UnsafelyWritableDataPort, WritableDataPort,
 };
 use crate::hmi::proto::wire::Message;
-use crate::hmi::runner::{HmiRunner, RunnerMessage};
+use crate::hmi::runner::{HmiRunner, RunnerMessage, StartedRunner};
 use crate::{
     ResponseNotFulfilled,
-    thread_util::{ThreadConfig, ThreadHandle},
+    thread_util::ThreadHandle,
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
+use fast_talker::options::{SocketOption, ThreadOption};
 
 pub use hmi_handle::{HmiHandle, HmiHandleGeneric};
 use hmi_handle::{caster_array, caster_null, caster_singular};
@@ -68,6 +69,13 @@ pub enum HmiError {
     /// Index 0 was passed for a one-indexed port type.
     #[error("Zero Index")]
     ZeroIndex,
+    /// The items requested run past the end of the port's 16-bit address space.
+    #[error("{port}[{index}] for {count} items is out of range")]
+    IndexOutOfRange {
+        port: &'static str,
+        index: usize,
+        count: usize,
+    },
     /// A message failed to encode or decode.
     #[error("Bincode Error: {0}")]
     Bincode(String),
@@ -83,6 +91,21 @@ pub enum HmiError {
     /// Any other failure, described by the contained message.
     #[error("Other Error: {0}")]
     Other(String),
+    /// An option this driver does not accept.
+    #[error("{driver} does not accept option {option}")]
+    InvalidOption {
+        option: String,
+        driver: &'static str,
+    },
+}
+
+impl From<tuning::RefusedOption> for HmiError {
+    fn from(r: tuning::RefusedOption) -> Self {
+        HmiError::InvalidOption {
+            option: r.option,
+            driver: r.driver,
+        }
+    }
 }
 
 #[cfg(feature = "valuable")]
@@ -119,6 +142,11 @@ impl Clone for HmiError {
             HmiError::Io(e) => HmiError::Io(std::io::Error::new(e.kind(), e.to_string())),
             HmiError::InvalidIntSize(e) => HmiError::InvalidIntSize(*e),
             HmiError::ZeroIndex => HmiError::ZeroIndex,
+            HmiError::IndexOutOfRange { port, index, count } => HmiError::IndexOutOfRange {
+                port,
+                index: *index,
+                count: *count,
+            },
             HmiError::Bincode(s) => HmiError::Bincode(s.clone()),
             HmiError::UnexpectedSequenceNumber(n) => HmiError::UnexpectedSequenceNumber(*n),
             HmiError::MalformedResponse => HmiError::MalformedResponse,
@@ -126,6 +154,10 @@ impl Clone for HmiError {
                 HmiError::ResponseNotFulfilled(ResponseNotFulfilled)
             }
             HmiError::Other(s) => HmiError::Other(s.clone()),
+            HmiError::InvalidOption { option, driver } => HmiError::InvalidOption {
+                option: option.clone(),
+                driver,
+            },
         }
     }
 }
@@ -135,7 +167,16 @@ impl From<HmiError> for pyo3::PyErr {
     fn from(err: HmiError) -> Self {
         match err {
             HmiError::Timeout => pyo3::exceptions::PyTimeoutError::new_err("Timeout"),
-            HmiError::Io(e) => pyo3::exceptions::PyIOError::new_err(format!("I/O Error: {}", e)),
+            HmiError::Io(e) => e.into(),
+            HmiError::NotConnected => {
+                pyo3::exceptions::PyConnectionError::new_err(format!("HMI: {}", err))
+            }
+            HmiError::ZeroIndex | HmiError::IndexOutOfRange { .. } => {
+                pyo3::exceptions::PyIndexError::new_err(format!("HMI: {}", err))
+            }
+            HmiError::InvalidOption { .. } => {
+                pyo3::exceptions::PyValueError::new_err(err.to_string())
+            }
             _ => pyo3::exceptions::PyException::new_err(format!("HMI: {}", err)),
         }
     }
@@ -155,14 +196,16 @@ pub(crate) const BINCODE_CFG: config::Configuration<config::LittleEndian, config
         .with_fixed_int_encoding();
 
 const HMI_DEFAULT_PORT: u16 = 60008;
+const DRIVER: &str = "hmi";
 const DEFAULT_CONNECT_TIMEOUT_SECS: f64 = 1.0;
 
 #[derive(Debug)]
 struct HmiConnection {
     handle: ThreadHandle,
-    waker: Arc<snare::mio::Waker>,
+    waker: Arc<mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
 }
 
 /// The main driver struct for interfacing with a FANUC robot via SNPX HMI.
@@ -206,13 +249,37 @@ impl HmiDriver {
     ///
     /// This method is blocking and will wait for the connection to be established and the handshake to complete, with an optional timeout.
     ///
+    /// `thread` is applied by the I/O thread to itself before it starts. That
+    /// thread serves request/response traffic, so it accepts `CpuAffinity`,
+    /// `PrefaultStack`, `LinuxNice`, `UnixScheduler` with `Other`, `Batch` or
+    /// `Idle`, `WinPriority` below `TimeCritical`, `WinDisablePowerThrottling`
+    /// and `MacOsQos`. Real-time classes (`RtPriority`, `UnixScheduler` with
+    /// `Fifo` or `RoundRobin`, `WinPriority(TimeCritical)`, `WinMmcss`,
+    /// `MacOsTimeConstraint`) are refused: on a thread that blocks on TCP
+    /// round-trips they only risk starving the rest of the system.
+    /// Process-wide settings (memory locking, `cpu_dma_latency`, Windows
+    /// priority class and timer resolution) are the application's to make with
+    /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
+    ///
+    /// `socket` is applied to the TCP connection before it connects. It
+    /// accepts `BindDevice`, `Dscp` and `LinuxPriority`: buffer sizes would
+    /// turn off TCP autotuning, and busy polling, `DontFragment` and
+    /// `WinCpuAffinity` do nothing useful for this traffic.
+    ///
+    /// Options for another platform, or that this platform cannot do, are
+    /// skipped with a warning; [`tuning_report`](Self::tuning_report) lists
+    /// them.
+    ///
     /// # Errors
-    /// Returns an error if the timeout is zero, the TCP connection or I/O thread cannot be set up,
-    /// or the handshake times out or is not acknowledged.
+    /// Returns an error if the timeout is zero, an option is not accepted
+    /// ([`HmiError::InvalidOption`]) or fails to apply, the TCP connection or
+    /// I/O thread cannot be set up, or the handshake times out or is not
+    /// acknowledged.
     pub fn connect(
         &mut self,
         timeout: Option<Duration>,
-        thread_config: Option<ThreadConfig>,
+        thread: &[ThreadOption],
+        socket: &[SocketOption],
     ) -> DriverResult<()> {
         tracing::info!(addr = %self.remote_addr, "Attempting to connect HmiDriver");
         let timeout =
@@ -220,17 +287,30 @@ impl HmiDriver {
         if timeout.is_zero() {
             return Err(HmiError::Other("Timeout must be positive".into()).into());
         }
-        if self.connection.is_some() {
+        if self.is_connected() {
             return Ok(());
         }
+        if self.connection.is_some() {
+            let _ = self.disconnect(false);
+        }
+        tuning::check_thread(DRIVER, ThreadRole::Control, thread).map_err(HmiError::from)?;
+        tuning::check_socket(DRIVER, SocketRole::TcpControl, socket).map_err(HmiError::from)?;
         let addr = SocketAddr::new(self.remote_addr, HMI_DEFAULT_PORT);
+        let deadline = std::time::Instant::now() + timeout;
         let (to_runner, from_driver) = flume::unbounded();
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker, err_flag) = HmiRunner::start(
+        let StartedRunner {
+            join: join_handle,
+            waker,
+            err_flag,
+            tuning,
+        } = HmiRunner::start(
             addr,
+            timeout,
             handle.to_pass_in(),
             from_driver,
-            thread_config,
+            thread.to_vec(),
+            socket,
             self.telemetry.clone(),
         )?;
         handle.set_handle(join_handle);
@@ -240,11 +320,20 @@ impl HmiDriver {
             waker,
             to_runner,
             err_flag,
+            tuning,
         });
-        // Real clock: the handshake deadline feeds event_listener-backed
-        // wait_timeout calls, which wait in real time regardless of snare's
-        // shim clock.
-        let start = Instant::now();
+        let handshake =
+            self.handshake(deadline.saturating_duration_since(std::time::Instant::now()));
+        if handshake.is_err() {
+            let _ = self.disconnect(false);
+        }
+        handshake
+    }
+
+    /// INIT, MAGIC and CLRASG over the connection [`connect`](Self::connect)
+    /// just opened, all within `timeout`.
+    fn handshake(&mut self, timeout: Duration) -> DriverResult<()> {
+        let start = std::time::Instant::now();
         let ack = self.send_message(Message::INIT)?.wait_timeout(timeout)?;
         self.next_seq(); // INIT uses seq 0
         if ack == Message::INIT_ACK {
@@ -293,6 +382,12 @@ impl HmiDriver {
             .unwrap_or(false)
     }
 
+    /// What the current connection's thread and socket options did, or `None`
+    /// while disconnected.
+    pub fn tuning_report(&self) -> Option<TuningReport> {
+        self.connection.as_ref().map(|c| c.tuning.clone())
+    }
+
     /// Returns true if the I/O thread has hit a fatal error, or false when not connected.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
@@ -300,6 +395,28 @@ impl HmiDriver {
         } else {
             false
         }
+    }
+
+    /// Fails unless `count` items of `T` from the zero-based `index`, widened to
+    /// `alignment`, have wire addresses that fit in 16 bits.
+    fn check_span<T: ports::DataPort>(
+        index: u16,
+        count: usize,
+        alignment: u16,
+        caller_index: usize,
+    ) -> Result<(), HmiError> {
+        let end = usize::from(index)
+            .checked_add(count)
+            .map(|end| end.next_multiple_of(usize::from(alignment)))
+            .and_then(|end| end.checked_add(usize::from(T::OFFSET)));
+        if end.is_none_or(|end| end > usize::from(u16::MAX)) {
+            return Err(HmiError::IndexOutOfRange {
+                port: T::NAME,
+                index: caller_index,
+                count,
+            });
+        }
+        Ok(())
     }
 
     fn next_seq(&self) -> u8 {
@@ -333,7 +450,7 @@ impl HmiDriver {
                 handle: handle.clone(),
                 message: msg,
             })
-            .map_err(|e| HmiError::Io(IoError::new(ErrorKind::BrokenPipe, e)))?;
+            .map_err(|_| HmiError::NotConnected)?;
         tracing::trace!("Sent message");
         let _ = conn.waker.wake();
         tracing::trace!("Woke waker");
@@ -365,10 +482,13 @@ impl HmiDriver {
         index: usize,
         values: &[T::ValueType],
     ) -> DriverResult<HmiHandle<()>> {
+        let caller_index = index;
         let index = u16::try_from(index)?;
         if !T::ZERO_INDEXED && index == 0 {
             return Err(HmiError::ZeroIndex.into());
         }
+        let first = if T::ZERO_INDEXED { index } else { index - 1 };
+        Self::check_span::<T>(first, values.len(), 1, caller_index)?;
         tracing::trace!(port = T::NAME, index, values = ?values, "Writing to port");
         let seq = self.next_seq();
         let msg = Message::new_write_req::<T>(seq, index, values);
@@ -440,6 +560,7 @@ impl HmiDriver {
     where
         T::ValueType: Send + Sync + 'static,
     {
+        let caller_index = index;
         let mut index = u16::try_from(index)?;
         let count = u16::try_from(count)?;
         if !T::ZERO_INDEXED && index == 0 {
@@ -448,6 +569,7 @@ impl HmiDriver {
         if !T::ZERO_INDEXED {
             index -= 1;
         }
+        Self::check_span::<T>(index, count.into(), T::ALIGNMENT, caller_index)?;
         let seq = self.next_seq();
         let (index, count) = T::align_read(index, count);
         let msg = Message::new_read_req::<T>(seq, index, count);
@@ -469,6 +591,7 @@ impl HmiDriver {
     where
         T::ValueType: Send + Sync + 'static,
     {
+        let caller_index = index;
         let mut index = u16::try_from(index)?;
         if !T::ZERO_INDEXED && index == 0 {
             return Err(HmiError::ZeroIndex.into());
@@ -476,6 +599,7 @@ impl HmiDriver {
         if !T::ZERO_INDEXED {
             index -= 1;
         }
+        Self::check_span::<T>(index, 1, T::ALIGNMENT, caller_index)?;
         let seq = self.next_seq();
         let (index, count) = T::align_read(index, 1);
         let msg = Message::new_read_req::<T>(seq, index, 1);

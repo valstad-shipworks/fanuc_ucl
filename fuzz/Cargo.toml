@@ -1,0 +1,58 @@
+[package]
+name = "fanuc_ucl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bincode = "2.0.1"
+libfuzzer-sys = "0.4"
+serde_json = "1.0.151"
+
+[dependencies.fanuc_ucl]
+path = ".."
+
+[[bin]]
+name = "rx_packets"
+path = "fuzz_targets/rx_packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tx_packets"
+path = "fuzz_targets/tx_packets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hspo_datagram"
+path = "fuzz_targets/hspo_datagram.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hmi_parse_request"
+path = "fuzz_targets/hmi_parse_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rmi_response_json"
+path = "fuzz_targets/rmi_response_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hmi_asg_values"
+path = "fuzz_targets/hmi_asg_values.rs"
+test = false
+doc = false
+bench = false

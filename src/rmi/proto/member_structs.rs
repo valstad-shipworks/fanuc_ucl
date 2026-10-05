@@ -441,6 +441,7 @@ pub mod py {
     pub fn register(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
         parent_module.add_class::<OnOff>()?;
         parent_module.add_class::<ApplicationType>()?;
+        parent_module.add_class::<PalletizingMode>()?;
         parent_module.add_class::<FrameData>()?;
         parent_module.add_class::<Configuration>()?;
         parent_module.add_class::<Position>()?;

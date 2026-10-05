@@ -3,7 +3,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
@@ -16,6 +15,7 @@ use crate::{
             wire::Message,
         },
     },
+    thread_util::WakerSet,
 };
 
 /// Convenience alias for `Result<T, HmiError>`.
@@ -72,14 +72,14 @@ pub(super) fn caster_null<T: DataPort>(_: Message, _: u16, _: u16) -> HmiResult<
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HmiHandleGeneric {
-    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
-    // the async `poll` waiter. Both are signalled after `.0` is set.
-    resp: Arc<(OnceLock<ResponseOrError>, Event, AtomicWaker)>,
+    // `.1` Event wakes blocking wall-clock waiters; `.2` wakes every task
+    // polling a clone. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<ResponseOrError>, Event, WakerSet)>,
 }
 impl HmiHandleGeneric {
     pub(super) fn new() -> Self {
         Self {
-            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
+            resp: Arc::new((OnceLock::new(), Event::new(), WakerSet::new())),
         }
     }
 
@@ -87,7 +87,7 @@ impl HmiHandleGeneric {
         let now = crate::time_util::host_now();
         let _ = self.resp.0.set(ResponseOrError::Response(value, now));
         self.resp.1.notify(usize::MAX);
-        self.resp.2.wake();
+        self.resp.2.wake_all();
         Ok(())
     }
 
@@ -97,7 +97,7 @@ impl HmiHandleGeneric {
             .0
             .set(ResponseOrError::Error(error, crate::time_util::host_now()));
         self.resp.1.notify(usize::MAX);
-        self.resp.2.wake();
+        self.resp.2.wake_all();
         Ok(())
     }
 }
@@ -139,8 +139,11 @@ impl ResponseHandle for HmiHandleGeneric {
         if self.is_set() {
             return self.get();
         }
+        if timeout.is_zero() {
+            return Err(HmiError::Timeout);
+        }
         let listener = self.resp.1.listen();
-        if !timeout.is_zero() && listener.wait_timeout(timeout).is_some() {
+        if self.is_set() || listener.wait_timeout(timeout).is_some() {
             self.get()
         } else {
             Err(HmiError::Timeout)
@@ -160,12 +163,7 @@ impl Future for HmiHandleGeneric {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        if self.is_set() {
-            return std::task::Poll::Ready(self.get());
-        }
         self.resp.2.register(cx.waker());
-        // Re-check after registering: a response set between the check above and
-        // the register would otherwise wake a waker we hadn't stored yet.
         if self.is_set() {
             std::task::Poll::Ready(self.get())
         } else {
@@ -246,9 +244,6 @@ impl<T: Send + Sync + 'static> Future for HmiHandle<T> {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        if self.is_set() {
-            return std::task::Poll::Ready(self.get());
-        }
         self.generic.resp.2.register(cx.waker());
         if self.is_set() {
             std::task::Poll::Ready(self.get())
@@ -333,8 +328,7 @@ pub(super) mod py {
             timeout_secs: f64,
         ) -> PyResult<Bound<'a, PyAny>> {
             let timeout = Duration::from_secs_f64(timeout_secs);
-            self.inner
-                .wait_timeout(timeout)
+            py.detach(|| self.inner.wait_timeout(timeout))
                 .map_err(Into::into)
                 .and_then(|v| (self.caster)(py, v, self.target, self.count))
         }

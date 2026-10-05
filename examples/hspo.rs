@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, thread::sleep, time::Duration};
 
 use fanuc_ucl::{
-    ThreadConfig,
+    ThreadOption,
     hspo::{HspoReceiver, destroy_broker, initialize_broker},
     joints::{JointFormat, JointTemplate},
 };
@@ -9,7 +9,8 @@ use fanuc_ucl::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     initialize_broker(
         SocketAddr::from(([0, 0, 0, 0], 15000)),
-        Some(ThreadConfig::new(55, None)),
+        &[ThreadOption::RtPriority(55)],
+        &[],
     )
     .expect("Broker couldnt be started");
 

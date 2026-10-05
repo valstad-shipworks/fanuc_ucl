@@ -524,6 +524,11 @@ impl Message {
         self.header.seq1 as u8
     }
 
+    pub(crate) fn set_seq(&mut self, seq: u8) {
+        self.header.seq1 = seq as u16;
+        self.header.seq2 = seq;
+    }
+
     pub fn payload(&self) -> &[u8] {
         match &self.body {
             Body::Req { payload, .. } => payload,

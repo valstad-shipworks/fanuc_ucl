@@ -4,7 +4,7 @@ use fanuc_ucl::hmi::{DigitalOutput, GroupInput, GroupOutput, HmiDriver, SysVarAr
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = HmiDriver::new([10, 0, 0, 1]);
-    driver.connect(Some(Duration::from_secs(1)), None)?;
+    driver.connect(Some(Duration::from_secs(1)), &[], &[])?;
 
     if driver
         .read::<DigitalOutput>(1)?

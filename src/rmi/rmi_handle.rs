@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use atomic_waker::AtomicWaker;
 use event_listener::{Event, Listener};
 use inherent::inherent;
 
@@ -14,6 +13,7 @@ use crate::{
         ReceivablePacket, ResponsePacket,
         errors::{PacketMismatchError, RmiError, RmiProtocolError, RmiResult},
     },
+    thread_util::WakerSet,
 };
 
 #[derive(Debug)]
@@ -28,9 +28,11 @@ enum ResponseOrError {
 pub struct RmiHandleGeneric {
     packet_name: &'static str,
     seq_id: u32,
-    // `.1` Event wakes blocking `wait_timeout` waiters; `.2` AtomicWaker wakes
-    // the async `poll` waiter. Both are signalled after `.0` is set.
-    resp: Arc<(OnceLock<ResponseOrError>, Event, AtomicWaker)>,
+    /// Integer fields of the request that a reply carrying them must repeat.
+    echo: Arc<[(String, serde_json::Value)]>,
+    // `.1` Event wakes blocking wall-clock waiters; `.2` wakes every task
+    // polling a clone. Both are signalled after `.0` is set.
+    resp: Arc<(OnceLock<ResponseOrError>, Event, WakerSet)>,
 }
 impl RmiHandleGeneric {
     const ERROR_NAMES: [&'static str; 2] = ["FRC_SystemFault", "FRC_Terminate"];
@@ -39,8 +41,44 @@ impl RmiHandleGeneric {
         Self {
             packet_name,
             seq_id,
-            resp: Arc::new((OnceLock::new(), Event::new(), AtomicWaker::new())),
+            echo: Arc::from([]),
+            resp: Arc::new((OnceLock::new(), Event::new(), WakerSet::new())),
         }
+    }
+
+    /// Records the request's integer fields, such as a port or register
+    /// number, which a reply to it carries back unchanged when it carries
+    /// them at all.
+    pub(super) fn echoing(mut self, request: &serde_json::Map<String, serde_json::Value>) -> Self {
+        const NOT_ECHOED: [&str; 4] = ["Communication", "Command", "Instruction", "SequenceID"];
+        self.echo = request
+            .iter()
+            .filter(|(k, v)| (v.is_i64() || v.is_u64()) && !NOT_ECHOED.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        self
+    }
+
+    pub(super) fn packet_name(&self) -> &'static str {
+        self.packet_name
+    }
+
+    /// The SequenceID the request went out with; 0 for commands and
+    /// communication packets, which carry none.
+    pub(super) fn sequence_id(&self) -> u32 {
+        self.seq_id
+    }
+
+    pub(super) fn is_instruction(&self) -> bool {
+        self.seq_id != 0
+    }
+
+    /// Whether `reply` repeats every recorded request field it carries.
+    pub(super) fn is_echoed_by(&self, reply: &serde_json::Value) -> bool {
+        self.echo.iter().all(|(k, v)| match reply.get(k) {
+            Some(r) if r.is_i64() || r.is_u64() => r == v,
+            _ => true,
+        })
     }
 
     pub(super) fn set_generic(&self, value: ResponsePacket) -> RmiResult<()> {
@@ -69,13 +107,12 @@ impl RmiHandleGeneric {
                 .set(ResponseOrError::Error(RmiError::FanucErrorCode(ec), now));
         } else if value.packet_name() != self.packet_name {
             let _ = self.resp.0.set(ResponseOrError::Skipped);
-            self.resp.1.notify(usize::MAX);
             outcome = Err(RmiError::PacketMismatch(PacketMismatchError));
         } else {
             let _ = self.resp.0.set(ResponseOrError::Response(value, now));
         }
         self.resp.1.notify(usize::MAX);
-        self.resp.2.wake();
+        self.resp.2.wake_all();
         outcome
     }
 
@@ -85,7 +122,7 @@ impl RmiHandleGeneric {
             .0
             .set(ResponseOrError::Error(error, crate::time_util::host_now()));
         self.resp.1.notify(usize::MAX);
-        self.resp.2.wake();
+        self.resp.2.wake_all();
         Ok(())
     }
 }
@@ -118,6 +155,9 @@ impl ResponseHandle for RmiHandleGeneric {
     }
 
     pub fn wait_timeout(&self, timeout: Duration) -> RmiResult<ResponsePacket> {
+        if self.is_set() {
+            return self.get();
+        }
         // Register the listener before checking state so we can't miss a
         // notify() that fires between the check and listen() (event_listener
         // only wakes listeners registered at notify time).
@@ -144,12 +184,7 @@ impl Future for RmiHandleGeneric {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        if self.is_set() {
-            return std::task::Poll::Ready(self.get());
-        }
         self.resp.2.register(cx.waker());
-        // Re-check after registering: a response set between the check above and
-        // the register would otherwise wake a waker we hadn't stored yet.
         if self.is_set() {
             std::task::Poll::Ready(self.get())
         } else {
@@ -248,8 +283,6 @@ impl RmiQueueGeneric {
 
     pub fn wait_all_timeout(&self, timeout: Duration) -> RmiResult<Vec<ResponsePacket>> {
         let mut outcome = Vec::with_capacity(self.queue.len());
-        // Real clock: the deadline feeds event_listener's wait_timeout, which
-        // waits in real time regardless of snare's shim clock.
         let deadline = Instant::now().checked_add(timeout);
         for handle in &self.queue {
             let remaining = match deadline {
@@ -291,7 +324,6 @@ impl RmiQueueGeneric {
         self.queue.retain(|h| !h.is_set());
     }
 
-    #[cfg(feature = "async")]
     pub async fn wait_all_async(&self) -> RmiResult<Vec<ResponsePacket>> {
         let mut outcome = Vec::with_capacity(self.queue.len());
         for handle in &self.queue {
@@ -391,8 +423,7 @@ pub(super) mod py {
 
         pub fn wait_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
             let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
-            self.inner
-                .wait_timeout(timeout)
+            py.detach(|| self.inner.wait_timeout(timeout))
                 .map_err(Into::into)
                 .and_then(|v| self.pytype.call_method1(py, "from_response_packet", (v,)))
         }
@@ -496,8 +527,7 @@ pub(super) mod py {
             timeout_secs: f64,
         ) -> PyResult<Vec<Py<PyAny>>> {
             let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
-            self.inner
-                .wait_all_timeout(timeout)
+            py.detach(|| self.inner.wait_all_timeout(timeout))
                 .map_err(Into::into)
                 .map(|vec| {
                     vec.into_iter()
@@ -513,8 +543,7 @@ pub(super) mod py {
 
         pub fn wait_next_timeout(&self, py: Python<'_>, timeout_secs: f64) -> PyResult<Py<PyAny>> {
             let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
-            self.inner
-                .wait_next_timeout(timeout)
+            py.detach(|| self.inner.wait_next_timeout(timeout))
                 .map_err(Into::into)
                 .and_then(|r| self.packet_into_py(py, r))
         }
@@ -585,13 +614,9 @@ mod tests {
     /// forever.
     #[test]
     fn async_await_wakes_on_late_notify() {
-        // set_error() stamps host_now(), which under snare's shim resolves the
-        // thread's clock slot — the test and the fulfiller must be in a
-        // registered thread chain or snare panics and the wake is lost.
-        snare::register_test();
         let handle = RmiHandleGeneric::new("test", 0);
         let fulfiller = handle.clone();
-        snare::thread::spawn(move || {
+        std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             let _ = fulfiller.set_error(RmiError::Timeout);
         });

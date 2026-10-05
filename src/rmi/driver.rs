@@ -9,14 +9,16 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cfg_mixin::cfg_mixin;
+use fast_talker::options::{ReportSummary, SocketOption, ThreadOption};
 use flume::{Receiver, Sender};
+use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
+use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use snare::mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
-use snare::net::TcpStream as StdTcpStream;
+use std::net::TcpStream as StdTcpStream;
 
 use crate::{
     TelemetrySink,
@@ -32,8 +34,11 @@ use crate::{
         },
         rmi_handle::*,
     },
-    thread_util::{GeneralThreadError, ThreadConfig, ThreadHandle},
+    thread_util::ThreadHandle,
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
+
+const DRIVER: &str = "rmi";
 
 type JsonObject = JsonMap<String, JsonValue>;
 
@@ -57,24 +62,6 @@ impl std::fmt::Display for VariadicString {
     }
 }
 
-impl VariadicString {
-    fn vec(self) -> Vec<String> {
-        match self {
-            VariadicString::None => vec![],
-            VariadicString::Single(s) => vec![s],
-            VariadicString::Multiple(v) => v,
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            VariadicString::None => 0,
-            VariadicString::Single(_) => 1,
-            VariadicString::Multiple(v) => v.len(),
-        }
-    }
-}
-
 fn rmi_string_reader(input: &[u8]) -> RmiResult<VariadicString> {
     let s = std::str::from_utf8(input)?;
     let parts: Vec<String> = s
@@ -89,6 +76,56 @@ fn rmi_string_reader(input: &[u8]) -> RmiResult<VariadicString> {
     } else {
         Ok(VariadicString::Multiple(parts))
     }
+}
+
+/// Reads the controller's one-line reply on a blocking stream by `deadline`,
+/// however many segments it arrives in.
+fn read_line_by(tcp: &mut StdTcpStream, deadline: Instant) -> RmiResult<Vec<u8>> {
+    const LIMIT: usize = 4096;
+    let mut line = Vec::new();
+    let mut buf = [0u8; 512];
+    while !line.windows(2).any(|w| w == b"\r\n") {
+        if line.len() > LIMIT {
+            return Err(RmiError::Structure(format!(
+                "no line end in the first {LIMIT} bytes of the reply"
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        }
+        tcp.set_read_timeout(Some(remaining))?;
+        match tcp.read(&mut buf) {
+            Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into()),
+            Ok(n) => line.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(line)
+}
+
+enum ReplyName<'a> {
+    Instruction,
+    Other(&'a str),
+}
+
+fn reply_name(reply: &JsonValue) -> Option<ReplyName<'_>> {
+    let text = |key| reply.get(key).and_then(JsonValue::as_str);
+    text("Instruction")
+        .map(|_| ReplyName::Instruction)
+        .or_else(|| {
+            text("Command")
+                .or_else(|| text("Communication"))
+                .map(ReplyName::Other)
+        })
+}
+
+fn sequence_id(reply: &JsonValue) -> Option<u64> {
+    reply.get("SequenceID").and_then(JsonValue::as_u64)
 }
 
 fn rmi_string_writer(value: JsonObject) -> RmiResult<Vec<u8>> {
@@ -153,57 +190,117 @@ struct RmiRunner {
     response_stack: VecDeque<RmiHandleGeneric>,
     config: RmiDriverConfig,
     telemetry: Option<RmiTelemetry>,
+    /// Bytes read past the last complete response.
+    rx_buf: Vec<u8>,
+    /// Set once FRC_Disconnect is on the wire: how long the runner keeps
+    /// reading for its reply and any still in flight.
+    disconnect_deadline: Option<Instant>,
+}
+
+/// A runner thread that applied its options and is serving the connection.
+struct StartedRunner {
+    join: JoinHandle<()>,
+    waker: Arc<Waker>,
+    err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
 }
 
 impl RmiRunner {
     const TOK_SOCKET: Token = Token(0);
     const TOK_WAKER: Token = Token(1);
+    /// How long a sent FRC_Disconnect waits for the controller's reply before
+    /// the runner gives up and its handle resolves as disconnected.
+    const DISCONNECT_REPLY_WAIT: Duration = Duration::from_millis(500);
 
+    #[allow(clippy::too_many_arguments)]
     fn start(
         addr: SocketAddr,
+        connect_timeout: Duration,
         handle: ThreadHandle,
         from_driver: Receiver<RunnerMessage>,
         config: RmiDriverConfig,
-        thread_config: Option<ThreadConfig>,
+        thread: Vec<ThreadOption>,
+        socket: &[SocketOption],
         telemetry: Option<RmiTelemetry>,
-    ) -> RmiResult<(JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
-        let tcp_stream = TcpStream::connect(addr)?;
-        #[cfg(test)]
-        tcp_stream.set_nonblocking(true)?;
-        let (waker_tx, waker_rx) = flume::unbounded();
+    ) -> RmiResult<StartedRunner> {
+        let (std_stream, socket_report) = tuning::connect_tcp(
+            DRIVER,
+            SocketRole::TcpControl,
+            addr,
+            connect_timeout,
+            socket,
+        )?;
+        std_stream.set_nonblocking(true)?;
+        let mut tcp_stream = TcpStream::from_std(std_stream);
+        let poll = Poll::new()?;
+        poll.registry().register(
+            &mut tcp_stream,
+            RmiRunner::TOK_SOCKET,
+            Interest::READABLE.add(Interest::WRITABLE),
+        )?;
+        let waker = Arc::new(Waker::new(poll.registry(), RmiRunner::TOK_WAKER)?);
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let thread_err_flag = local_err_flag.clone();
-        let handle = snare::thread::Builder::new()
+        let (started_tx, started_rx) = flume::bounded(1);
+        let handle = std::thread::Builder::new()
             .name("fanuc-rmi-runner".to_string())
             .spawn(move || {
-                if let Err(e) = rmi_runner_runtime(
+                rmi_runner_runtime(
                     handle,
                     tcp_stream,
+                    poll,
                     from_driver,
                     config,
-                    thread_config,
-                    waker_tx,
+                    thread,
+                    started_tx,
                     telemetry,
-                ) {
-                    tracing::error!(error = ?e, "RMI runner thread setup failed");
-                    thread_err_flag.store(true, Ordering::Relaxed);
-                }
+                    thread_err_flag,
+                )
             })?;
-        let waker = waker_rx
+        let started = started_rx
             .recv()
-            .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
-        Ok((handle, waker, local_err_flag))
+            .unwrap_or_else(|_| Err(std::io::Error::other("RMI runner exited during startup")));
+        let thread_report = match started {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = handle.join();
+                return Err(e.into());
+            }
+        };
+        let tuning = TuningReport {
+            thread: thread_report,
+            socket: socket_report.summary(),
+        };
+        Ok(StartedRunner {
+            join: handle,
+            waker,
+            err_flag: local_err_flag,
+            tuning,
+        })
     }
 
     fn fill_queue(&mut self, message_queue: &mut VecDeque<PendingWrite>) -> bool {
         while let Ok(msg) = self.from_driver.try_recv() {
             if msg.is_priority() {
-                message_queue.push_front(msg.into_pending_write());
+                // A request already partly on the wire has to be finished
+                // before anything else can be framed after it.
+                let at = usize::from(message_queue.front().is_some_and(|w| w.offset > 0));
+                message_queue.insert(at, msg.into_pending_write());
             } else {
                 message_queue.push_back(msg.into_pending_write());
             }
         }
-        self.response_stack.len() < self.config.buffer_cnt as usize
+        message_queue.front().is_some_and(|w| self.may_write(w))
+            || self.response_stack.len() < self.config.buffer_cnt as usize
+    }
+
+    /// FRC_Disconnect is exempt from the in-flight limit: when every slot is
+    /// held by a request the controller never answers, it is the only way left
+    /// to tell the controller the session is over.
+    fn may_write(&self, w: &PendingWrite) -> bool {
+        w.is_disconnect
+            || w.offset > 0
+            || self.response_stack.len() < self.config.buffer_cnt as usize
     }
 
     fn read_stream(&mut self, buf: &mut [u8]) -> RmiResult<()> {
@@ -215,43 +312,8 @@ impl RmiRunner {
                 }
                 Ok(n) => {
                     tracing::trace!(len = n, "Read bytes from RMI stream");
-                    match rmi_string_reader(&buf[..n]) {
-                        Ok(variadic) => {
-                            tracing::trace!(parts = variadic.len(), "Variadic string parsed");
-                            for json_str in variadic.vec() {
-                                if json_str.trim().is_empty() {
-                                    continue;
-                                }
-                                tracing::debug!(response = %json_str, "RMI Runner received response");
-                                if let Some(resp_handle) = self.response_stack.front() {
-                                    match serde_json::from_str::<ResponsePacket>(&json_str) {
-                                        Ok(packet) => {
-                                            if let Some(sink) = &self.telemetry {
-                                                sink.received(
-                                                    &packet,
-                                                    crate::time_util::host_now(),
-                                                );
-                                            }
-                                            let _ = resp_handle.set_generic(packet);
-                                        }
-                                        Err(e) => {
-                                            let _ = resp_handle.set_error(e.into());
-                                        }
-                                    }
-                                    self.response_stack.pop_front();
-                                } else {
-                                    tracing::warn!(
-                                        response = %json_str,
-                                        "No response handle to match incoming response"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to read RMI response");
-                        }
-                    }
+                    self.rx_buf.extend_from_slice(&buf[..n]);
+                    self.dispatch_lines();
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
                 Err(e) => {
@@ -262,14 +324,119 @@ impl RmiRunner {
         }
     }
 
-    fn write_from_queue(&mut self, q: &mut VecDeque<PendingWrite>) -> bool {
-        if self.response_stack.len() >= self.config.buffer_cnt as usize {
-            return false;
+    /// Resolves a handle for every complete `\r\n`-terminated response
+    /// received so far, leaving a trailing partial one buffered.
+    fn dispatch_lines(&mut self) {
+        let mut consumed = 0;
+        while let Some(len) = self.rx_buf[consumed..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+        {
+            let line = self.rx_buf[consumed..consumed + len].to_vec();
+            consumed += len + 2;
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                self.dispatch_line(&line);
+            }
         }
+        self.rx_buf.drain(..consumed);
+    }
+
+    /// One line from the controller: normally one reply, but two replies
+    /// whose `\r\n` was lost between them arrive as one line of two objects.
+    fn dispatch_line(&mut self, line: &[u8]) {
+        let text = match std::str::from_utf8(line) {
+            Ok(text) => text,
+            Err(e) => return self.resolve(None, Err(e.into()), line),
+        };
+        tracing::debug!(response = %text, "RMI Runner received response");
+        let values: Vec<JsonValue> = serde_json::Deserializer::from_str(text)
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .unwrap_or_default();
+        if values.len() > 1 && values.iter().all(|v| reply_name(v).is_some()) {
+            for value in values {
+                let parsed = ResponsePacket::deserialize(&value).map_err(RmiError::from);
+                self.resolve(Some(&value), parsed, line);
+            }
+            return;
+        }
+        let parsed = serde_json::from_str::<ResponsePacket>(text).map_err(RmiError::from);
+        self.resolve(values.first(), parsed, line);
+    }
+
+    /// Settles the request a reply answers.
+    ///
+    /// Instructions are answered when they complete, and commands at once
+    /// even while instructions are still running (B-84184EN/03 §1.4.4,
+    /// §2.3), so replies do not come back in the order the requests went
+    /// out. An instruction's reply carries its SequenceID; a command's or
+    /// communication packet's carries its name and repeats fields of the
+    /// request, and goes to the oldest unanswered request that matches. A
+    /// line that cannot be read at all goes to the oldest unanswered command,
+    /// since only instructions can still be running.
+    fn resolve(
+        &mut self,
+        reply: Option<&JsonValue>,
+        parsed: RmiResult<ResponsePacket>,
+        line: &[u8],
+    ) {
+        let stack = &self.response_stack;
+        let oldest_command = || stack.iter().position(|h| !h.is_instruction());
+        let instruction = |seq: Option<u64>| {
+            seq.and_then(|seq| {
+                stack
+                    .iter()
+                    .position(|h| h.is_instruction() && u64::from(h.sequence_id()) == seq)
+            })
+        };
+        let at = match reply.and_then(|r| reply_name(r).map(|name| (r, name))) {
+            None => oldest_command().or_else(|| (!stack.is_empty()).then_some(0)),
+            Some((_, ReplyName::Instruction)) => instruction(reply.and_then(sequence_id)),
+            Some((r, ReplyName::Other("FRC_SystemFault"))) => instruction(sequence_id(r))
+                .or_else(|| stack.iter().position(RmiHandleGeneric::is_instruction))
+                .or_else(|| (!stack.is_empty()).then_some(0)),
+            Some((_, ReplyName::Other("FRC_Terminate"))) => {
+                let packet = parsed.ok();
+                for handle in self.response_stack.drain(..) {
+                    match &packet {
+                        Some(p) => drop(handle.set_generic(p.clone())),
+                        None => drop(handle.set_error(RmiError::SystemFaultOrTerminate)),
+                    }
+                }
+                return;
+            }
+            Some((r, ReplyName::Other(name))) => stack
+                .iter()
+                .position(|h| !h.is_instruction() && h.packet_name() == name && h.is_echoed_by(r)),
+        };
+        let Some(handle) = at.and_then(|i| self.response_stack.remove(i)) else {
+            tracing::warn!(
+                response = %String::from_utf8_lossy(line),
+                "No response handle to match incoming response"
+            );
+            return;
+        };
+        match parsed {
+            Ok(packet) => {
+                if let Some(sink) = &self.telemetry {
+                    sink.received(&packet, crate::time_util::host_now());
+                }
+                let _ = handle.set_generic(packet);
+            }
+            Err(e) => {
+                let _ = handle.set_error(e);
+            }
+        }
+    }
+
+    fn write_from_queue(&mut self, q: &mut VecDeque<PendingWrite>) -> bool {
         if !q.is_empty() {
             tracing::trace!("Writing to RMI tcp stream");
         }
-        while let Some(front) = q.front_mut() {
+        while q.front().is_some_and(|w| self.may_write(w)) {
+            let Some(front) = q.front_mut() else {
+                break;
+            };
             let mut write_cnt = 0;
             loop {
                 match self.tcp_stream.write(&front.buf[front.offset..]) {
@@ -290,7 +457,8 @@ impl RmiRunner {
                             self.response_stack.push_back(handle);
                             q.pop_front();
                             if is_disc {
-                                self.handle.has_died();
+                                self.disconnect_deadline =
+                                    Some(Instant::now() + Self::DISCONNECT_REPLY_WAIT);
                                 return true;
                             }
                             break; // move to next message in queue
@@ -308,27 +476,70 @@ impl RmiRunner {
                 }
             }
             tracing::trace!(writes = write_cnt, "Wrote packet to RMI stream");
-            if self.response_stack.len() >= self.config.buffer_cnt as usize {
-                break;
-            }
         }
         false
     }
 
-    fn run(&mut self, mut poll: Poll) -> RmiResult<()> {
+    /// Whether a sent FRC_Disconnect has been answered, along with everything
+    /// before it, or has waited as long as it may.
+    fn disconnect_settled(&self) -> bool {
+        self.disconnect_deadline
+            .is_some_and(|d| self.response_stack.is_empty() || Instant::now() >= d)
+    }
+
+    /// Serves the connection until told to stop or it fails, then fails every
+    /// request that never made it onto the wire.
+    fn run(&mut self, poll: Poll) -> RmiResult<()> {
+        let mut message_queue: VecDeque<PendingWrite> = VecDeque::new();
+        let result = self.serve(poll, &mut message_queue);
+        for unsent in message_queue.drain(..) {
+            let _ = unsent.handle.set_error(RmiError::Disconnected);
+        }
+        result
+    }
+
+    fn serve(
+        &mut self,
+        mut poll: Poll,
+        message_queue: &mut VecDeque<PendingWrite>,
+    ) -> RmiResult<()> {
         let mut events = Events::with_capacity(128);
         let mut read_buf = vec![0u8; 8192];
-        let mut message_queue: VecDeque<PendingWrite> = VecDeque::new();
         let mut connection_established = false;
+        let mut exit_by: Option<Instant> = None;
 
         loop {
-            let timeout = if message_queue.is_empty() {
-                Duration::from_millis(8)
-            } else {
-                Duration::from_millis(96)
+            let timeout = match self.disconnect_deadline {
+                Some(d) => Some(
+                    d.saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(8)),
+                ),
+                None if message_queue.is_empty() => Some(Duration::from_millis(8)),
+                None => Some(Duration::from_millis(96)),
             };
-            poll.poll(&mut events, Some(timeout))
+            poll.poll(&mut events, timeout)
                 .map_err(RmiError::CommunicationError)?;
+
+            if !self.handle.should_live() {
+                let exit_by =
+                    *exit_by.get_or_insert_with(|| Instant::now() + Self::DISCONNECT_REPLY_WAIT);
+                self.fill_queue(message_queue);
+                if connection_established {
+                    self.write_from_queue(message_queue);
+                }
+                // A queued FRC_Disconnect still has to reach the controller,
+                // even when the connection is still being established: keep
+                // serving the socket until it is written, within limits.
+                let disconnect_unsent =
+                    message_queue.iter().any(|w| w.is_disconnect) && Instant::now() < exit_by;
+                let awaiting_reply =
+                    self.disconnect_deadline.is_some() && !self.disconnect_settled();
+                if !disconnect_unsent && !awaiting_reply {
+                    self.tcp_stream.shutdown(std::net::Shutdown::Both)?;
+                    tracing::info!("RMI Runner thread told to exit");
+                    return Ok(());
+                }
+            }
 
             for event in events.iter() {
                 if event.is_writable()
@@ -342,25 +553,33 @@ impl RmiRunner {
                     connection_established = true;
                 }
                 match event.token() {
-                    RmiRunner::TOK_WAKER if !self.fill_queue(&mut message_queue) => {
+                    RmiRunner::TOK_WAKER if !self.fill_queue(message_queue) => {
                         continue;
                     }
                     RmiRunner::TOK_SOCKET => {
-                        self.read_stream(&mut read_buf)?;
-                        if !self.fill_queue(&mut message_queue) {
+                        match self.read_stream(&mut read_buf) {
+                            // The controller may close its end once it has
+                            // answered FRC_Disconnect.
+                            Err(RmiError::Disconnected) if self.disconnect_deadline.is_some() => {
+                                self.tcp_stream.shutdown(std::net::Shutdown::Both).ok();
+                                tracing::info!("RMI Runner thread terminating");
+                                return Ok(());
+                            }
+                            r => r?,
+                        }
+                        if !self.fill_queue(message_queue) {
                             continue;
                         }
                     }
                     _ => {}
                 }
 
-                if connection_established && self.write_from_queue(&mut message_queue) {
-                    tracing::info!("Disconnect sent, terminating runner");
-                    break;
+                if connection_established && self.write_from_queue(message_queue) {
+                    tracing::info!("Disconnect sent, waiting for the reply");
                 }
             }
 
-            if !self.handle.is_alive() {
+            if self.disconnect_settled() || !self.handle.is_alive() {
                 self.tcp_stream.shutdown(std::net::Shutdown::Both)?;
                 tracing::info!("RMI Runner thread terminating");
                 return Ok(());
@@ -369,34 +588,31 @@ impl RmiRunner {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rmi_runner_runtime(
     handle: ThreadHandle,
-    mut tcp_stream: TcpStream,
+    tcp_stream: TcpStream,
+    poll: Poll,
     from_driver: Receiver<RunnerMessage>,
     config: RmiDriverConfig,
-    thread_config: Option<ThreadConfig>,
-    waker_tx: Sender<Arc<Waker>>,
+    thread: Vec<ThreadOption>,
+    started: Sender<std::io::Result<ReportSummary<ThreadOption>>>,
     telemetry: Option<RmiTelemetry>,
-) -> Result<(), GeneralThreadError> {
-    if let Some(cfg) = thread_config {
-        cfg.configure_this_thread_print_failure();
-    }
+    err_flag: Arc<AtomicBool>,
+) {
+    let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
+        Ok(report) => {
+            let _ = started.send(Ok(report.summary()));
+            report
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            return;
+        }
+    };
     if let Some(sink) = &telemetry {
         sink.warmup();
     }
-    let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
-    poll.registry()
-        .register(
-            &mut tcp_stream,
-            RmiRunner::TOK_SOCKET,
-            Interest::READABLE.add(Interest::WRITABLE),
-        )
-        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
-    let waker = Arc::new(
-        Waker::new(poll.registry(), RmiRunner::TOK_WAKER)
-            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
-    );
-    waker_tx.send(waker.clone())?;
     let mut runner = RmiRunner {
         handle,
         tcp_stream,
@@ -404,11 +620,17 @@ fn rmi_runner_runtime(
         response_stack: VecDeque::with_capacity(config.buffer_cnt as usize),
         config,
         telemetry,
+        rx_buf: Vec::new(),
+        disconnect_deadline: None,
     };
     if let Err(e) = runner.run(poll) {
         tracing::error!(error = %e, "RMI runner terminated with error");
+        err_flag.store(true, Ordering::Relaxed);
     }
-    Ok(())
+    runner.handle.has_died();
+    while let Some(pending) = runner.response_stack.pop_front() {
+        let _ = pending.set_error(RmiError::Disconnected);
+    }
 }
 
 /// Connection settings for an [`RmiDriver`].
@@ -552,6 +774,7 @@ struct RmiConnection {
     handle: ThreadHandle,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
 }
 
 /// Client for the FANUC Remote Motion Interface: a JSON-over-TCP protocol for sending
@@ -597,15 +820,39 @@ impl RmiDriver {
     }
 
     /// Performs the FRC_Connect handshake on port 16001 and spawns the I/O thread
-    /// on the negotiated port, optionally with the given thread configuration.
+    /// on the negotiated port.
+    ///
+    /// `thread` is applied by the I/O thread to itself before it starts. That
+    /// thread serves request/response traffic, so it accepts `CpuAffinity`,
+    /// `PrefaultStack`, `LinuxNice`, `UnixScheduler` with `Other`, `Batch` or
+    /// `Idle`, `WinPriority` below `TimeCritical`, `WinDisablePowerThrottling`
+    /// and `MacOsQos`. Real-time classes (`RtPriority`, `UnixScheduler` with
+    /// `Fifo` or `RoundRobin`, `WinPriority(TimeCritical)`, `WinMmcss`,
+    /// `MacOsTimeConstraint`) are refused: on a thread that blocks on TCP
+    /// round-trips they only risk starving the rest of the system.
+    /// Process-wide settings (memory locking, `cpu_dma_latency`, Windows
+    /// priority class and timer resolution) are the application's to make with
+    /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
+    ///
+    /// `socket` is applied to both TCP connections before they connect. It
+    /// accepts `BindDevice`, `Dscp` and `LinuxPriority`: buffer sizes would
+    /// turn off TCP autotuning, and busy polling, `DontFragment` and
+    /// `WinCpuAffinity` do nothing useful for this traffic.
+    ///
+    /// Options for another platform, or that this platform cannot do, are
+    /// skipped with a warning; [`tuning_report`](Self::tuning_report) lists
+    /// them.
     ///
     /// # Errors
-    /// Fails if already connected, on TCP or serde errors during the handshake,
-    /// if the controller rejects the connect with an error code, or if its major
-    /// version is below [`RmiDriverConfig::expected_major_version`].
+    /// Fails if already connected, with [`RmiError::InvalidOption`] for an
+    /// option this driver does not accept, on TCP or serde errors during the
+    /// handshake, if applying an option fails, if the controller rejects the
+    /// connect with an error code, or if its major version is below
+    /// [`RmiDriverConfig::expected_major_version`].
     pub fn connect(
         &mut self,
-        thread_config: Option<ThreadConfig>,
+        thread: &[ThreadOption],
+        socket: &[SocketOption],
     ) -> RmiResult<FrcConnectResponse> {
         tracing::info!(addr = %self.config.address, "Attempting to connect RmiDriver");
         if self.connection.is_some() {
@@ -615,23 +862,26 @@ impl RmiDriver {
             );
             return Err(RmiError::Structure("Driver already started".to_string()));
         }
+        tuning::check_thread(DRIVER, ThreadRole::Control, thread)?;
+        tuning::check_socket(DRIVER, SocketRole::TcpControl, socket)?;
 
         let (to_runner, from_driver) = flume::unbounded();
 
-        let mut tcp = StdTcpStream::connect(SocketAddr::new(self.config.address, 16001))?;
+        let deadline = Instant::now() + self.config.timeout;
+        let (mut tcp, _) = tuning::connect_tcp(
+            DRIVER,
+            SocketRole::TcpControl,
+            SocketAddr::new(self.config.address, 16001),
+            self.config.timeout,
+            socket,
+        )?;
 
         tcp.set_write_timeout(Some(self.config.timeout))?;
-        tcp.set_read_timeout(Some(self.config.timeout))?;
         tcp.set_nodelay(true)?;
         let connect_bytes = rmi_string_writer(connect_json())?;
         tcp.write_all(&connect_bytes)?;
         tcp.flush()?;
-        let response_bytes = {
-            let mut buf = vec![0u8; 4096];
-            let n = tcp.read(&mut buf)?;
-            buf.truncate(n);
-            buf
-        };
+        let response_bytes = read_line_by(&mut tcp, deadline)?;
         let response_str = rmi_string_reader(&response_bytes)?;
         tracing::debug!(response = ?response_str, "Connect response");
         let response = match response_str {
@@ -664,12 +914,23 @@ impl RmiDriver {
         }
 
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker, err_flag) = RmiRunner::start(
+        let session_timeout = deadline.saturating_duration_since(Instant::now());
+        if session_timeout.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
+        }
+        let StartedRunner {
+            join: join_handle,
+            waker,
+            err_flag,
+            tuning,
+        } = RmiRunner::start(
             SocketAddr::new(self.config.address, response.port_number),
+            session_timeout,
             handle.to_pass_in(),
             from_driver,
             self.config.clone(),
-            thread_config,
+            thread.to_vec(),
+            socket,
             self.telemetry.clone(),
         )?;
         handle.set_handle(join_handle);
@@ -682,6 +943,7 @@ impl RmiDriver {
             handle,
             to_runner,
             err_flag,
+            tuning,
         });
 
         tracing::info!(addr = %self.config.address, "RmiDriver connected");
@@ -703,6 +965,7 @@ impl RmiDriver {
             conn.to_runner
                 .send(RunnerMessage::Disconnect(data, resp_handle, true))
                 .map_err(|e| RmiError::CommunicationError(std::io::Error::other(e)))?;
+            let _ = conn.handle.wake();
             conn.handle.join();
             tracing::info!(addr = %self.config.address, "RmiDriver disconnected");
             Ok(specific_handle)
@@ -729,7 +992,13 @@ impl RmiDriver {
         self.get_connection().is_ok()
     }
 
-    /// Whether the I/O thread failed during setup and aborted.
+    /// What the current session connection's thread and socket options did,
+    /// or `None` while disconnected.
+    pub fn tuning_report(&self) -> Option<TuningReport> {
+        self.connection.as_ref().map(|c| c.tuning.clone())
+    }
+
+    /// Whether the I/O thread stopped on an error.
     pub fn has_connection_errored(&self) -> bool {
         if let Some(conn) = &self.connection {
             conn.err_flag.load(Ordering::Relaxed)
@@ -754,6 +1023,19 @@ impl RmiDriver {
         }
     }
 
+    /// The SequenceID for the next instruction. IDs count from 1 on each
+    /// connection, and 0 is never one, so the counter steps from `u32::MAX`
+    /// back to 1.
+    fn next_sequence_id(&self) -> u32 {
+        let step = |seq: u32| seq.checked_add(1).unwrap_or(1);
+        #[allow(deprecated)]
+        let previous = self
+            .seq
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |seq| Some(step(seq)))
+            .unwrap_or_else(|seq| seq);
+        step(previous)
+    }
+
     /// Queues a type-erased packet for sending, assigning instructions a sequence ID,
     /// and returns a handle that resolves with the controller's response.
     ///
@@ -765,13 +1047,12 @@ impl RmiDriver {
     pub fn send_generic(&self, mut packet: SendPacket) -> RmiResult<RmiHandleGeneric> {
         let conn = self.get_connection()?;
         let seq_id = if let SendPacket::Instruction(inst) = &mut packet {
-            let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            inst.set_seq_id(seq + 1);
+            let seq = self.next_sequence_id();
+            inst.set_seq_id(seq);
             seq
         } else {
             0
         };
-        let generic_handle = RmiHandleGeneric::new(packet.packet_name(), seq_id);
         let json_value = serde_json::to_value(&packet)?;
         let content = if let JsonValue::Object(map) = json_value {
             map
@@ -780,6 +1061,7 @@ impl RmiDriver {
                 "Packet did not serialize to a JSON object".to_string(),
             ));
         };
+        let generic_handle = RmiHandleGeneric::new(packet.packet_name(), seq_id).echoing(&content);
         validate_gates(&content, conn.major_version, &self.config.software_options)?;
 
         tracing::debug!(
@@ -845,16 +1127,19 @@ pub(super) mod py {
                 inner: RmiDriver::new(config),
             }
         }
-        #[pyo3(signature = (thread_config=None))]
+        #[pyo3(signature = (thread = None, socket = None))]
         pub fn connect(
             &mut self,
-            thread_config: Option<ThreadConfig>,
+            py: Python<'_>,
+            thread: Option<fast_talker::py::ThreadOptions>,
+            socket: Option<fast_talker::py::SocketOptions>,
         ) -> PyResult<FrcConnectResponse> {
-            self.inner.connect(thread_config).map_err(Into::into)
+            let (thread, socket) = (thread.unwrap_or_default(), socket.unwrap_or_default());
+            py.detach(|| self.inner.connect(&thread, &socket))
+                .map_err(Into::into)
         }
         pub fn disconnect(&mut self, py: Python<'_>) -> PyResult<PyRmiHandleGeneric> {
-            self.inner
-                .disconnect()
+            py.detach(|| self.inner.disconnect())
                 .map_err(Into::into)
                 .map(|inner| PyRmiHandleGeneric {
                     inner: inner.generic(),
@@ -869,6 +1154,14 @@ pub(super) mod py {
         }
         pub fn version(&self) -> Option<(u8, u8)> {
             self.inner.version()
+        }
+        pub fn tuning_report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+            use pyo3::IntoPyObjectExt;
+            self.inner
+                .connection
+                .as_ref()
+                .map(|c| &c.tuning)
+                .into_py_any(py)
         }
         pub fn send(&self, packet: Bound<PyAny>) -> PyResult<PyRmiHandleGeneric> {
             // self.inner.send_generic(packet).map_err(Into::into).map(PyResponseHandleGeneric::from)
@@ -885,8 +1178,7 @@ pub(super) mod py {
                 .map(|inner| PyRmiHandleGeneric { inner, pytype })
         }
         pub fn send_full_reset(&self, py: Python<'_>) -> PyResult<PyRmiHandleGeneric> {
-            self.inner
-                .send_full_reset()
+            py.detach(|| self.inner.send_full_reset())
                 .map_err(Into::into)
                 .map(|inner| PyRmiHandleGeneric {
                     inner: inner.generic(),
@@ -901,3 +1193,6 @@ pub(super) mod py {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod fuzz_test;

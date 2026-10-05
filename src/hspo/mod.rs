@@ -1,33 +1,41 @@
-mod rx_timestamp;
+#[cfg(test)]
+mod fuzz_test;
 #[cfg(test)]
 mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};
+use fast_talker::{
+    Config, Received, Source, Timestamped,
+    options::{ReportSummary, SocketOption, ThreadOption},
+};
 use parking_lot::Mutex;
-use snare::thread;
 use std::{
     collections::{HashMap, VecDeque},
+    io,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime},
+    thread,
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
     joints::{JointFormat, JointTemplate},
-    thread_util::{GeneralThreadError, ThreadConfig},
-    time_util::host_now,
+    thread_util::GeneralThreadError,
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
 use flume::{Receiver, Sender, TrySendError, bounded, unbounded};
+use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 use serde::Serialize;
-use snare::mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket as MioUdpSocket};
 
 const TOK_SOCKET: Token = Token(0);
 const TOK_WAKER: Token = Token(1);
+
+const DRIVER: &str = "hspo";
 
 static HSPO_SERVER: LazyLock<Mutex<Option<HspoBroker>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -48,6 +56,42 @@ impl std::error::Error for HspoBrokerNotInitializedError {}
 impl From<HspoBrokerNotInitializedError> for pyo3::PyErr {
     fn from(err: HspoBrokerNotInitializedError) -> Self {
         pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
+    }
+}
+
+/// Error returned when the HSPO broker cannot be started.
+#[derive(Debug, thiserror::Error)]
+pub enum HspoBrokerError {
+    /// An option the broker does not accept.
+    #[error("{driver} does not accept option {option}")]
+    InvalidOption {
+        option: String,
+        driver: &'static str,
+    },
+    /// Binding or setting up the socket, applying an option, or spawning the
+    /// broker thread failed.
+    #[error("HSPO broker setup failed: {0}")]
+    Io(#[from] io::Error),
+}
+
+impl From<tuning::RefusedOption> for HspoBrokerError {
+    fn from(r: tuning::RefusedOption) -> Self {
+        HspoBrokerError::InvalidOption {
+            option: r.option,
+            driver: r.driver,
+        }
+    }
+}
+
+#[cfg(feature = "py")]
+impl From<HspoBrokerError> for pyo3::PyErr {
+    fn from(err: HspoBrokerError) -> Self {
+        match err {
+            HspoBrokerError::InvalidOption { .. } => {
+                pyo3::exceptions::PyValueError::new_err(err.to_string())
+            }
+            HspoBrokerError::Io(_) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
+        }
     }
 }
 
@@ -323,124 +367,233 @@ struct StreamClock {
     state: Mutex<StreamClockState>,
 }
 
-#[derive(Debug, Default)]
+/// A recently accepted packet that predictions are made from.
+#[derive(Debug, Clone, Copy)]
+struct ClockReference {
+    index: u32,
+    absolute: u64,
+    sys_micros: u64,
+    /// How far the packet's clock was from where its neighbours put it.
+    residual: u64,
+}
+
+#[derive(Debug, Default, Clone)]
 struct StreamClockState {
     last_index: Option<u32>,
     last_clock: u32,
-    last_sys_micros: u64,
     /// Micros contributed by the cycles already folded in, so that `base + clock`
     /// is the packet's absolute controller time.
     base: u64,
-    /// Length of one clock cycle as measured at the most recent wrap.
+    /// Length of one clock cycle, as measured at wraps. Only used to check that a
+    /// later wrap is plausible, never as the amount folded in.
     cycle: Option<u64>,
-    /// Clock micros per packet index, from the most recent ordinary step.
-    period: Option<u64>,
+    /// The newest accepted packets, oldest first.
+    references: VecDeque<ClockReference>,
+    /// Clock micros per packet index, in 1/2^PERIOD_FRACTION_BITS µs, from recent
+    /// steps that did not wrap, with the index each step ended on.
+    periods: VecDeque<(u32, u64)>,
     /// Packets rejected in a row for carrying a stale index.
     stale_run: u32,
+    /// Packets in a row whose clock disagreed with the stream.
+    suspect_run: u32,
     /// `(first index seen on this base, its clock, base)`, newest last.
     wrap_points: VecDeque<(u32, u32, u64)>,
     /// System micros minus cumulative clock micros, from the newest accepted packet.
-    offset_micros: Option<i64>,
+    offset_micros: Option<i128>,
+    /// Where `offset_micros` was stamped.
+    offset_source: Option<Source>,
+    /// The latest absolute clock returned for a packet the stream learned from.
+    returned: u64,
+    /// The newest wrap, while its base is still being measured.
+    recent_wrap: Option<RecentWrap>,
+}
+
+/// A wrap whose base is still being measured from the packets that follow it.
+#[derive(Debug, Clone)]
+struct RecentWrap {
+    previous_base: u64,
+    previous_cycle: Option<u64>,
+    /// What the wrap was predicted from, and the tolerance it was taken with.
+    basis: Basis,
+    tolerance: u64,
+    /// The absolute time the wrapping packet was predicted at, which does not
+    /// depend on its clock.
+    wrapped_at: u64,
+    /// The references from before the wrap, which every later packet on the
+    /// new base is measured against.
+    anchors: VecDeque<ClockReference>,
+    /// The base each packet on the new base puts it at, oldest first.
+    bases: Vec<u64>,
 }
 
 impl StreamClock {
-    /// Cycle length assumed until a wrap has been seen and measured. Only the
-    /// wrap-detection guard band rides on it, so a controller whose counter is
-    /// narrower than this still wraps correctly the first time.
+    /// Cycle assumed for a packet older than every recorded wrap point.
     const NOMINAL_CYCLE: u64 = u32::MAX as u64 + 1;
     const WRAP_HISTORY: usize = 32;
     /// Packets rejected in a row before the stream is taken to have restarted
     /// rather than reordered. Deep enough that no plausible datagram reordering
     /// reaches it, shallow enough that recovery costs a fraction of a second.
     const STALE_RUN_LIMIT: u32 = 16;
+    /// Packets in a row that disagree with the stream before the stream itself is
+    /// taken to have changed. One or two are corrupted datagrams; a run is not.
+    const SUSPECT_RUN_LIMIT: u32 = 4;
+    /// Index distances at or past this are behind, not ahead: the index is a
+    /// free-running u32 that rolls over to 0.
+    const INDEX_HALF_RANGE: u32 = 1 << 31;
+    const REFERENCES: usize = 8;
+    const PERIOD_SAMPLES: usize = 9;
+    const PERIOD_FRACTION_BITS: u32 = 8;
+    /// Packets a new base is measured from before it is final. A wrap is read
+    /// off one packet's clock, which may be the corrupted one.
+    const SETTLE_SAMPLES: usize = 5;
+    /// The shortest clock cycle taken seriously. A µs counter that wraps more
+    /// than once a second is not a controller clock, and anything shorter would
+    /// be indistinguishable from the tolerances below.
+    const MIN_CYCLE: u64 = 1 << 20;
+    /// How far a clock may sit from where the packet index puts it. The index
+    /// and the clock both come from the controller's interpolation timer, so
+    /// this only has to absorb a fractional period and rounding.
+    const INDEX_TOLERANCE: u64 = 1_000;
+    /// How far a clock may sit from where the receive times put it. Receive
+    /// times carry network and scheduling latency.
+    const SYSTEM_TOLERANCE: u64 = Self::MIN_CYCLE / 4;
 
     /// Gates a packet by index and folds its clock into the cumulative value,
     /// recording the offset against `sys_micros`.
     ///
-    /// Returns `None` when `index` is older than the newest already seen on this
+    /// Returns `None` when `index` is behind the newest already seen on this
     /// stream — a reordered or stale datagram the caller must disregard. Otherwise
-    /// returns the absolute cumulative clock `base + clock`.
+    /// returns the absolute cumulative clock `base + clock`, which for a packet
+    /// the stream learns from is never behind one returned before: a base still
+    /// settling after a wrap may move back.
+    ///
+    /// Each packet's absolute time is first *predicted* from the newest packets
+    /// accepted since the last wrap: from the index distance times the measured
+    /// period once two steps agree on one and the index moves, from the elapsed
+    /// receive time otherwise (no less than the index puts it, if a period has
+    /// been seen at all, since a drained backlog stamps a burst of packets within
+    /// the same microsecond). The prediction is the median over those packets,
+    /// so one bad packet among them cannot steer it.
+    ///
+    /// The packet's clock is then read against the prediction. Within tolerance,
+    /// no wrap happened. Behind it by at least half the shortest plausible cycle,
+    /// the counter wrapped one or more times: the prediction minus the clock is
+    /// MEASURED and folded into the base, rather than assumed to be the
+    /// counter's full range — controllers do not all count to 2^32 (the R-30iB
+    /// cycles at roughly 1.29e8µs) — and it holds whether the clock came back
+    /// below or above where it stopped. A wrap is only taken when it is
+    /// consistent: the new clock is no further into its cycle than the time that
+    /// passed, and the measured advance is a whole number of the cycles seen so
+    /// far (or a shorter cycle, which means the earlier one spanned several).
+    ///
+    /// The wrapping packet's clock alone fixes neither the new base nor whether
+    /// there was a wrap at all, as it may be the corrupted one. Until
+    /// [`SETTLE_SAMPLES`](Self::SETTLE_SAMPLES) packets have landed on the new
+    /// base, each is also measured against the packets from before the wrap
+    /// and the base is the median of those measurements. A wrap that the next
+    /// packet contradicts by fitting the old base is undone.
+    ///
+    /// A packet whose clock fits none of that is still delivered, but nothing is
+    /// learned from it: one corrupted clock must not move the stream. A run of
+    /// [`SUSPECT_RUN_LIMIT`](Self::SUSPECT_RUN_LIMIT) of them means the stream
+    /// itself changed, and it is re-anchored on the receive time.
     ///
     /// A high-water mark alone would strand the stream for good once a controller
     /// restarts its stream and counts from zero again, so a backward index that
     /// persists past [`STALE_RUN_LIMIT`](Self::STALE_RUN_LIMIT) is read as a restart
     /// instead: the clock re-anchors on the new packet and keeps running forward.
     ///
-    /// Because out-of-order packets are gated out here, the accepted samples are in
-    /// order, so a backward clock step on a strictly-newer packet is an unambiguous
-    /// wrap. The boundary check (previous value near the top of the cycle, new value
-    /// near the bottom) covers streams whose index does not advance between packets,
-    /// e.g. duplicates or controllers that leave `index` fixed.
-    ///
-    /// How far the clock jumped at a wrap is MEASURED rather than assumed to be the
-    /// counter's full range. Controllers do not all count to 2^32: the R-30iB cycles
-    /// at roughly 1.29e8µs, and folding in 2^32 there put every packet still buffered
-    /// from before the wrap 4166s adrift.
-    ///
-    /// The measurement takes the packet rate over the receive times wherever it can.
-    /// Kernel rx timestamps carry each datagram's own arrival, but the fallback
-    /// stamps at user-space receive — and a drained backlog stamps a burst of packets
-    /// within the same microsecond, so elapsed reads as zero and is only ever a
-    /// floor. The index delta times the observed period is what holds the spacing
-    /// together when the wrap lands mid-burst.
-    #[cfg_vis(test, pub)]
-    fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
+    /// The offset to system time is taken from the newest packet stamped by
+    /// the kernel or the NIC, and from user-space stamps only until the first
+    /// such packet: a user-space stamp includes however long the packet sat in
+    /// the socket buffer.
+    fn accept_from(&self, index: u32, clock: u32, sys_micros: u64, source: Source) -> Option<u64> {
         let mut state = self.state.lock();
-        match state.last_index {
-            Some(last_index) if index < last_index => {
-                state.stale_run += 1;
-                if state.stale_run < Self::STALE_RUN_LIMIT {
-                    return None;
-                }
-                let elapsed = sys_micros.saturating_sub(state.last_sys_micros);
-                let resumed = state.base + state.last_clock as u64 + elapsed;
-                state.base = resumed.saturating_sub(clock as u64);
-                // Indices start over, so the recorded points can no longer say
-                // which base a buffered packet belongs to. The cycle survives:
-                // it is a property of the controller, not of the stream.
-                state.wrap_points.clear();
-                state.period = None;
+        let (absolute, committed) = Self::fold_in(&mut state, index, clock, sys_micros)?;
+        if !committed {
+            return Some(absolute);
+        }
+        if source >= Source::Kernel || state.offset_source < Some(Source::Kernel) {
+            state.offset_micros = Some(sys_micros as i128 - absolute as i128);
+            state.offset_source = Some(source);
+        }
+        state.returned = state.returned.max(absolute);
+        Some(state.returned)
+    }
+
+    /// [`accept_from`](Self::accept_from) with a kernel receive stamp.
+    #[cfg(test)]
+    pub fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
+        self.accept_from(index, clock, sys_micros, Source::Kernel)
+    }
+
+    /// The packet's absolute clock, and whether the stream learned from it.
+    fn fold_in(
+        state: &mut StreamClockState,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+    ) -> Option<(u64, bool)> {
+        let Some(last_index) = state.last_index else {
+            let base = state.base;
+            return Some((state.commit(index, clock, sys_micros, base, 0, false), true));
+        };
+        let distance = index.wrapping_sub(last_index);
+        if distance >= Self::INDEX_HALF_RANGE || state.index_outruns_time(distance, sys_micros) {
+            state.stale_run += 1;
+            if state.stale_run < Self::STALE_RUN_LIMIT {
+                return None;
             }
-            Some(last_index) => {
-                let packets = u64::from(index - last_index);
-                if clock < state.last_clock {
-                    let cycle = state.cycle.unwrap_or(Self::NOMINAL_CYCLE);
-                    let guard = cycle / 4;
-                    let crossed_boundary =
-                        state.last_clock as u64 > cycle - guard && (clock as u64) < guard;
-                    if packets > 0 || crossed_boundary {
-                        let elapsed = sys_micros.saturating_sub(state.last_sys_micros);
-                        let by_rate = state.period.map_or(0, |p| p.saturating_mul(packets));
-                        let advance = elapsed.max(by_rate) + state.last_clock as u64 - clock as u64;
-                        state.base = state.base.saturating_add(advance);
-                        // A stalled stream can skip whole cycles, which folds into
-                        // `base` correctly but overstates the cycle itself. The
-                        // shortest advance ever measured is the one that crossed a
-                        // single boundary.
-                        if state.cycle.is_none_or(|c| advance < c) {
-                            state.cycle = Some(advance);
-                        }
-                    }
-                } else if clock > state.last_clock && packets > 0 {
-                    state.period = Some((clock as u64 - state.last_clock as u64) / packets);
-                }
-            }
-            None => {}
+            // Indices start over, so the recorded points can no longer say
+            // which base a buffered packet belongs to. The cycle survives:
+            // it is a property of the controller, not of the stream.
+            let base = state.resumed_base(clock, sys_micros);
+            state.wrap_points.clear();
+            state.forget_stream();
+            return Some((state.commit(index, clock, sys_micros, base, 0, false), true));
         }
         state.stale_run = 0;
-        if state.wrap_points.back().map(|&(_, _, b)| b) != Some(state.base) {
-            let base = state.base;
-            state.wrap_points.push_back((index, clock, base));
-            if state.wrap_points.len() > Self::WRAP_HISTORY {
-                state.wrap_points.pop_front();
-            }
+
+        let fold = state
+            .fold_any(index, clock, sys_micros, distance)
+            .or_else(|| {
+                let (undone, confirmed) = state.before_recent_wrap()?;
+                let fold = undone.fold_any(index, clock, sys_micros, distance)?;
+                if fold.wrapped {
+                    // The packets from before the wrap see it too, so the wrap
+                    // stands and only its base is off: settling measures it.
+                    return Some(ClockFold {
+                        base: state.base,
+                        cycle: state.cycle,
+                        wrapped: false,
+                        ..fold
+                    });
+                }
+                if confirmed {
+                    return None;
+                }
+                *state = undone;
+                Some(fold)
+            });
+        if let Some(fold) = fold {
+            state.suspect_run = 0;
+            return Some((state.apply(index, clock, sys_micros, fold), true));
         }
-        state.last_index = Some(index);
-        state.last_clock = clock;
-        state.last_sys_micros = sys_micros;
-        let absolute = state.base + clock as u64;
-        state.offset_micros = Some(sys_micros as i64 - absolute as i64);
-        Some(absolute)
+        state.suspect_run += 1;
+        if state.suspect_run < Self::SUSPECT_RUN_LIMIT {
+            return Some((state.base.saturating_add(clock as u64), false));
+        }
+        state.suspect_run = 0;
+        let fold = state.fold(index, clock, sys_micros, Basis::Time(None));
+        state.forget_stream();
+        let absolute = match fold {
+            Some(fold) => state.apply(index, clock, sys_micros, fold),
+            None => {
+                let base = state.resumed_base(clock, sys_micros);
+                state.commit(index, clock, sys_micros, base, 0, false)
+            }
+        };
+        Some((absolute, true))
     }
 
     /// Reconstructs the system time at which the packet carrying this index and
@@ -458,17 +611,19 @@ impl StreamClock {
     fn system_time_of(&self, index: u32, clock: u32) -> Option<SystemTime> {
         let state = self.state.lock();
         let offset = state.offset_micros?;
+        let at_or_after =
+            |first_index: u32| index.wrapping_sub(first_index) < Self::INDEX_HALF_RANGE;
         let base =
             state
                 .wrap_points
                 .back()
                 .filter(|&&(first_index, first_clock, _)| {
-                    first_index <= index && first_clock <= clock && clock <= state.last_clock
+                    at_or_after(first_index) && first_clock <= clock && clock <= state.last_clock
                 })
                 .or_else(|| {
                     state.wrap_points.iter().rev().skip(1).find(
                         |&&(first_index, first_clock, _)| {
-                            first_index <= index && first_clock <= clock
+                            at_or_after(first_index) && first_clock <= clock
                         },
                     )
                 })
@@ -477,10 +632,413 @@ impl StreamClock {
                     let &(_, _, oldest) = state.wrap_points.front()?;
                     Some(oldest.saturating_sub(state.cycle.unwrap_or(Self::NOMINAL_CYCLE)))
                 })?;
-        let micros = (base + clock as u64) as i128 + offset as i128;
-        u64::try_from(micros)
-            .ok()
-            .map(|m| SystemTime::UNIX_EPOCH + Duration::from_micros(m))
+        let micros = base as i128 + clock as i128 + offset;
+        let micros = u64::try_from(micros).ok()?;
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_micros(micros))
+    }
+}
+
+/// What a packet's absolute time is predicted from.
+#[derive(Debug, Clone, Copy)]
+enum Basis {
+    /// The index distance times this period.
+    Index(u64),
+    /// The receive time elapsed, no less than the index distance times this
+    /// period.
+    Time(Option<u64>),
+}
+
+/// How a packet's clock reads against the stream: the base it belongs on, and
+/// the cycle estimate that results.
+#[derive(Debug, Clone, Copy)]
+struct ClockFold {
+    base: u64,
+    cycle: Option<u64>,
+    residual: u64,
+    wrapped: bool,
+    basis: Basis,
+    tolerance: u64,
+}
+
+impl StreamClockState {
+    /// The per-index period, once two recent steps agree on it. A single
+    /// sample could be a corrupted clock and is not enough to steer by.
+    fn period(&self) -> Option<u64> {
+        let median = Self::median_of(self.periods.iter().map(|&(_, p)| p))?;
+        let tolerance = (median / 64).max(1 << StreamClock::PERIOD_FRACTION_BITS);
+        let agreeing = self
+            .periods
+            .iter()
+            .filter(|&&(_, p)| p.abs_diff(median) <= tolerance)
+            .count();
+        (agreeing >= 2).then_some(median)
+    }
+
+    /// The period over the recent steps, agreed on or not.
+    fn any_period(&self) -> Option<u64> {
+        Self::floor_period(self.periods.iter().map(|&(_, p)| p))
+    }
+
+    /// The median of `periods`, once there are two: a lone one may be a
+    /// corrupted clock's.
+    fn floor_period(periods: impl Iterator<Item = u64>) -> Option<u64> {
+        let periods: Vec<u64> = periods.collect();
+        if periods.len() < 2 {
+            return None;
+        }
+        Self::median_of(periods.into_iter())
+    }
+
+    fn median_of(values: impl Iterator<Item = u64>) -> Option<u64> {
+        let mut sorted: Vec<u64> = values.collect();
+        if sorted.is_empty() {
+            return None;
+        }
+        sorted.sort_unstable();
+        Some(sorted[(sorted.len() - 1) / 2])
+    }
+
+    fn by_rate(period: u64, distance: u32) -> u64 {
+        let micros = (period as u128 * distance as u128) >> StreamClock::PERIOD_FRACTION_BITS;
+        u64::try_from(micros).unwrap_or(u64::MAX)
+    }
+
+    /// An index that claims far more packets than the receive times allow is a
+    /// corrupted or restarted index, not the stream moving forward.
+    fn index_outruns_time(&self, distance: u32, sys_micros: u64) -> bool {
+        let (Some(period), Some(newest)) = (self.period(), self.references.back()) else {
+            return false;
+        };
+        let elapsed = sys_micros.saturating_sub(newest.sys_micros);
+        Self::by_rate(period, distance)
+            > elapsed
+                .saturating_mul(2)
+                .saturating_add(StreamClock::MIN_CYCLE)
+    }
+
+    /// Where the references put a packet with this index and receive time, no
+    /// earlier than the two newest of them, and how far from that its clock may
+    /// sit. The newest alone may carry a corrupted clock.
+    fn predict(&self, index: u32, sys_micros: u64, basis: Basis) -> Option<(u64, u64)> {
+        let newest = self.references.back()?.absolute;
+        let earliest = match self.references.len() {
+            0 | 1 => newest,
+            n => newest.min(self.references[n - 2].absolute),
+        };
+        let prediction = Self::median_prediction(&self.references, index, sys_micros, basis)?;
+        let prediction = prediction.max(earliest);
+        let advance = prediction.saturating_sub(newest);
+        let tolerance = match basis {
+            Basis::Index(_) => StreamClock::INDEX_TOLERANCE.saturating_add(advance / 64),
+            Basis::Time(_) => StreamClock::SYSTEM_TOLERANCE,
+        };
+        Some((prediction, tolerance))
+    }
+
+    /// The median of where each of `references` puts a packet with this index
+    /// and receive time.
+    fn median_prediction(
+        references: &VecDeque<ClockReference>,
+        index: u32,
+        sys_micros: u64,
+        basis: Basis,
+    ) -> Option<u64> {
+        let mut predictions: Vec<(u64, u64)> = references
+            .iter()
+            .map(|r| {
+                let distance = index.wrapping_sub(r.index);
+                let advance = match basis {
+                    Basis::Index(period) => Self::by_rate(period, distance),
+                    Basis::Time(floor) => {
+                        let elapsed = sys_micros.saturating_sub(r.sys_micros);
+                        elapsed.max(floor.map_or(0, |p| Self::by_rate(p, distance)))
+                    }
+                };
+                (r.absolute.saturating_add(advance), r.residual)
+            })
+            .collect();
+        Self::robust_median(&mut predictions)
+    }
+
+    /// [`fold`](Self::fold) on the index distance times the period once one is
+    /// agreed on, on the receive time otherwise.
+    fn fold_any(
+        &self,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+        distance: u32,
+    ) -> Option<ClockFold> {
+        match self.period().filter(|_| distance > 0) {
+            Some(period) => self.fold(index, clock, sys_micros, Basis::Index(period)),
+            // A period not yet agreed on keeps a drained backlog's shared receive
+            // stamp from collapsing the spacing, unless it is the period that
+            // makes the packet fit nowhere. It may also be a corrupted clock's,
+            // so it can refine a wrap the receive times see but not make one.
+            None => {
+                let plain = || self.fold(index, clock, sys_micros, Basis::Time(None));
+                match self.fold(index, clock, sys_micros, Basis::Time(self.any_period())) {
+                    Some(fold) if fold.wrapped && !plain().is_some_and(|p| p.wrapped) => plain(),
+                    Some(fold) => Some(fold),
+                    None => plain(),
+                }
+            }
+        }
+    }
+
+    /// Reads `clock` against the prediction: the same base, or a measured wrap
+    /// onto a later one. `None` when it fits neither.
+    fn fold(&self, index: u32, clock: u32, sys_micros: u64, basis: Basis) -> Option<ClockFold> {
+        let (prediction, tolerance) = self.predict(index, sys_micros, basis)?;
+        let here = self.base.checked_add(clock as u64)?;
+        if here.abs_diff(prediction) <= tolerance {
+            return Some(ClockFold {
+                base: self.base,
+                cycle: self.cycle,
+                residual: here.abs_diff(prediction),
+                wrapped: false,
+                basis,
+                tolerance,
+            });
+        }
+        if here > prediction {
+            return None;
+        }
+        let advance = prediction - here;
+        let since_newest = prediction.saturating_sub(self.references.back()?.absolute);
+        if advance < StreamClock::MIN_CYCLE / 2
+            || clock as u64 > since_newest.saturating_add(tolerance)
+        {
+            return None;
+        }
+        let (cycle, residual) = Self::measure_cycle(self.cycle, advance, tolerance)?;
+        Some(ClockFold {
+            base: self.base.checked_add(advance)?,
+            cycle: Some(cycle),
+            residual,
+            wrapped: true,
+            basis,
+            tolerance,
+        })
+    }
+
+    /// The cycle after a wrap that advanced the base by `advance`, and how far
+    /// the advance is from a whole number of the cycles seen before. `None`
+    /// when the advance is inconsistent with them.
+    fn measure_cycle(previous: Option<u64>, advance: u64, tolerance: u64) -> Option<(u64, u64)> {
+        if advance.saturating_add(tolerance) < StreamClock::MIN_CYCLE {
+            return None;
+        }
+        let Some(cycle) = previous else {
+            return Some((advance, 0));
+        };
+        let cycles = advance.saturating_add(cycle / 2) / cycle;
+        let whole = cycles.saturating_mul(cycle);
+        if cycles >= 1 && advance.abs_diff(whole) <= tolerance.max(cycle / 16) {
+            let cycle = if cycles == 1 {
+                cycle.min(advance)
+            } else {
+                cycle
+            };
+            Some((cycle, advance.abs_diff(whole)))
+        } else if advance < cycle {
+            // The cycle measured before spanned several boundaries.
+            Some((advance, 0))
+        } else {
+            None
+        }
+    }
+
+    /// The state from before the newest wrap while it is settling, and
+    /// whether any packet besides the one that wrapped has landed on it.
+    fn before_recent_wrap(&self) -> Option<(Self, bool)> {
+        let wrap = self.recent_wrap.as_ref()?;
+        let confirmed = wrap.bases.len() > 1;
+        let mut undone = self.clone();
+        undone.base = wrap.previous_base;
+        undone.cycle = wrap.previous_cycle;
+        undone.references = wrap.anchors.clone();
+        undone.wrap_points.pop_back();
+        undone.recent_wrap = None;
+        Some((undone, confirmed))
+    }
+
+    /// Measures the newest wrap's base once more, from a packet that landed
+    /// on it, against the packets from before the wrap, and moves the base to
+    /// the median of the measurements so far. An even count is split towards
+    /// the newer measurement.
+    ///
+    /// The packets on the base, and the lowest clock it is recorded to start
+    /// at, move with it: the wrapping packet's own clock may be the corrupted
+    /// one, so the wrap is taken to start no later than where it was predicted.
+    fn settle(&mut self, index: u32, clock: u32, sys_micros: u64, basis: Basis) {
+        let step = self.references.back().and_then(|newest| {
+            let distance = Some(index.wrapping_sub(newest.index)).filter(|&d| d > 0)?;
+            let micros = self
+                .base
+                .checked_add(clock as u64)?
+                .checked_sub(newest.absolute)?;
+            let period = ((micros as u128) << StreamClock::PERIOD_FRACTION_BITS) / distance as u128;
+            Some(u64::try_from(period).unwrap_or(u64::MAX))
+        });
+        let now = Self::floor_period(self.periods.iter().map(|&(_, p)| p).chain(step));
+        let Some(wrap) = self.recent_wrap.as_mut() else {
+            return;
+        };
+        // The period the wrap was floored with, or the current one counting
+        // the step into this packet, may come from the corrupted clock, which
+        // can only make it longer. A floor that is too short leaves the
+        // receive time to decide.
+        let basis = match (basis, wrap.basis) {
+            (Basis::Index(period), _) | (Basis::Time(_), Basis::Index(period)) => {
+                Basis::Index(period)
+            }
+            (Basis::Time(_), Basis::Time(then)) => {
+                Basis::Time(now.map(|now| then.map_or(now, |then| now.min(then))))
+            }
+        };
+        if let Some(prediction) = Self::median_prediction(&wrap.anchors, index, sys_micros, basis) {
+            wrap.bases.push(prediction.saturating_sub(clock as u64));
+        }
+        let count = wrap.bases.len();
+        let mut bases: Vec<(u64, u64)> = wrap
+            .bases
+            .iter()
+            .enumerate()
+            .map(|(k, &base)| (base, (count - k) as u64))
+            .collect();
+        let base = Self::robust_median(&mut bases)
+            .filter(|&base| base > wrap.previous_base)
+            .unwrap_or(self.base);
+        if let Some((cycle, _)) = Self::measure_cycle(
+            wrap.previous_cycle,
+            base - wrap.previous_base,
+            wrap.tolerance,
+        ) {
+            self.cycle = Some(cycle);
+        }
+        let first_clock = u32::try_from(wrap.wrapped_at.saturating_sub(base)).unwrap_or(u32::MAX);
+        if count >= StreamClock::SETTLE_SAMPLES {
+            self.recent_wrap = None;
+        }
+        for reference in &mut self.references {
+            reference.absolute = base.saturating_add(reference.absolute.saturating_sub(self.base));
+        }
+        if let Some(point) = self.wrap_points.back_mut().filter(|p| p.2 == self.base) {
+            point.1 = point.1.min(first_clock);
+            point.2 = base;
+        }
+        self.base = base;
+    }
+
+    /// Where the stream resumes when nothing it carries can be trusted: the
+    /// newest packet's time plus the receive time since.
+    fn resumed_base(&self, clock: u32, sys_micros: u64) -> u64 {
+        let resumed = match self.references.back() {
+            Some(newest) => newest
+                .absolute
+                .saturating_add(sys_micros.saturating_sub(newest.sys_micros)),
+            None => self.base.saturating_add(self.last_clock as u64),
+        };
+        resumed.saturating_sub(clock as u64)
+    }
+
+    /// The median, with an even count's middle pair split towards the smaller
+    /// key: for references, how far the stream was from agreeing with them
+    /// when they arrived.
+    fn robust_median<T: Ord + Copy>(values: &mut [(T, u64)]) -> Option<T> {
+        values.sort_unstable();
+        let n = values.len();
+        if n == 0 {
+            return None;
+        }
+        if n % 2 == 1 {
+            return Some(values[n / 2].0);
+        }
+        let (lo, hi) = (values[n / 2 - 1], values[n / 2]);
+        Some(if hi.1 < lo.1 { hi.0 } else { lo.0 })
+    }
+
+    fn forget_stream(&mut self) {
+        self.references.clear();
+        self.periods.clear();
+        self.recent_wrap = None;
+    }
+
+    fn apply(&mut self, index: u32, clock: u32, sys_micros: u64, fold: ClockFold) -> u64 {
+        if fold.wrapped {
+            self.recent_wrap = Some(RecentWrap {
+                previous_base: self.base,
+                previous_cycle: self.cycle,
+                basis: fold.basis,
+                tolerance: fold.tolerance,
+                wrapped_at: fold.base.saturating_add(clock as u64),
+                anchors: self.references.clone(),
+                bases: vec![fold.base],
+            });
+        }
+        self.cycle = fold.cycle;
+        let base = if fold.wrapped {
+            fold.base
+        } else {
+            self.settle(index, clock, sys_micros, fold.basis);
+            self.base
+        };
+        self.commit(index, clock, sys_micros, base, fold.residual, fold.wrapped)
+    }
+
+    fn commit(
+        &mut self,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+        base: u64,
+        residual: u64,
+        wrapped: bool,
+    ) -> u64 {
+        let absolute = base.saturating_add(clock as u64);
+        if let Some(newest) = self.references.back() {
+            let distance = index.wrapping_sub(newest.index);
+            if !wrapped && distance > 0 && absolute >= newest.absolute {
+                let micros = (absolute - newest.absolute) as u128;
+                let period = (micros << StreamClock::PERIOD_FRACTION_BITS) / distance as u128;
+                self.periods
+                    .push_back((index, u64::try_from(period).unwrap_or(u64::MAX)));
+                if self.periods.len() > StreamClock::PERIOD_SAMPLES {
+                    self.periods.pop_front();
+                }
+            } else if !wrapped && distance > 0 {
+                // The clock ran backwards on one base: this packet's clock or
+                // the newest one's is corrupted, so the step into the newest
+                // says nothing about the period.
+                let newest = newest.index;
+                if self.periods.back().is_some_and(|&(end, _)| end == newest) {
+                    self.periods.pop_back();
+                }
+            }
+        }
+        if base != self.base {
+            self.references.clear();
+        }
+        self.base = base;
+        if self.wrap_points.back().map(|&(_, _, b)| b) != Some(base) {
+            self.wrap_points.push_back((index, clock, base));
+            if self.wrap_points.len() > StreamClock::WRAP_HISTORY {
+                self.wrap_points.pop_front();
+            }
+        }
+        self.references.push_back(ClockReference {
+            index,
+            absolute,
+            sys_micros,
+            residual,
+        });
+        if self.references.len() > StreamClock::REFERENCES {
+            self.references.pop_front();
+        }
+        self.last_index = Some(index);
+        self.last_clock = clock;
+        absolute
     }
 }
 
@@ -500,7 +1058,7 @@ pub type HspoTelemetry = Arc<dyn crate::TelemetrySink<(), HspoRxPacket>>;
 #[derive(Debug)]
 struct RobotSender {
     ip_of_interest: IpAddr,
-    last_packet_time: Option<snare::time::Instant>,
+    last_packet_time: Option<Instant>,
     connection_active: Arc<AtomicBool>,
     connection_timeout: Duration,
     tcp_tx: Sender<TcpCartesianPositionPacket>,
@@ -518,19 +1076,28 @@ struct RobotSender {
 impl RobotSender {
     /// Gates a freshly received packet by its per-stream index and folds its clock
     /// into the stream's shared wrap-corrected clock tracker. `sys_micros` is the
-    /// receive time as micros since the Unix epoch — the kernel rx timestamp when
-    /// available, user-space receive time otherwise.
+    /// receive time as micros since the Unix epoch, taken from `source`: the
+    /// kernel rx timestamp when available, user-space receive time otherwise.
     ///
     /// Returns `false` if `index` is older than the newest already seen on `stream`,
     /// meaning the packet is reordered or stale and the caller must disregard it (not
     /// forward it to its channel). Each stream tracks its own highest index.
-    fn accept_packet(&self, stream: HspoStream, index: u32, clock: u32, sys_micros: u64) -> bool {
+    fn accept_packet(
+        &self,
+        stream: HspoStream,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+        source: Source,
+    ) -> bool {
         let stream_clock = match stream {
             HspoStream::Tcp => &self.tcp_clock,
             HspoStream::Joint => &self.joint_clock,
             HspoStream::Variables => &self.var_clock,
         };
-        stream_clock.accept(index, clock, sys_micros).is_some()
+        stream_clock
+            .accept_from(index, clock, sys_micros, source)
+            .is_some()
     }
 }
 
@@ -579,7 +1146,6 @@ impl<T> HspoChannel<T> {
     /// Buffered packets are yielded immediately; otherwise the future is woken
     /// when the broker thread delivers the next packet. Pair with your runtime's
     /// timeout combinator if a deadline is needed.
-    #[cfg(feature = "async")]
     pub async fn recv_async(&self) -> Option<T> {
         self.rx.recv_async().await.ok()
     }
@@ -663,14 +1229,14 @@ mod py_channel {
         fn wait_for(&self, py: Python<'_>, timeout_secs: f64) -> Option<Py<PyAny>> {
             let timeout = Duration::from_secs_f64(timeout_secs);
             match &self.inner {
-                InnerChannel::Tcp(ch) => ch
-                    .wait_for(timeout)
+                InnerChannel::Tcp(ch) => py
+                    .detach(|| ch.wait_for(timeout))
                     .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
-                InnerChannel::Joint(ch) => ch
-                    .wait_for(timeout)
+                InnerChannel::Joint(ch) => py
+                    .detach(|| ch.wait_for(timeout))
                     .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
-                InnerChannel::Var(ch) => ch
-                    .wait_for(timeout)
+                InnerChannel::Var(ch) => py
+                    .detach(|| ch.wait_for(timeout))
                     .and_then(|v| Bound::new(py, v).ok().map(|b| b.into_any().unbind())),
             }
         }
@@ -828,7 +1394,8 @@ impl HspoReceiver {
         }
     }
 
-    /// Returns `true` if a packet has been received from this robot recently.
+    /// Returns `true` if a packet has been received from this robot within
+    /// its connection timeout.
     pub fn is_connected(&self) -> bool {
         self.connection_active.load(Ordering::Relaxed)
     }
@@ -857,46 +1424,81 @@ impl HspoReceiver {
 
 struct HspoBroker {
     robot_appender: Sender<RobotSender>,
+    tuning: TuningReport,
     waker: Arc<Waker>,
     err_flag: Arc<AtomicBool>,
     kill_switch: Arc<AtomicBool>,
     _thread_handle: std::thread::JoinHandle<()>,
 }
 
+/// The broker's socket and poller, set up on the caller so a bind failure
+/// surfaces from [`initialize_broker`] and the waker exists before the thread.
+struct BrokerIo {
+    socket: Timestamped<MioUdpSocket>,
+    tuning: ReportSummary<SocketOption>,
+    poll: Poll,
+    waker: Arc<Waker>,
+}
+
+impl BrokerIo {
+    fn new(listen_on: SocketAddr, options: &[SocketOption]) -> Result<Self, HspoBrokerError> {
+        let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+        let (socket, report) =
+            tuning::bind_udp(DRIVER, SocketRole::UdpStreamRx, listen_on, options)?;
+        socket.set_nonblocking(true)?;
+        let mut socket =
+            Timestamped::with_config(MioUdpSocket::from_std(socket), Config::kernel_only());
+        if socket.source() < Source::Kernel {
+            tracing::debug!("HSPO kernel rx timestamps unavailable");
+        }
+        poll.registry()
+            .register(&mut socket, TOK_SOCKET, Interest::READABLE)
+            .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
+        let waker = Arc::new(
+            Waker::new(poll.registry(), TOK_WAKER)
+                .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
+        );
+        Ok(Self {
+            socket,
+            tuning: report.summary(),
+            poll,
+            waker,
+        })
+    }
+}
+
+impl From<GeneralThreadError> for HspoBrokerError {
+    fn from(e: GeneralThreadError) -> Self {
+        match e {
+            GeneralThreadError::Io(e) => HspoBrokerError::Io(e),
+            other => HspoBrokerError::Io(io::Error::other(other.to_string())),
+        }
+    }
+}
+
 fn broker_runtime(
-    listen_on: SocketAddr,
-    thread_config: Option<ThreadConfig>,
+    io: BrokerIo,
+    thread: Vec<ThreadOption>,
+    started: Sender<io::Result<ReportSummary<ThreadOption>>>,
     robot_receiver: Receiver<RobotSender>,
     thread_kill_switch: Arc<AtomicBool>,
-    waker_tx: Sender<Arc<Waker>>,
-) -> Result<(), GeneralThreadError> {
-    if let Some(thread_config) = thread_config {
-        thread_config.configure_this_thread_print_failure();
-    }
-
-    let mut poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
-    let mut events = Events::with_capacity(256);
-    let mut socket =
-        MioUdpSocket::bind(listen_on).map_err(|_| GeneralThreadError::FailedSocketBinding)?;
-    #[cfg(test)]
-    {
-        let _ = socket.set_nonblocking(true);
-    }
-    let kernel_ts = match rx_timestamp::enable_rx_timestamping(&socket) {
-        Ok(()) => true,
+) {
+    let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Stream, &thread) {
+        Ok(report) => {
+            let _ = started.send(Ok(report.summary()));
+            report
+        }
         Err(e) => {
-            tracing::debug!(error = %e, "HSPO kernel rx timestamps unavailable");
-            false
+            let _ = started.send(Err(e));
+            return;
         }
     };
-    poll.registry()
-        .register(&mut socket, TOK_SOCKET, Interest::READABLE)
-        .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
-    let waker = Arc::new(
-        Waker::new(poll.registry(), TOK_WAKER)
-            .map_err(|_| GeneralThreadError::FailedWakerCreation)?,
-    );
-    waker_tx.send(waker)?;
+
+    let BrokerIo {
+        socket, mut poll, ..
+    } = io;
+    let mut socket_drops = 0;
+    let mut events = Events::with_capacity(256);
 
     let mut robot_senders: HashMap<IpAddr, Vec<RobotSender>> = HashMap::new();
     let mut shortest_timeout = Duration::from_millis(256);
@@ -932,17 +1534,28 @@ fn broker_runtime(
 
             // Read all pending datagrams.
             loop {
-                let received = if kernel_ts {
-                    rx_timestamp::recv_from_timestamped(&socket, &mut buf)
-                } else {
-                    socket.recv_from(&mut buf).map(|(n, addr)| (n, addr, None))
-                };
-                match received {
-                    Ok((n, addr, rx_ts)) => {
+                match socket.recv_from(&mut buf) {
+                    Ok(Received {
+                        len: n,
+                        from,
+                        timestamp,
+                        drops,
+                        ..
+                    }) => {
+                        if let Some(drops) = drops {
+                            if drops > socket_drops {
+                                tracing::warn!(
+                                    dropped = drops - socket_drops,
+                                    total = drops,
+                                    "HSPO socket dropped datagrams for lack of receive buffer"
+                                );
+                            }
+                            socket_drops = drops;
+                        }
                         if n == 0 {
                             continue;
                         }
-                        let src_ip = addr.ip();
+                        let src_ip = from.ip();
 
                         // Fast path: if nobody cares about this IP, skip parsing.
                         let Some(listeners) = robot_senders.get_mut(&src_ip) else {
@@ -951,8 +1564,8 @@ fn broker_runtime(
 
                         // Determine packet type. 'typ' is at offset 12 (u32,u32,u32 -> 12 bytes).
                         let pkt_type = PacketType::from_bytes(&buf[..n], 12);
-                        let now = snare::time::Instant::now();
-                        let sys_time = rx_ts.unwrap_or_else(host_now);
+                        let now = Instant::now();
+                        let sys_time = timestamp.time;
                         let sys_micros: u64 = sys_time
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap_or(Duration::ZERO)
@@ -982,6 +1595,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1014,6 +1628,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1044,6 +1659,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1076,7 +1692,7 @@ fn broker_runtime(
         }
 
         // Update connection-active flags based on last packet timestamp (10ms timeout).
-        let now = snare::time::Instant::now();
+        let now = Instant::now();
         for listeners in robot_senders.values_mut() {
             for rs in listeners.iter_mut() {
                 let active = rs
@@ -1097,7 +1713,6 @@ fn broker_runtime(
             });
         }
     }
-    Ok(())
 }
 
 impl HspoBroker {
@@ -1154,39 +1769,55 @@ impl HspoBroker {
 
     fn create(
         listen_on: SocketAddr,
-        thread_config: Option<ThreadConfig>,
-    ) -> Result<Self, HspoBrokerNotInitializedError> {
+        thread: &[ThreadOption],
+        socket: &[SocketOption],
+    ) -> Result<Self, HspoBrokerError> {
+        tuning::check_thread(DRIVER, ThreadRole::Stream, thread)?;
+        tuning::check_socket(DRIVER, SocketRole::UdpStreamRx, socket)?;
         let local_kill_switch = Arc::new(AtomicBool::new(false));
         let local_err_flag = Arc::new(AtomicBool::new(false));
         let (robot_appender, robot_receiver) = unbounded::<RobotSender>();
-        let (waker_tx, waker_rx) = bounded::<Arc<Waker>>(1);
+        let io = BrokerIo::new(listen_on, socket).inspect_err(|e| {
+            tracing::error!(error = %e, "HSPO broker setup failed");
+        })?;
+        let waker = io.waker.clone();
+        let socket_report = io.tuning.clone();
+        let (started_tx, started_rx) = bounded(1);
 
         let thread_kill_switch = local_kill_switch.clone();
-        let thread_err_flag = local_err_flag.clone();
-        let _thread_handle = thread::Builder::new()
+        let thread_options = thread.to_vec();
+        let worker = thread::Builder::new()
             .name("hspo_server".to_string())
             .spawn(move || {
-                if let Err(e) = broker_runtime(
-                    listen_on,
-                    thread_config,
+                broker_runtime(
+                    io,
+                    thread_options,
+                    started_tx,
                     robot_receiver,
                     thread_kill_switch,
-                    waker_tx,
-                ) {
-                    tracing::error!(error = %e, "HSPO broker thread exited with error");
-                    thread_err_flag.store(true, Ordering::Relaxed);
-                }
-            })
-            .map_err(|_| HspoBrokerNotInitializedError)?;
-
-        let waker = waker_rx.recv().map_err(|_| HspoBrokerNotInitializedError)?;
+                );
+            })?;
+        let started = started_rx
+            .recv()
+            .unwrap_or_else(|_| Err(io::Error::other("HSPO broker thread exited during startup")));
+        let thread_report = match started {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = worker.join();
+                return Err(e.into());
+            }
+        };
 
         Ok(HspoBroker {
             robot_appender,
+            tuning: TuningReport {
+                thread: thread_report,
+                socket: socket_report,
+            },
             waker,
             kill_switch: local_kill_switch,
             err_flag: local_err_flag,
-            _thread_handle,
+            _thread_handle: worker,
         })
     }
 }
@@ -1194,15 +1825,40 @@ impl HspoBroker {
 /// Initializes the global HSPO broker, binding a socket to `listen_on` and spawning a background listener thread.
 ///
 /// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
+///
+/// `thread` is applied by the broker thread to itself before it receives
+/// anything. That thread is a latency-sensitive receive loop with no period
+/// of its own, so every [`ThreadOption`] is accepted except
+/// `MacOsTimeConstraint`, which reserves a computation slice per period.
+/// Process-wide settings (memory locking, `cpu_dma_latency`, Windows priority
+/// class and timer resolution) are the application's to make with
+/// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
+///
+/// `socket` is applied to the receive socket before it is bound:
+/// `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`,
+/// `LinuxBusyPollBudget`, `WinCpuAffinity`. `SendBuffer`, `DontFragment`,
+/// `Dscp` and `LinuxPriority` are refused: they only shape traffic, and this
+/// socket sends none.
+///
+/// Options for another platform, or that this platform cannot do, are
+/// skipped with a warning, as are options the platform applied with a
+/// different value (a receive buffer capped by `net.core.rmem_max`, say);
+/// [`broker_tuning_report`] lists them.
+///
+/// # Errors
+/// [`HspoBrokerError::InvalidOption`] for an option the broker does not
+/// accept; [`HspoBrokerError::Io`] if binding the socket, applying an
+/// option, or spawning the thread fails.
 #[cfg(not(feature = "py"))]
 pub fn initialize_broker(
     listen_on: SocketAddr,
-    thread_config: Option<ThreadConfig>,
-) -> Result<(), HspoBrokerNotInitializedError> {
+    thread: &[ThreadOption],
+    socket: &[SocketOption],
+) -> Result<(), HspoBrokerError> {
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
         tracing::info!(addr = %listen_on, "Initializing HSPO broker");
-        let server = HspoBroker::create(listen_on, thread_config)?;
+        let server = HspoBroker::create(listen_on, thread, socket)?;
         *guard = Some(server);
         tracing::info!("HSPO broker initialized");
     }
@@ -1212,12 +1868,14 @@ pub fn initialize_broker(
 /// Initializes the global HSPO broker, binding a socket to `listen_on` and spawning a background listener thread.
 ///
 /// This must be called before creating any [`HspoReceiver`]. Calling it again after initialization is a no-op.
+/// `thread` and `socket` are as for the Rust `initialize_broker`.
 #[cfg(feature = "py")]
 #[pyo3::pyfunction]
-#[pyo3(signature=(listen_on, thread_config=None))]
+#[pyo3(signature=(listen_on, thread=None, socket=None))]
 pub fn initialize_broker(
     listen_on: String,
-    thread_config: Option<ThreadConfig>,
+    thread: Option<fast_talker::py::ThreadOptions>,
+    socket: Option<fast_talker::py::SocketOptions>,
 ) -> pyo3::PyResult<()> {
     let listen_on: SocketAddr = listen_on.parse().map_err(|_| {
         pyo3::exceptions::PyValueError::new_err("Invalid SocketAddr format for listen_on")
@@ -1225,23 +1883,52 @@ pub fn initialize_broker(
     let mut guard = HSPO_SERVER.lock();
     if guard.is_none() {
         tracing::info!(addr = %listen_on, "Initializing HSPO broker");
-        let server = HspoBroker::create(listen_on, thread_config)?;
+        let server = HspoBroker::create(
+            listen_on,
+            &thread.unwrap_or_default(),
+            &socket.unwrap_or_default(),
+        )?;
         *guard = Some(server);
         tracing::info!("HSPO broker initialized");
     }
     Ok(())
 }
 
+/// What the running broker's thread and socket options did, or `None` when
+/// no broker is running.
+pub fn broker_tuning_report() -> Option<TuningReport> {
+    HSPO_SERVER.lock().as_ref().map(|b| b.tuning.clone())
+}
+
+/// What the running broker's thread and socket options did, as
+/// `{"thread": report, "socket": report}`, or `None` when no broker is running.
+#[cfg(feature = "py")]
+#[pyo3::pyfunction]
+#[pyo3(name = "broker_tuning_report")]
+pub fn py_broker_tuning_report(py: pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    broker_tuning_report().as_ref().into_py_any(py)
+}
+
 /// Shuts down the global HSPO broker
 ///
 /// If `wait_for_thread` is `true`, this will block until the broker thread has fully exited.
-#[cfg_attr(feature = "py", pyo3::pyfunction)]
-#[cfg_attr(feature = "py", pyo3(signature=(wait_for_thread=true)))]
+#[cfg(feature = "py")]
+#[pyo3::pyfunction]
+#[pyo3(name = "destroy_broker", signature=(wait_for_thread=true))]
+pub fn py_destroy_broker(py: pyo3::Python<'_>, wait_for_thread: bool) {
+    py.detach(|| destroy_broker(wait_for_thread));
+}
+
+/// Shuts down the global HSPO broker
+///
+/// If `wait_for_thread` is `true`, this will block until the broker thread has fully exited.
 pub fn destroy_broker(wait_for_thread: bool) {
     let mut guard = HSPO_SERVER.lock();
     if let Some(broker) = guard.take() {
         tracing::info!("Destroying HSPO broker");
         broker.kill_switch.store(true, Ordering::Relaxed);
+        let _ = broker.waker.wake();
         if wait_for_thread {
             match broker._thread_handle.join() {
                 Ok(()) => tracing::info!("HSPO broker thread exited cleanly"),
@@ -1272,8 +1959,9 @@ pub mod py {
         child_module.add_class::<HspoReceiver>()?;
         child_module.add_class::<py_channel::PyHspoChannel>()?;
         child_module.add_function(wrap_pyfunction!(initialize_broker, &child_module)?)?;
-        child_module.add_function(wrap_pyfunction!(destroy_broker, &child_module)?)?;
+        child_module.add_function(wrap_pyfunction!(py_destroy_broker, &child_module)?)?;
         child_module.add_function(wrap_pyfunction!(has_broker_errored, &child_module)?)?;
+        child_module.add_function(wrap_pyfunction!(py_broker_tuning_report, &child_module)?)?;
         child_module.add_class::<TcpCartesianPositionPacket>()?;
         child_module.add_class::<JointAnglesPacket>()?;
         child_module.add_class::<VariablesPacket>()?;

@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use fanuc_ucl::{
-    ThreadConfig,
     joints::{JointFormat, JointTemplate},
     rmi::{RmiDriver, RmiDriverConfig, proto},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut driver = RmiDriver::new(RmiDriverConfig::default_with_ip([10, 0, 0, 1]));
-    driver.connect(Some(ThreadConfig::new(80, None)))?;
+    driver.connect(&[], &[])?;
 
     driver
         .send_full_reset()?

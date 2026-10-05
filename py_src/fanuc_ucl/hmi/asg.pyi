@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import Generic, TypeAlias, TypeVar
 
-from ..hmi import HmiDriver, HmiHandle
+from . import HmiDriver, HmiHandle
 
 _V = TypeVar("_V")
 

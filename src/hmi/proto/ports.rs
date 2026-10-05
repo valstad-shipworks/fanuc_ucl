@@ -57,6 +57,8 @@ pub trait UnsafelyWritableDataPort: DataPort {
 pub trait WritableDataPort: DataPort + UnsafelyWritableDataPort {}
 
 pub trait ReadableDataPort: DataPort {
+    /// Reads of this port start and end on a multiple of this many items.
+    const ALIGNMENT: u16 = 1;
     fn align_read(target_idx: u16, count: u16) -> (u16, u16) {
         (target_idx, count)
     }
@@ -117,17 +119,18 @@ macro_rules! readable_impl {
             // so if reading starting at idx 10 for count 5
             // the actual read should be from idx 8 for count 8
 
+            const ALIGNMENT: u16 = 8;
+
             #[inline]
             fn align_read(target_idx: u16, count: u16) -> (u16, u16) {
                 let target_idx_aligned = target_idx - (target_idx % 8);
-                let end_idx = target_idx + count;
-                let end_idx_aligned = if end_idx % 8 == 0 {
-                    end_idx
-                } else {
-                    end_idx + (8 - (end_idx % 8))
-                };
-                let count_aligned = end_idx_aligned - target_idx_aligned;
-                (target_idx_aligned, count_aligned)
+                let end_idx_aligned =
+                    (u32::from(target_idx) + u32::from(count)).next_multiple_of(8);
+                let count_aligned = end_idx_aligned - u32::from(target_idx_aligned);
+                (
+                    target_idx_aligned,
+                    u16::try_from(count_aligned).unwrap_or(u16::MAX),
+                )
             }
 
             #[inline]

@@ -1,11 +1,11 @@
 import math
 
-from fanuc_ucl import JointFormat, JointTemplate, ThreadConfig, stmo
+from fanuc_ucl import JointFormat, JointTemplate, stmo
 
 
 def main():
     driver = stmo.StreamMotionDriver("10.0.0.1", 5)  # 5 must match $STMO.$START_MOVE
-    driver.connect(ThreadConfig(80, None))
+    driver.connect(thread=[("rt_priority", 80)])
     driver.start(2.0)
 
     limits = driver.fetch_movement_limits(0)

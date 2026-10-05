@@ -42,6 +42,20 @@ pub enum RmiError {
     Initialization(String),
     #[error("Rmi system fault or terminate received")]
     SystemFaultOrTerminate,
+    #[error("{driver} does not accept option {option}")]
+    InvalidOption {
+        option: String,
+        driver: &'static str,
+    },
+}
+
+impl From<crate::tuning::RefusedOption> for RmiError {
+    fn from(r: crate::tuning::RefusedOption) -> Self {
+        RmiError::InvalidOption {
+            option: r.option,
+            driver: r.driver,
+        }
+    }
 }
 
 #[cfg(feature = "valuable")]
@@ -63,6 +77,10 @@ impl Clone for RmiError {
             RmiError::Disconnected => RmiError::Disconnected,
             RmiError::Initialization(s) => RmiError::Initialization(s.clone()),
             RmiError::SystemFaultOrTerminate => RmiError::SystemFaultOrTerminate,
+            RmiError::InvalidOption { option, driver } => RmiError::InvalidOption {
+                option: option.clone(),
+                driver,
+            },
         }
     }
 }
@@ -210,15 +228,17 @@ impl std::error::Error for RmiProtocolError {}
 impl From<RmiError> for pyo3::PyErr {
     fn from(e: RmiError) -> Self {
         match e {
-            RmiError::CommunicationError(e) => {
-                pyo3::exceptions::PyIOError::new_err(format!("{}", e))
-            }
+            RmiError::CommunicationError(e) => e.into(),
+            RmiError::Timeout => pyo3::exceptions::PyTimeoutError::new_err("Operation timed out"),
             RmiError::Disconnected => {
                 pyo3::exceptions::PyConnectionError::new_err("Fanuc appears to be disconnected")
             }
             RmiError::RmiStringParseError(e) => pyo3::exceptions::PyUnicodeDecodeError::new_err(
                 format!("Failed to parse RMI string: {}", e),
             ),
+            RmiError::InvalidOption { .. } => {
+                pyo3::exceptions::PyValueError::new_err(e.to_string())
+            }
             other => pyo3::exceptions::PyRuntimeError::new_err(format!("{}", other)),
         }
     }

@@ -372,6 +372,24 @@ pub enum SendPacket {
     #[non_exhaustive]
     Never(NeverPacket),
 }
+#[cfg(feature = "py")]
+#[pyo3::pymethods]
+impl SendPacket {
+    #[getter(packet_name)]
+    fn py_packet_name(&self) -> &'static str {
+        self.packet_name()
+    }
+}
+
+#[cfg(feature = "py")]
+#[pyo3::pymethods]
+impl ResponsePacket {
+    #[getter(packet_name)]
+    fn py_packet_name(&self) -> &'static str {
+        self.packet_name()
+    }
+}
+
 impl SendPacket {
     pub fn packet_name(&self) -> &'static str {
         match self {
