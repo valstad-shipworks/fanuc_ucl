@@ -28,10 +28,8 @@ use fanuc_ucl::rmi::errors::RmiError;
 use fanuc_ucl::rmi::{RmiDriver, RmiDriverConfig};
 use fanuc_ucl::stmo::{StreamMotionDriver, StreamMotionError};
 use fanuc_ucl::{SocketOption, ThreadOption};
-use fast_talker::rt::{QosClass, Scheduler};
-use snare::{
-    IpNet, NicSpec, Privileges, Sim, SocketEntry, SocketKind, socket_table, sockets_bound,
-};
+use fast_talker::rt::Scheduler;
+use snare::{IpNet, NicSpec, Sim, SocketEntry, SocketKind, socket_table, sockets_bound};
 
 use common::{builder, hmi_server, rmi_server, run, sim};
 
@@ -45,22 +43,17 @@ fn nic_sim() -> Sim {
         .build()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn unprivileged_sim() -> Sim {
-    builder().privileges(Privileges::none()).build()
+    builder().privileges(snare::Privileges::none()).build()
 }
 
-/// Thread options every driver role accepts that an unprivileged process
-/// cannot apply: macOS refuses a QoS class on a thread whose scheduling policy
-/// was set explicitly, Linux refuses lowering the nice value.
+/// A thread option every driver role accepts that an unprivileged process
+/// cannot apply: Linux refuses lowering the nice value. macOS applies, clamps
+/// or reports every option the roles accept, so it has none.
+#[cfg(not(target_os = "macos"))]
 fn unappliable() -> Vec<ThreadOption> {
-    if cfg!(target_os = "macos") {
-        vec![
-            ThreadOption::UnixScheduler(Scheduler::Other),
-            ThreadOption::MacOsQos(QosClass::UserInteractive),
-        ]
-    } else {
-        vec![ThreadOption::LinuxNice(-10)]
-    }
+    vec![ThreadOption::LinuxNice(-10)]
 }
 
 /// Accepted by every role, but written for Windows.
@@ -87,6 +80,7 @@ fn stmo_socket() -> Vec<SocketEntry> {
 }
 
 /// Lets threads that already failed finish dropping what they own.
+#[cfg(not(target_os = "macos"))]
 fn settle() {
     std::thread::sleep(Duration::from_millis(1));
 }
@@ -152,6 +146,7 @@ fn stmo_unknown_interface_fails_cleanly() {
     });
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn stmo_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {
@@ -282,6 +277,7 @@ fn hspo_unknown_interface_fails_cleanly() {
     });
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn hspo_thread_option_failure_fails_initialize() {
     let _turn = BrokerTurn::take();
@@ -376,6 +372,7 @@ fn rmi_socket_options_apply_to_both_connections() {
     });
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn rmi_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {
@@ -439,6 +436,7 @@ fn hmi_accepts_its_options_and_skips_another_platforms() {
     });
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn hmi_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {

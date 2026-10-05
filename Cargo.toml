@@ -45,7 +45,7 @@ cfg-vis = "0.3.0"
 valuable = { version = "0.1.1", features = ["derive"], optional = true }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", optional = true }
-fast-talker = { version = "0.1.1", default-features = false, features = ["options", "serde"] }
+fast-talker = { version = "0.2", default-features = false, features = ["options", "serde"] }
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
