@@ -86,9 +86,10 @@ def initialize_broker(
     receive socket right after it is bound; ``None`` (the default) applies
     nothing. Every thread option is accepted except ``macos_time_constraint``.
     Socket options accepted: ``recv_buffer``, ``bind_device``,
-    ``linux_busy_poll``, ``linux_prefer_busy_poll``, ``linux_busy_poll_budget``
-    and ``win_cpu_affinity``; the rest only shape outgoing traffic, which this
-    socket has none of. A refused option raises ``ValueError``.
+    ``linux_busy_poll``, ``linux_prefer_busy_poll`` and
+    ``linux_busy_poll_budget``. Windows only takes ``win_cpu_affinity`` before
+    bind, and the rest only shape outgoing traffic, which this socket has none
+    of. A refused option raises ``ValueError``.
     """
 
 def destroy_broker(wait_for_thread: bool = True) -> None:

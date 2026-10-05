@@ -1154,7 +1154,8 @@ impl StreamMotionDriver {
     /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
     ///
     /// `socket` is applied to the UDP socket right after it is bound. It both
-    /// sends and receives every cycle, so every [`SocketOption`] is accepted.
+    /// sends and receives every cycle, so every [`SocketOption`] is accepted
+    /// except `WinCpuAffinity`, which Windows only takes before bind.
     ///
     /// Options for another platform, or that this platform cannot do, are
     /// skipped with a warning.

@@ -61,6 +61,16 @@ fn foreign_thread() -> ThreadOption {
     ThreadOption::WinDisablePowerThrottling
 }
 
+/// Accepted by the UDP roles, but written for Linux. Those roles accept no
+/// socket option written only for macOS or Windows, so Linux has none.
+fn foreign_udp_socket() -> Vec<SocketOption> {
+    if cfg!(target_os = "linux") {
+        vec![]
+    } else {
+        vec![SocketOption::LinuxBusyPoll(50)]
+    }
+}
+
 /// `SO_RCVBUF`/`SO_SNDBUF` as getsockopt reports a requested size: Linux
 /// doubles it for bookkeeping overhead.
 fn reported_buffer(requested: usize) -> u32 {
@@ -90,10 +100,26 @@ fn stmo_skips_another_platforms_options() {
     sim().run(|| {
         let mut driver = StreamMotionDriver::new(ROBOT, 5, false);
         driver
-            .connect(&[foreign_thread()], &[SocketOption::WinCpuAffinity(0)])
+            .connect(&[foreign_thread()], &foreign_udp_socket())
             .unwrap();
         assert!(driver.is_connected());
         driver.disconnect();
+    });
+}
+
+#[test]
+fn stmo_refuses_options_before_binding() {
+    sim().run(|| {
+        let mut driver = StreamMotionDriver::new(ROBOT, 5, false);
+        let err = driver
+            .connect(&[], &[SocketOption::WinCpuAffinity(0)])
+            .unwrap_err();
+        assert!(
+            matches!(err, StreamMotionError::InvalidOption { driver: "stmo", .. }),
+            "{err:?}"
+        );
+        assert!(!driver.is_connected());
+        assert!(stmo_socket().is_empty());
     });
 }
 
@@ -200,12 +226,13 @@ fn hspo_refuses_options_before_binding() {
             computation_us: 500,
             constraint_us: 1000,
         };
-        let cases: [(Vec<ThreadOption>, Vec<SocketOption>); 5] = [
+        let cases: [(Vec<ThreadOption>, Vec<SocketOption>); 6] = [
             (vec![time_constraint], vec![]),
             (vec![], vec![SocketOption::Dscp(46)]),
             (vec![], vec![SocketOption::SendBuffer(1 << 16)]),
             (vec![], vec![SocketOption::DontFragment(true)]),
             (vec![], vec![SocketOption::LinuxPriority(1)]),
+            (vec![], vec![SocketOption::WinCpuAffinity(0)]),
         ];
         for (thread, socket) in cases {
             let err = initialize_broker(broker_addr(), &thread, &socket).unwrap_err();
@@ -226,7 +253,7 @@ fn hspo_skips_another_platforms_options() {
         initialize_broker(
             broker_addr(),
             &[ThreadOption::WinMmcss("Pro Audio".into())],
-            &[SocketOption::WinCpuAffinity(0)],
+            &foreign_udp_socket(),
         )
         .unwrap();
         assert!(broker_running());

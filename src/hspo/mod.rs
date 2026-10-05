@@ -1562,9 +1562,9 @@ impl HspoBroker {
 ///
 /// `socket` is applied to the receive socket right after it is bound:
 /// `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`,
-/// `LinuxBusyPollBudget` and `WinCpuAffinity`. `SendBuffer`, `DontFragment`,
-/// `Dscp` and `LinuxPriority` are refused: they only shape traffic, and this
-/// socket sends none.
+/// `LinuxBusyPollBudget`. `SendBuffer`, `DontFragment`, `Dscp` and
+/// `LinuxPriority` are refused: they only shape traffic, and this socket sends
+/// none. `WinCpuAffinity` is refused too: Windows only takes it before bind.
 ///
 /// Options for another platform, or that this platform cannot do, are
 /// skipped with a warning.

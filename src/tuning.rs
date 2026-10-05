@@ -101,7 +101,6 @@ pub(crate) fn socket_allowed(role: SocketRole, o: &SocketOption) -> bool {
                 | SocketOption::LinuxBusyPoll(_)
                 | SocketOption::LinuxPreferBusyPoll(_)
                 | SocketOption::LinuxBusyPollBudget(_)
-                | SocketOption::WinCpuAffinity(_)
         ),
         #[cfg(feature = "hspo")]
         SocketRole::UdpStreamRx => matches!(
@@ -111,7 +110,6 @@ pub(crate) fn socket_allowed(role: SocketRole, o: &SocketOption) -> bool {
                 | SocketOption::LinuxBusyPoll(_)
                 | SocketOption::LinuxPreferBusyPoll(_)
                 | SocketOption::LinuxBusyPollBudget(_)
-                | SocketOption::WinCpuAffinity(_)
         ),
         #[cfg(any(feature = "rmi", feature = "hmi"))]
         SocketRole::TcpControl => {
@@ -248,6 +246,9 @@ mod tests {
             SocketRole::UdpStreamRx,
             &SocketOption::RecvBuffer(1 << 20)
         ));
+        for role in [SocketRole::UdpCyclic, SocketRole::UdpStreamRx] {
+            assert!(!socket_allowed(role, &SocketOption::WinCpuAffinity(0)));
+        }
         assert!(socket_allowed(
             SocketRole::TcpControl,
             &SocketOption::Dscp(46)

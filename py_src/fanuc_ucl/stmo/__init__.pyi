@@ -214,7 +214,8 @@ class StreamMotionDriver:
         ``thread`` is applied by the I/O thread to itself and ``socket`` to the
         UDP socket right after it is bound; ``None`` (the default) applies
         nothing. The I/O thread answers every interpolation cycle, so every
-        thread and socket option is accepted. Options for another platform,
+        thread and socket option is accepted except ``win_cpu_affinity``,
+        which Windows only takes before bind. Options for another platform,
         or that this platform cannot do, are skipped with a warning; one that
         is attempted and fails raises. Process-wide settings are the
         application's to make.

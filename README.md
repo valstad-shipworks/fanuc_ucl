@@ -495,8 +495,8 @@ Windows.
 
 | Driver | Thread options | Socket options |
 |---|---|---|
-| stmo | all | all (UDP, sent and received every cycle; applied right after bind) |
-| hspo | all except `MacOsTimeConstraint` | `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`, `LinuxBusyPollBudget`, `WinCpuAffinity` (applied right after bind) |
+| stmo | all | all except `WinCpuAffinity` (UDP, sent and received every cycle; applied right after bind) |
+| hspo | all except `MacOsTimeConstraint` | `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`, `LinuxBusyPollBudget` (applied right after bind) |
 | rmi | `CpuAffinity`, `PrefaultStack`, `LinuxNice`, `UnixScheduler` (`Other`/`Batch`/`Idle`), `WinPriority` (not `TimeCritical`), `WinDisablePowerThrottling`, `MacOsQos` | `Dscp`, `LinuxPriority` (applied after connect) |
 | hmi | same as rmi | same as rmi |
 
@@ -506,6 +506,8 @@ Why the rest are refused:
   loop has a period.
 - hspo's socket only receives, so `SendBuffer`, `DontFragment`, `Dscp` and
   `LinuxPriority`, which shape outgoing traffic, do nothing for it.
+- Windows only accepts `WinCpuAffinity` on a socket that is not yet bound,
+  and stmo and hspo tune theirs right after bind.
 - rmi and hmi threads block on TCP round-trips: a real-time class
   (`RtPriority`, `UnixScheduler` `Fifo`/`RoundRobin`, `WinPriority(TimeCritical)`,
   `WinMmcss`, `MacOsTimeConstraint`) there only risks starving the rest of the
