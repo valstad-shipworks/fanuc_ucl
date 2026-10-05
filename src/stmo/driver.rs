@@ -13,7 +13,11 @@ use std::{
 
 use cfg_mixin::cfg_mixin;
 use event_listener::{Event, Listener};
-use fast_talker::options::{SocketOption, ThreadOption};
+use fast_talker::{
+    SocketError,
+    options::{SocketOption, ThreadOption},
+    sockets,
+};
 use flume::{Receiver, Sender};
 
 use crate::{
@@ -28,7 +32,6 @@ use crate::{
             ThresholdTableRequestPacket, TxPackets, VersionNumberRequestPacket,
         },
         stmo_handle::StmoHandle,
-        tx_errqueue::{TxError, drain_error_queue, enable_tx_error_reporting},
         types::{
             AxisMotionConstraint, JointMovementLimits, RxStorage, StmoCounters, StmoStats,
             StmoStatsHandle, StreamMotionError,
@@ -36,7 +39,7 @@ use crate::{
     },
     thread_util::{GeneralThreadError, ThreadHandle},
     time_util::host_now,
-    tuning::{self, SocketRole, ThreadRole},
+    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
 };
 
 use mio::net::UdpSocket as MioUdpSocket;
@@ -152,10 +155,9 @@ struct StreamMotionContext {
     counters: Arc<StmoCounters>,
     err_flag: Arc<AtomicBool>,
     consecutive_send_failures: u32,
-    /// Descriptor to drain transmit errors from, owned by `socket`. `None`
-    /// where the kernel cannot report them.
-    tx_error_fd: Option<i32>,
-    tx_errors: Vec<TxError>,
+    /// Whether the kernel queues transmit errors on `socket` (Linux only).
+    report_tx_errors: bool,
+    tx_errors: Vec<SocketError>,
     buffer: ControllerBuffer,
     /// Newest status not yet answered. Only the newest is worth a command — answering an older one would command a
     /// cycle that has already passed — but every status reaches consumers
@@ -197,7 +199,7 @@ impl StreamMotionContext {
         telemetry: Option<StmoTelemetry>,
         counters: Arc<StmoCounters>,
         err_flag: Arc<AtomicBool>,
-        tx_error_fd: Option<i32>,
+        report_tx_errors: bool,
         buffer_size_before_drain: u8,
     ) -> Self {
         Self {
@@ -220,7 +222,7 @@ impl StreamMotionContext {
             counters,
             err_flag,
             consecutive_send_failures: 0,
-            tx_error_fd,
+            report_tx_errors,
             tx_errors: Vec::with_capacity(8),
             buffer: ControllerBuffer::new(buffer_size_before_drain),
             pending_status: None,
@@ -381,10 +383,10 @@ impl StreamMotionContext {
     /// internally. Also clears the error queue, which the poller needs: while
     /// it holds an entry the socket stays permanently readable.
     fn drain_tx_errors(&mut self) {
-        let Some(fd) = self.tx_error_fd else {
+        if !self.report_tx_errors {
             return;
-        };
-        drain_error_queue(fd, &mut self.tx_errors);
+        }
+        let _ = sockets::socket_errors(&self.socket, &mut self.tx_errors);
         if self.tx_errors.is_empty() {
             return;
         }
@@ -394,7 +396,7 @@ impl StreamMotionContext {
         for err in self.tx_errors.drain(..) {
             tracing::error!(
                 errno = err.errno,
-                origin = err.origin_str(),
+                origin = %err.origin,
                 "STMO packet dropped on the transmit path: {err}"
             );
         }
@@ -880,16 +882,24 @@ impl PrevCommand {
 /// failure surfaces from `connect` and the waker exists before the thread does.
 struct StmoIo {
     socket: MioUdpSocket,
-    tx_error_fd: Option<i32>,
+    report_tx_errors: bool,
     poll: Poll,
     waker: Arc<Waker>,
 }
 
 impl StmoIo {
     fn new(socket: std::net::UdpSocket) -> Result<Self, GeneralThreadError> {
-        // Taken before the socket moves into mio; the descriptor stays owned by
-        // the socket, which outlives the context loop.
-        let tx_error_fd = enable_tx_error_reporting(&socket);
+        let report_tx_errors = match sockets::report_errors(&socket, true) {
+            Ok(()) => true,
+            Err(e) if e.kind() == io::ErrorKind::Unsupported => false,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Could not enable IP_RECVERR; transmit drops will be invisible"
+                );
+                false
+            }
+        };
         let mut socket = MioUdpSocket::from_std(socket);
         let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
         poll.registry()
@@ -901,7 +911,7 @@ impl StmoIo {
         );
         Ok(Self {
             socket,
-            tx_error_fd,
+            report_tx_errors,
             poll,
             waker,
         })
@@ -913,7 +923,7 @@ fn stream_motion_runtime(
     thread_handle: ThreadHandle,
     io: StmoIo,
     thread: Vec<ThreadOption>,
-    started: flume::Sender<io::Result<()>>,
+    started: flume::Sender<io::Result<OptionsReport<ThreadOption>>>,
     to_driver: Sender<RxPackets>,
     from_driver: Receiver<ToThreadMessage>,
     itl: Arc<(Event, AtomicBool)>,
@@ -925,7 +935,7 @@ fn stream_motion_runtime(
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Cyclic, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(()));
+            let _ = started.send(Ok(OptionsReport::from(&report)));
             report
         }
         Err(e) => {
@@ -940,7 +950,7 @@ fn stream_motion_runtime(
     tracing::debug!("Stream motion thread started, entering context loop");
     let StmoIo {
         socket,
-        tx_error_fd,
+        report_tx_errors,
         poll,
         ..
     } = io;
@@ -954,7 +964,7 @@ fn stream_motion_runtime(
         telemetry,
         counters,
         err_flag,
-        tx_error_fd,
+        report_tx_errors,
         buffer_size_before_drain,
     );
     context.context_loop(thread_handle, poll);
@@ -968,6 +978,7 @@ struct StreamMotionConnection {
     is_started: bool,
     err_flag: Arc<AtomicBool>,
     itl: Arc<(Event, AtomicBool)>,
+    tuning: TuningReport,
 }
 
 /// Driver for FANUC Stream Motion (STMO), a UDP protocol in which the controller
@@ -1153,12 +1164,13 @@ impl StreamMotionDriver {
     /// the application's to make with
     /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
     ///
-    /// `socket` is applied to the UDP socket right after it is bound. It both
-    /// sends and receives every cycle, so every [`SocketOption`] is accepted
-    /// except `WinCpuAffinity`, which Windows only takes before bind.
+    /// `socket` is applied to the UDP socket before it is bound. It both
+    /// sends and receives every cycle, so every [`SocketOption`] is accepted.
     ///
     /// Options for another platform, or that this platform cannot do, are
-    /// skipped with a warning.
+    /// skipped with a warning, as are options the platform applied with a
+    /// different value (a buffer capped by `net.core.rmem_max`, say);
+    /// [`tuning_report`](Self::tuning_report) lists them.
     ///
     /// # Errors
     /// [`StreamMotionError::InvalidOption`] for an option this driver does not
@@ -1181,9 +1193,9 @@ impl StreamMotionDriver {
             .map_err(StreamMotionError::from)?;
         let port = openport::pick_unused_port(57000..60000).unwrap_or(60000);
         let local_addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port);
-        let udp = std::net::UdpSocket::bind(local_addr).map_err(StreamMotionError::from)?;
-        tuning::apply_socket(DRIVER, SocketRole::UdpCyclic, &udp, socket)
-            .map_err(StreamMotionError::from)?;
+        let (udp, socket_report) =
+            tuning::bind_udp(DRIVER, SocketRole::UdpCyclic, local_addr.into(), socket)
+                .map_err(StreamMotionError::from)?;
         udp.connect(SocketAddr::new(self.remote_addr, 60015))
             .map_err(StreamMotionError::from)?;
         udp.set_nonblocking(true).map_err(StreamMotionError::from)?;
@@ -1231,8 +1243,8 @@ impl StreamMotionDriver {
             })
             .map_err(StreamMotionError::from)?;
         thread_handle.set_handle(worker);
-        match started_rx.recv() {
-            Ok(Ok(())) => {}
+        let thread_report = match started_rx.recv() {
+            Ok(Ok(report)) => report,
             Ok(Err(e)) => return Err(StreamMotionError::from(e).into()),
             Err(_) => {
                 return Err(StreamMotionError::Other(
@@ -1240,7 +1252,7 @@ impl StreamMotionDriver {
                 )
                 .into());
             }
-        }
+        };
 
         self.rx_storage.clear();
         self.connection = Some(StreamMotionConnection {
@@ -1250,6 +1262,10 @@ impl StreamMotionDriver {
             is_started: false,
             err_flag: local_err_flag,
             itl,
+            tuning: TuningReport {
+                thread: thread_report,
+                socket: OptionsReport::from(&socket_report),
+            },
         });
 
         tracing::info!(addr = %self.remote_addr, "StreamMotionDriver connected");
@@ -1415,6 +1431,21 @@ impl StreamMotionDriver {
     pub fn stop(&mut self) {
         self.send_change(AnswerChange::Stop(StopPacket {}));
         self.refresh();
+    }
+
+    /// What the current connection's thread and socket options did, or `None`
+    /// while disconnected.
+    #[cfg(off)]
+    pub fn tuning_report(&self) -> Option<TuningReport> {
+        self.connection.as_ref().map(|c| c.tuning.clone())
+    }
+
+    /// What the current connection's thread and socket options did, as
+    /// `{"thread": report, "socket": report}`, or `None` while disconnected.
+    #[cfg(on)]
+    pub fn tuning_report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use pyo3::IntoPyObjectExt;
+        self.connection.as_ref().map(|c| &c.tuning).into_py_any(py)
     }
 
     /// I/O health counters, cumulative across every connection this driver

@@ -1,11 +1,13 @@
 #[cfg(test)]
 mod fuzz_test;
-mod rx_timestamp;
 #[cfg(test)]
 mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};
-use fast_talker::options::{SocketOption, ThreadOption};
+use fast_talker::{
+    Config, Received, Source, Timestamped,
+    options::{SocketOption, ThreadOption},
+};
 use parking_lot::Mutex;
 use std::{
     collections::{HashMap, VecDeque},
@@ -22,8 +24,7 @@ use std::{
 use crate::{
     joints::{JointFormat, JointTemplate},
     thread_util::GeneralThreadError,
-    time_util::host_now,
-    tuning::{self, SocketRole, ThreadRole},
+    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
 };
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
@@ -399,6 +400,8 @@ struct StreamClockState {
     wrap_points: VecDeque<(u32, u32, u64)>,
     /// System micros minus cumulative clock micros, from the newest accepted packet.
     offset_micros: Option<i128>,
+    /// Where `offset_micros` was stamped.
+    offset_source: Option<Source>,
 }
 
 impl StreamClock {
@@ -465,12 +468,37 @@ impl StreamClock {
     /// restarts its stream and counts from zero again, so a backward index that
     /// persists past [`STALE_RUN_LIMIT`](Self::STALE_RUN_LIMIT) is read as a restart
     /// instead: the clock re-anchors on the new packet and keeps running forward.
-    #[cfg_vis(test, pub)]
-    fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
+    ///
+    /// The offset to system time is taken from the newest packet stamped by
+    /// the kernel or the NIC, and from user-space stamps only until the first
+    /// such packet: a user-space stamp includes however long the packet sat in
+    /// the socket buffer.
+    fn accept_from(&self, index: u32, clock: u32, sys_micros: u64, source: Source) -> Option<u64> {
         let mut state = self.state.lock();
+        let (absolute, committed) = Self::fold_in(&mut state, index, clock, sys_micros)?;
+        if committed && (source >= Source::Kernel || state.offset_source < Some(Source::Kernel)) {
+            state.offset_micros = Some(sys_micros as i128 - absolute as i128);
+            state.offset_source = Some(source);
+        }
+        Some(absolute)
+    }
+
+    /// [`accept_from`](Self::accept_from) with a kernel receive stamp.
+    #[cfg(test)]
+    pub fn accept(&self, index: u32, clock: u32, sys_micros: u64) -> Option<u64> {
+        self.accept_from(index, clock, sys_micros, Source::Kernel)
+    }
+
+    /// The packet's absolute clock, and whether the stream learned from it.
+    fn fold_in(
+        state: &mut StreamClockState,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+    ) -> Option<(u64, bool)> {
         let Some(last_index) = state.last_index else {
             let base = state.base;
-            return Some(state.commit(index, clock, sys_micros, base, 0, false));
+            return Some((state.commit(index, clock, sys_micros, base, 0, false), true));
         };
         let distance = index.wrapping_sub(last_index);
         if distance >= Self::INDEX_HALF_RANGE || state.index_outruns_time(distance, sys_micros) {
@@ -484,7 +512,7 @@ impl StreamClock {
             let base = state.resumed_base(clock, sys_micros);
             state.wrap_points.clear();
             state.forget_stream();
-            return Some(state.commit(index, clock, sys_micros, base, 0, false));
+            return Some((state.commit(index, clock, sys_micros, base, 0, false), true));
         }
         state.stale_run = 0;
 
@@ -499,22 +527,23 @@ impl StreamClock {
         };
         if let Some(fold) = fold {
             state.suspect_run = 0;
-            return Some(state.apply(index, clock, sys_micros, fold));
+            return Some((state.apply(index, clock, sys_micros, fold), true));
         }
         state.suspect_run += 1;
         if state.suspect_run < Self::SUSPECT_RUN_LIMIT {
-            return Some(state.base.saturating_add(clock as u64));
+            return Some((state.base.saturating_add(clock as u64), false));
         }
         state.suspect_run = 0;
         let fold = state.fold(index, clock, sys_micros, Basis::Time(None));
         state.forget_stream();
-        Some(match fold {
+        let absolute = match fold {
             Some(fold) => state.apply(index, clock, sys_micros, fold),
             None => {
                 let base = state.resumed_base(clock, sys_micros);
                 state.commit(index, clock, sys_micros, base, 0, false)
             }
-        })
+        };
+        Some((absolute, true))
     }
 
     /// Reconstructs the system time at which the packet carrying this index and
@@ -791,7 +820,6 @@ impl StreamClockState {
         }
         self.last_index = Some(index);
         self.last_clock = clock;
-        self.offset_micros = Some(sys_micros as i128 - absolute as i128);
         absolute
     }
 }
@@ -830,19 +858,28 @@ struct RobotSender {
 impl RobotSender {
     /// Gates a freshly received packet by its per-stream index and folds its clock
     /// into the stream's shared wrap-corrected clock tracker. `sys_micros` is the
-    /// receive time as micros since the Unix epoch — the kernel rx timestamp when
-    /// available, user-space receive time otherwise.
+    /// receive time as micros since the Unix epoch, taken from `source`: the
+    /// kernel rx timestamp when available, user-space receive time otherwise.
     ///
     /// Returns `false` if `index` is older than the newest already seen on `stream`,
     /// meaning the packet is reordered or stale and the caller must disregard it (not
     /// forward it to its channel). Each stream tracks its own highest index.
-    fn accept_packet(&self, stream: HspoStream, index: u32, clock: u32, sys_micros: u64) -> bool {
+    fn accept_packet(
+        &self,
+        stream: HspoStream,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+        source: Source,
+    ) -> bool {
         let stream_clock = match stream {
             HspoStream::Tcp => &self.tcp_clock,
             HspoStream::Joint => &self.joint_clock,
             HspoStream::Variables => &self.var_clock,
         };
-        stream_clock.accept(index, clock, sys_micros).is_some()
+        stream_clock
+            .accept_from(index, clock, sys_micros, source)
+            .is_some()
     }
 }
 
@@ -1169,6 +1206,7 @@ impl HspoReceiver {
 
 struct HspoBroker {
     robot_appender: Sender<RobotSender>,
+    tuning: TuningReport,
     waker: Arc<Waker>,
     err_flag: Arc<AtomicBool>,
     kill_switch: Arc<AtomicBool>,
@@ -1178,8 +1216,8 @@ struct HspoBroker {
 /// The broker's socket and poller, set up on the caller so a bind failure
 /// surfaces from [`initialize_broker`] and the waker exists before the thread.
 struct BrokerIo {
-    socket: MioUdpSocket,
-    kernel_ts: bool,
+    socket: Timestamped<MioUdpSocket>,
+    tuning: OptionsReport<SocketOption>,
     poll: Poll,
     waker: Arc<Waker>,
 }
@@ -1187,16 +1225,14 @@ struct BrokerIo {
 impl BrokerIo {
     fn new(listen_on: SocketAddr, options: &[SocketOption]) -> Result<Self, HspoBrokerError> {
         let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+        let (socket, report) =
+            tuning::bind_udp(DRIVER, SocketRole::UdpStreamRx, listen_on, options)?;
+        socket.set_nonblocking(true)?;
         let mut socket =
-            MioUdpSocket::bind(listen_on).map_err(|_| GeneralThreadError::FailedSocketBinding)?;
-        tuning::apply_socket(DRIVER, SocketRole::UdpStreamRx, &socket, options)?;
-        let kernel_ts = match rx_timestamp::enable_rx_timestamping(&socket) {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::debug!(error = %e, "HSPO kernel rx timestamps unavailable");
-                false
-            }
-        };
+            Timestamped::with_config(MioUdpSocket::from_std(socket), Config::kernel_only());
+        if socket.source() < Source::Kernel {
+            tracing::debug!("HSPO kernel rx timestamps unavailable");
+        }
         poll.registry()
             .register(&mut socket, TOK_SOCKET, Interest::READABLE)
             .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
@@ -1206,7 +1242,7 @@ impl BrokerIo {
         );
         Ok(Self {
             socket,
-            kernel_ts,
+            tuning: OptionsReport::from(&report),
             poll,
             waker,
         })
@@ -1225,13 +1261,13 @@ impl From<GeneralThreadError> for HspoBrokerError {
 fn broker_runtime(
     io: BrokerIo,
     thread: Vec<ThreadOption>,
-    started: Sender<io::Result<()>>,
+    started: Sender<io::Result<OptionsReport<ThreadOption>>>,
     robot_receiver: Receiver<RobotSender>,
     thread_kill_switch: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Stream, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(()));
+            let _ = started.send(Ok(OptionsReport::from(&report)));
             report
         }
         Err(e) => {
@@ -1241,11 +1277,9 @@ fn broker_runtime(
     };
 
     let BrokerIo {
-        socket,
-        kernel_ts,
-        mut poll,
-        ..
+        socket, mut poll, ..
     } = io;
+    let mut socket_drops = 0;
     let mut events = Events::with_capacity(256);
 
     let mut robot_senders: HashMap<IpAddr, Vec<RobotSender>> = HashMap::new();
@@ -1282,17 +1316,28 @@ fn broker_runtime(
 
             // Read all pending datagrams.
             loop {
-                let received = if kernel_ts {
-                    rx_timestamp::recv_from_timestamped(&socket, &mut buf)
-                } else {
-                    socket.recv_from(&mut buf).map(|(n, addr)| (n, addr, None))
-                };
-                match received {
-                    Ok((n, addr, rx_ts)) => {
+                match socket.recv_from(&mut buf) {
+                    Ok(Received {
+                        len: n,
+                        from,
+                        timestamp,
+                        drops,
+                        ..
+                    }) => {
+                        if let Some(drops) = drops {
+                            if drops > socket_drops {
+                                tracing::warn!(
+                                    dropped = drops - socket_drops,
+                                    total = drops,
+                                    "HSPO socket dropped datagrams for lack of receive buffer"
+                                );
+                            }
+                            socket_drops = drops;
+                        }
                         if n == 0 {
                             continue;
                         }
-                        let src_ip = addr.ip();
+                        let src_ip = from.ip();
 
                         // Fast path: if nobody cares about this IP, skip parsing.
                         let Some(listeners) = robot_senders.get_mut(&src_ip) else {
@@ -1302,7 +1347,7 @@ fn broker_runtime(
                         // Determine packet type. 'typ' is at offset 12 (u32,u32,u32 -> 12 bytes).
                         let pkt_type = PacketType::from_bytes(&buf[..n], 12);
                         let now = Instant::now();
-                        let sys_time = rx_ts.unwrap_or_else(host_now);
+                        let sys_time = timestamp.time;
                         let sys_micros: u64 = sys_time
                             .duration_since(SystemTime::UNIX_EPOCH)
                             .unwrap_or(Duration::ZERO)
@@ -1332,6 +1377,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1364,6 +1410,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1394,6 +1441,7 @@ fn broker_runtime(
                                             p.index,
                                             p.clock,
                                             sys_micros,
+                                            timestamp.source,
                                         ) {
                                             continue;
                                         }
@@ -1515,6 +1563,7 @@ impl HspoBroker {
             tracing::error!(error = %e, "HSPO broker setup failed");
         })?;
         let waker = io.waker.clone();
+        let socket_report = io.tuning.clone();
         let (started_tx, started_rx) = bounded(1);
 
         let thread_kill_switch = local_kill_switch.clone();
@@ -1533,13 +1582,20 @@ impl HspoBroker {
         let started = started_rx
             .recv()
             .unwrap_or_else(|_| Err(io::Error::other("HSPO broker thread exited during startup")));
-        if let Err(e) = started {
-            let _ = worker.join();
-            return Err(e.into());
-        }
+        let thread_report = match started {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = worker.join();
+                return Err(e.into());
+            }
+        };
 
         Ok(HspoBroker {
             robot_appender,
+            tuning: TuningReport {
+                thread: thread_report,
+                socket: socket_report,
+            },
             waker,
             kill_switch: local_kill_switch,
             err_flag: local_err_flag,
@@ -1560,14 +1616,16 @@ impl HspoBroker {
 /// class and timer resolution) are the application's to make with
 /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
 ///
-/// `socket` is applied to the receive socket right after it is bound:
+/// `socket` is applied to the receive socket before it is bound:
 /// `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`,
-/// `LinuxBusyPollBudget`. `SendBuffer`, `DontFragment`, `Dscp` and
-/// `LinuxPriority` are refused: they only shape traffic, and this socket sends
-/// none. `WinCpuAffinity` is refused too: Windows only takes it before bind.
+/// `LinuxBusyPollBudget`, `WinCpuAffinity`. `SendBuffer`, `DontFragment`,
+/// `Dscp` and `LinuxPriority` are refused: they only shape traffic, and this
+/// socket sends none.
 ///
 /// Options for another platform, or that this platform cannot do, are
-/// skipped with a warning.
+/// skipped with a warning, as are options the platform applied with a
+/// different value (a receive buffer capped by `net.core.rmem_max`, say);
+/// [`broker_tuning_report`] lists them.
 ///
 /// # Errors
 /// [`HspoBrokerError::InvalidOption`] for an option the broker does not
@@ -1616,6 +1674,22 @@ pub fn initialize_broker(
         tracing::info!("HSPO broker initialized");
     }
     Ok(())
+}
+
+/// What the running broker's thread and socket options did, or `None` when
+/// no broker is running.
+pub fn broker_tuning_report() -> Option<TuningReport> {
+    HSPO_SERVER.lock().as_ref().map(|b| b.tuning.clone())
+}
+
+/// What the running broker's thread and socket options did, as
+/// `{"thread": report, "socket": report}`, or `None` when no broker is running.
+#[cfg(feature = "py")]
+#[pyo3::pyfunction]
+#[pyo3(name = "broker_tuning_report")]
+pub fn py_broker_tuning_report(py: pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    broker_tuning_report().as_ref().into_py_any(py)
 }
 
 /// Shuts down the global HSPO broker
@@ -1669,6 +1743,7 @@ pub mod py {
         child_module.add_function(wrap_pyfunction!(initialize_broker, &child_module)?)?;
         child_module.add_function(wrap_pyfunction!(py_destroy_broker, &child_module)?)?;
         child_module.add_function(wrap_pyfunction!(has_broker_errored, &child_module)?)?;
+        child_module.add_function(wrap_pyfunction!(py_broker_tuning_report, &child_module)?)?;
         child_module.add_class::<TcpCartesianPositionPacket>()?;
         child_module.add_class::<JointAnglesPacket>()?;
         child_module.add_class::<VariablesPacket>()?;

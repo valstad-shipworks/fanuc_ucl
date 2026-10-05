@@ -12,7 +12,7 @@ use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use crate::hmi::proto::wire::{Body, Header, Message};
 use crate::hmi::{BINCODE_CFG, DRIVER, DriverResult, HmiError, HmiTelemetry};
 use crate::thread_util::ThreadHandle;
-use crate::tuning::{self, SocketRole, ThreadRole};
+use crate::tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport};
 
 use super::hmi_handle::{HmiHandleGeneric, HmiResult};
 
@@ -49,6 +49,14 @@ pub(super) struct HmiRunner {
     telemetry: Option<HmiTelemetry>,
 }
 
+/// A runner thread that applied its options and is serving the connection.
+pub(super) struct StartedRunner {
+    pub join: std::thread::JoinHandle<()>,
+    pub waker: Arc<Waker>,
+    pub err_flag: Arc<AtomicBool>,
+    pub tuning: TuningReport,
+}
+
 impl HmiRunner {
     const TOK_SOCKET: Token = Token(0);
     const TOK_WAKER: Token = Token(1);
@@ -62,12 +70,17 @@ impl HmiRunner {
         thread: Vec<ThreadOption>,
         socket: &[SocketOption],
         telemetry: Option<HmiTelemetry>,
-    ) -> DriverResult<(std::thread::JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
-        let std_stream = std::net::TcpStream::connect_timeout(&addr, connect_timeout)?;
+    ) -> DriverResult<StartedRunner> {
+        let (std_stream, socket_report) = tuning::connect_tcp(
+            DRIVER,
+            SocketRole::TcpControl,
+            addr,
+            connect_timeout,
+            socket,
+        )
+        .map_err(HmiError::from)?;
         std_stream.set_nonblocking(true)?;
         let mut tcp_stream = TcpStream::from_std(std_stream);
-        tuning::apply_socket(DRIVER, SocketRole::TcpControl, &tcp_stream, socket)
-            .map_err(HmiError::from)?;
         tracing::trace!(addr = %addr, "HMI runner connected");
         let poll = Poll::new().map_err(HmiError::from)?;
         poll.registry()
@@ -100,12 +113,24 @@ impl HmiRunner {
         let started = started_rx
             .recv()
             .unwrap_or_else(|_| Err(std::io::Error::other("HMI runner exited during startup")));
-        if let Err(e) = started {
-            let _ = join_handle.join();
-            return Err(HmiError::from(e).into());
-        }
+        let thread_report = match started {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = join_handle.join();
+                return Err(HmiError::from(e).into());
+            }
+        };
         tracing::trace!("HMI runner started");
-        Ok((join_handle, waker, local_err_flag))
+        let tuning = TuningReport {
+            thread: thread_report,
+            socket: OptionsReport::from(&socket_report),
+        };
+        Ok(StartedRunner {
+            join: join_handle,
+            waker,
+            err_flag: local_err_flag,
+            tuning,
+        })
     }
 
     fn run(&mut self, mut poll: Poll, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
@@ -324,13 +349,13 @@ fn hmi_runner_runtime(
     poll: Poll,
     from_driver: Receiver<RunnerMessage>,
     thread: Vec<ThreadOption>,
-    started: Sender<std::io::Result<()>>,
+    started: Sender<std::io::Result<OptionsReport<ThreadOption>>>,
     telemetry: Option<HmiTelemetry>,
     err_flag: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(()));
+            let _ = started.send(Ok(OptionsReport::from(&report)));
             report
         }
         Err(e) => {

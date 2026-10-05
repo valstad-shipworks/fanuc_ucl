@@ -35,7 +35,7 @@ use crate::{
         rmi_handle::*,
     },
     thread_util::ThreadHandle,
-    tuning::{self, SocketRole, ThreadRole},
+    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
 };
 
 const DRIVER: &str = "rmi";
@@ -197,6 +197,14 @@ struct RmiRunner {
     disconnect_deadline: Option<Instant>,
 }
 
+/// A runner thread that applied its options and is serving the connection.
+struct StartedRunner {
+    join: JoinHandle<()>,
+    waker: Arc<Waker>,
+    err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
+}
+
 impl RmiRunner {
     const TOK_SOCKET: Token = Token(0);
     const TOK_WAKER: Token = Token(1);
@@ -214,11 +222,16 @@ impl RmiRunner {
         thread: Vec<ThreadOption>,
         socket: &[SocketOption],
         telemetry: Option<RmiTelemetry>,
-    ) -> RmiResult<(JoinHandle<()>, Arc<Waker>, Arc<AtomicBool>)> {
-        let std_stream = StdTcpStream::connect_timeout(&addr, connect_timeout)?;
+    ) -> RmiResult<StartedRunner> {
+        let (std_stream, socket_report) = tuning::connect_tcp(
+            DRIVER,
+            SocketRole::TcpControl,
+            addr,
+            connect_timeout,
+            socket,
+        )?;
         std_stream.set_nonblocking(true)?;
         let mut tcp_stream = TcpStream::from_std(std_stream);
-        tuning::apply_socket(DRIVER, SocketRole::TcpControl, &tcp_stream, socket)?;
         let poll = Poll::new()?;
         poll.registry().register(
             &mut tcp_stream,
@@ -247,11 +260,23 @@ impl RmiRunner {
         let started = started_rx
             .recv()
             .unwrap_or_else(|_| Err(std::io::Error::other("RMI runner exited during startup")));
-        if let Err(e) = started {
-            let _ = handle.join();
-            return Err(e.into());
-        }
-        Ok((handle, waker, local_err_flag))
+        let thread_report = match started {
+            Ok(report) => report,
+            Err(e) => {
+                let _ = handle.join();
+                return Err(e.into());
+            }
+        };
+        let tuning = TuningReport {
+            thread: thread_report,
+            socket: OptionsReport::from(&socket_report),
+        };
+        Ok(StartedRunner {
+            join: handle,
+            waker,
+            err_flag: local_err_flag,
+            tuning,
+        })
     }
 
     fn fill_queue(&mut self, message_queue: &mut VecDeque<PendingWrite>) -> bool {
@@ -571,13 +596,13 @@ fn rmi_runner_runtime(
     from_driver: Receiver<RunnerMessage>,
     config: RmiDriverConfig,
     thread: Vec<ThreadOption>,
-    started: Sender<std::io::Result<()>>,
+    started: Sender<std::io::Result<OptionsReport<ThreadOption>>>,
     telemetry: Option<RmiTelemetry>,
     err_flag: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(()));
+            let _ = started.send(Ok(OptionsReport::from(&report)));
             report
         }
         Err(e) => {
@@ -749,6 +774,7 @@ struct RmiConnection {
     handle: ThreadHandle,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
 }
 
 /// Client for the FANUC Remote Motion Interface: a JSON-over-TCP protocol for sending
@@ -808,14 +834,14 @@ impl RmiDriver {
     /// priority class and timer resolution) are the application's to make with
     /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
     ///
-    /// `socket` is applied to both TCP connections once they are made, so it
-    /// accepts only `Dscp` and `LinuxPriority`. `BindDevice` would have to
-    /// precede the connect, buffer sizes would turn off TCP autotuning, and
-    /// busy polling, `DontFragment` and `WinCpuAffinity` do nothing useful for
-    /// this traffic.
+    /// `socket` is applied to both TCP connections before they connect. It
+    /// accepts `BindDevice`, `Dscp` and `LinuxPriority`: buffer sizes would
+    /// turn off TCP autotuning, and busy polling, `DontFragment` and
+    /// `WinCpuAffinity` do nothing useful for this traffic.
     ///
     /// Options for another platform, or that this platform cannot do, are
-    /// skipped with a warning.
+    /// skipped with a warning; [`tuning_report`](Self::tuning_report) lists
+    /// them.
     ///
     /// # Errors
     /// Fails if already connected, with [`RmiError::InvalidOption`] for an
@@ -842,11 +868,13 @@ impl RmiDriver {
         let (to_runner, from_driver) = flume::unbounded();
 
         let deadline = Instant::now() + self.config.timeout;
-        let mut tcp = StdTcpStream::connect_timeout(
-            &SocketAddr::new(self.config.address, 16001),
+        let (mut tcp, _) = tuning::connect_tcp(
+            DRIVER,
+            SocketRole::TcpControl,
+            SocketAddr::new(self.config.address, 16001),
             self.config.timeout,
+            socket,
         )?;
-        tuning::apply_socket(DRIVER, SocketRole::TcpControl, &tcp, socket)?;
 
         tcp.set_write_timeout(Some(self.config.timeout))?;
         tcp.set_nodelay(true)?;
@@ -890,7 +918,12 @@ impl RmiDriver {
         if session_timeout.is_zero() {
             return Err(std::io::Error::from(std::io::ErrorKind::TimedOut).into());
         }
-        let (join_handle, waker, err_flag) = RmiRunner::start(
+        let StartedRunner {
+            join: join_handle,
+            waker,
+            err_flag,
+            tuning,
+        } = RmiRunner::start(
             SocketAddr::new(self.config.address, response.port_number),
             session_timeout,
             handle.to_pass_in(),
@@ -910,6 +943,7 @@ impl RmiDriver {
             handle,
             to_runner,
             err_flag,
+            tuning,
         });
 
         tracing::info!(addr = %self.config.address, "RmiDriver connected");
@@ -956,6 +990,12 @@ impl RmiDriver {
     /// Whether the driver is connected and its I/O thread is still alive.
     pub fn is_connected(&self) -> bool {
         self.get_connection().is_ok()
+    }
+
+    /// What the current session connection's thread and socket options did,
+    /// or `None` while disconnected.
+    pub fn tuning_report(&self) -> Option<TuningReport> {
+        self.connection.as_ref().map(|c| c.tuning.clone())
     }
 
     /// Whether the I/O thread stopped on an error.
@@ -1114,6 +1154,14 @@ pub(super) mod py {
         }
         pub fn version(&self) -> Option<(u8, u8)> {
             self.inner.version()
+        }
+        pub fn tuning_report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+            use pyo3::IntoPyObjectExt;
+            self.inner
+                .connection
+                .as_ref()
+                .map(|c| &c.tuning)
+                .into_py_any(py)
         }
         pub fn send(&self, packet: Bound<PyAny>) -> PyResult<PyRmiHandleGeneric> {
             // self.inner.send_generic(packet).map_err(Into::into).map(PyResponseHandleGeneric::from)

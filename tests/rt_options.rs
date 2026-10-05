@@ -23,13 +23,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use fanuc_ucl::hmi::{HmiDriver, HmiError};
-use fanuc_ucl::hspo::{HspoBrokerError, HspoReceiver, destroy_broker, initialize_broker};
+use fanuc_ucl::hspo::{
+    HspoBrokerError, HspoReceiver, broker_tuning_report, destroy_broker, initialize_broker,
+};
 use fanuc_ucl::rmi::errors::RmiError;
 use fanuc_ucl::rmi::{RmiDriver, RmiDriverConfig};
 use fanuc_ucl::stmo::{StreamMotionDriver, StreamMotionError};
 use fanuc_ucl::{SocketOption, ThreadOption};
 use fast_talker::rt::Scheduler;
-use snare::{IpNet, NicSpec, Sim, SocketEntry, SocketKind, socket_table, sockets_bound};
+use snare::{
+    IpNet, NicSpec, Sim, SocketEntry, SocketKind, UnmodelledOption, socket_table, sockets_bound,
+};
 
 use common::{builder, hmi_server, rmi_server, run, sim};
 
@@ -39,7 +43,11 @@ const ROBOT: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 30, 0, 1));
 
 fn nic_sim() -> Sim {
     builder()
-        .nic(NicSpec::new(NIC).address(IpNet::new(IpAddr::V4(NIC_IP), 24)))
+        .nic(
+            NicSpec::new(NIC)
+                .address(IpNet::new(IpAddr::V4(NIC_IP), 24))
+                .station(ROBOT),
+        )
         .build()
 }
 
@@ -85,6 +93,24 @@ fn open_sockets(kind: SocketKind, peer: SocketAddr) -> Vec<SocketEntry> {
         .collect()
 }
 
+/// Options the sim does not model on `s`, but for fast-talker's
+/// `getsockopt(SO_DOMAIN)` before it sets `IP_RECVERR` on Linux: the sim
+/// refuses that read, and fast-talker takes the family from `getsockname`.
+fn unmodelled(s: &SocketEntry) -> Vec<UnmodelledOption> {
+    #[cfg(target_os = "linux")]
+    let domain_probe = Some(UnmodelledOption::Get {
+        level: libc::SOL_SOCKET,
+        name: libc::SO_DOMAIN,
+    });
+    #[cfg(not(target_os = "linux"))]
+    let domain_probe = None;
+    s.unmodelled_options
+        .iter()
+        .copied()
+        .filter(|o| Some(*o) != domain_probe)
+        .collect()
+}
+
 fn stmo_socket() -> Vec<SocketEntry> {
     open_sockets(SocketKind::Udp, SocketAddr::new(ROBOT, 60015))
 }
@@ -108,18 +134,25 @@ fn stmo_skips_another_platforms_options() {
 }
 
 #[test]
-fn stmo_refuses_options_before_binding() {
+fn stmo_reports_what_its_options_did() {
     sim().run(|| {
         let mut driver = StreamMotionDriver::new(ROBOT, 5, false);
-        let err = driver
-            .connect(&[], &[SocketOption::WinCpuAffinity(0)])
-            .unwrap_err();
-        assert!(
-            matches!(err, StreamMotionError::InvalidOption { driver: "stmo", .. }),
-            "{err:?}"
-        );
-        assert!(!driver.is_connected());
-        assert!(stmo_socket().is_empty());
+        assert!(driver.tuning_report().is_none());
+        let affinity = SocketOption::WinCpuAffinity(0);
+        driver
+            .connect(&[foreign_thread()], std::slice::from_ref(&affinity))
+            .unwrap();
+        let report = driver.tuning_report().unwrap();
+        let skipped_thread: Vec<_> = report.thread.skipped.iter().map(|s| &s.option).collect();
+        let skipped_socket: Vec<_> = report.socket.skipped.iter().map(|s| &s.option).collect();
+        assert_eq!(skipped_thread, [&foreign_thread()]);
+        if cfg!(windows) {
+            assert_eq!(report.socket.applied, [affinity]);
+        } else {
+            assert_eq!(skipped_socket, [&affinity]);
+        }
+        driver.disconnect();
+        assert!(driver.tuning_report().is_none());
     });
 }
 
@@ -137,17 +170,17 @@ fn stmo_socket_options_land_on_its_socket() {
             options.push(SocketOption::LinuxPriority(5));
         }
         driver.connect(&[], &options).unwrap();
+        assert_eq!(
+            driver.tuning_report().unwrap().socket.applied.len(),
+            options.len()
+        );
         let sockets = stmo_socket();
         assert_eq!(sockets.len(), 1, "{sockets:?}");
         let s = &sockets[0];
         assert_eq!(s.rcvbuf, reported_buffer(1 << 16));
         assert_eq!(s.sndbuf, reported_buffer(1 << 15));
         assert_eq!(s.bound_device.as_deref(), Some(NIC));
-        assert!(
-            s.unmodelled_options.is_empty(),
-            "{:?}",
-            s.unmodelled_options
-        );
+        assert!(unmodelled(s).is_empty(), "{:?}", s.unmodelled_options);
         driver.disconnect();
         assert!(stmo_socket().is_empty(), "disconnect left the socket open");
     });
@@ -226,13 +259,12 @@ fn hspo_refuses_options_before_binding() {
             computation_us: 500,
             constraint_us: 1000,
         };
-        let cases: [(Vec<ThreadOption>, Vec<SocketOption>); 6] = [
+        let cases: [(Vec<ThreadOption>, Vec<SocketOption>); 5] = [
             (vec![time_constraint], vec![]),
             (vec![], vec![SocketOption::Dscp(46)]),
             (vec![], vec![SocketOption::SendBuffer(1 << 16)]),
             (vec![], vec![SocketOption::DontFragment(true)]),
             (vec![], vec![SocketOption::LinuxPriority(1)]),
-            (vec![], vec![SocketOption::WinCpuAffinity(0)]),
         ];
         for (thread, socket) in cases {
             let err = initialize_broker(broker_addr(), &thread, &socket).unwrap_err();
@@ -265,20 +297,18 @@ fn hspo_skips_another_platforms_options() {
 fn hspo_socket_options_land_on_its_socket() {
     let _turn = BrokerTurn::take();
     nic_sim().run(|| {
-        initialize_broker(
-            broker_addr(),
-            &[],
-            &[
-                SocketOption::RecvBuffer(1 << 17),
-                SocketOption::BindDevice(NIC.into()),
-            ],
-        )
-        .unwrap();
+        let options = [
+            SocketOption::RecvBuffer(1 << 17),
+            SocketOption::BindDevice(NIC.into()),
+        ];
+        initialize_broker(broker_addr(), &[], &options).unwrap();
+        assert_eq!(broker_tuning_report().unwrap().socket.applied, options);
         let sockets = sockets_bound(broker_addr());
         assert_eq!(sockets.len(), 1, "{sockets:?}");
         assert_eq!(sockets[0].rcvbuf, reported_buffer(1 << 17));
         assert_eq!(sockets[0].bound_device.as_deref(), Some(NIC));
         destroy_broker(true);
+        assert!(broker_tuning_report().is_none());
         assert!(
             sockets_bound(broker_addr()).is_empty(),
             "destroying the broker left its socket open"
@@ -323,7 +353,7 @@ fn rmi_config() -> RmiDriverConfig {
 }
 
 /// Options the request/response roles refuse: real-time classes, and socket
-/// options that would have to precede the connect or defeat TCP autotuning.
+/// options that defeat TCP autotuning or do nothing for this traffic.
 fn refused_by_control() -> [(Vec<ThreadOption>, Vec<SocketOption>); 4] {
     [
         (vec![ThreadOption::RtPriority(80)], vec![]),
@@ -331,8 +361,8 @@ fn refused_by_control() -> [(Vec<ThreadOption>, Vec<SocketOption>); 4] {
             vec![ThreadOption::UnixScheduler(Scheduler::Fifo(10))],
             vec![],
         ),
-        (vec![], vec![SocketOption::BindDevice(NIC.into())]),
         (vec![], vec![SocketOption::RecvBuffer(1 << 16)]),
+        (vec![], vec![SocketOption::WinCpuAffinity(0)]),
     ]
 }
 
@@ -380,6 +410,7 @@ fn rmi_socket_options_apply_to_both_connections() {
             }
             let mut driver = RmiDriver::new(rmi_config());
             driver.connect(&[], &options).unwrap();
+            assert_eq!(driver.tuning_report().unwrap().socket.applied, options);
             let handshake: Vec<_> = snare::closed_sockets()
                 .into_iter()
                 .filter(|s| s.peer == Some(SocketAddr::new(ROBOT, 16001)))
@@ -444,10 +475,10 @@ fn hmi_refuses_options_before_any_connection() {
 
 #[test]
 fn hmi_accepts_its_options_and_skips_another_platforms() {
-    sim().run(|| {
+    nic_sim().run(|| {
         let requests = Arc::new(AtomicU32::new(0));
         run(vec![hmi_server(ROBOT, requests)], || {
-            let mut socket = vec![SocketOption::Dscp(46)];
+            let mut socket = vec![SocketOption::Dscp(46), SocketOption::BindDevice(NIC.into())];
             if cfg!(target_os = "linux") {
                 socket.push(SocketOption::LinuxPriority(3));
             }
@@ -455,8 +486,12 @@ fn hmi_accepts_its_options_and_skips_another_platforms() {
             driver
                 .connect(Some(Duration::from_secs(1)), &[foreign_thread()], &socket)
                 .unwrap();
+            let report = driver.tuning_report().unwrap();
+            assert_eq!(report.socket.applied, socket);
+            assert_eq!(report.thread.skipped.len(), 1);
             let session = open_sockets(SocketKind::TcpStream, SocketAddr::new(ROBOT, 60008));
             assert_eq!(session.len(), 1, "{session:?}");
+            assert_eq!(session[0].bound_device.as_deref(), Some(NIC));
             assert!(session[0].unmodelled_options.is_empty());
             driver.disconnect(false).unwrap();
         });

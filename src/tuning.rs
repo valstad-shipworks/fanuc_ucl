@@ -1,13 +1,9 @@
-use std::{fmt, io};
+use std::{fmt, io, net::SocketAddr};
 
-use fast_talker::options::{Policy, Report, Rules, SocketOption, ThreadOption};
+use fast_talker::options::{Adjusted, Report, Rules, Skipped, SocketOption, ThreadOption};
 #[cfg(any(feature = "rmi", feature = "hmi"))]
 use fast_talker::rt::{Scheduler, ThreadPriority};
-
-#[cfg(unix)]
-pub(crate) use std::os::fd::AsFd as AsSocketHandle;
-#[cfg(windows)]
-pub(crate) use std::os::windows::io::AsSocket as AsSocketHandle;
+use fast_talker::sockets;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadRole {
@@ -101,6 +97,7 @@ pub(crate) fn socket_allowed(role: SocketRole, o: &SocketOption) -> bool {
                 | SocketOption::LinuxBusyPoll(_)
                 | SocketOption::LinuxPreferBusyPoll(_)
                 | SocketOption::LinuxBusyPollBudget(_)
+                | SocketOption::WinCpuAffinity(_)
         ),
         #[cfg(feature = "hspo")]
         SocketRole::UdpStreamRx => matches!(
@@ -110,25 +107,22 @@ pub(crate) fn socket_allowed(role: SocketRole, o: &SocketOption) -> bool {
                 | SocketOption::LinuxBusyPoll(_)
                 | SocketOption::LinuxPreferBusyPoll(_)
                 | SocketOption::LinuxBusyPollBudget(_)
+                | SocketOption::WinCpuAffinity(_)
         ),
         #[cfg(any(feature = "rmi", feature = "hmi"))]
-        SocketRole::TcpControl => {
-            matches!(o, SocketOption::Dscp(_) | SocketOption::LinuxPriority(_))
-        }
+        SocketRole::TcpControl => matches!(
+            o,
+            SocketOption::BindDevice(_) | SocketOption::Dscp(_) | SocketOption::LinuxPriority(_)
+        ),
     }
 }
 
-fn first_refused<O: fmt::Debug>(
-    driver: &'static str,
-    options: &[O],
-    allowed: impl Fn(&O) -> bool,
-) -> Result<(), RefusedOption> {
-    match options.iter().find(|o| !allowed(o)) {
-        Some(o) => Err(RefusedOption {
-            option: format!("{o:?}"),
+impl RefusedOption {
+    fn new(driver: &'static str, kind: &str, option: &impl fmt::Debug) -> Self {
+        Self {
+            option: format!("{kind} ({option:?})"),
             driver,
-        }),
-        None => Ok(()),
+        }
     }
 }
 
@@ -137,7 +131,11 @@ pub(crate) fn check_thread(
     role: ThreadRole,
     options: &[ThreadOption],
 ) -> Result<(), RefusedOption> {
-    first_refused(driver, options, |o| thread_allowed(role, o))
+    let allow = |o: &ThreadOption| thread_allowed(role, o);
+    match Rules::portable(&allow).first_rejected(options) {
+        Some(o) => Err(RefusedOption::new(driver, o.kind_name(), o)),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn check_socket(
@@ -145,15 +143,24 @@ pub(crate) fn check_socket(
     role: SocketRole,
     options: &[SocketOption],
 ) -> Result<(), RefusedOption> {
-    first_refused(driver, options, |o| socket_allowed(role, o))
+    let allow = |o: &SocketOption| socket_allowed(role, o);
+    match Rules::portable(&allow).first_rejected(options) {
+        Some(o) => Err(RefusedOption::new(driver, o.kind_name(), o)),
+        None => Ok(()),
+    }
 }
 
-fn rules<O>(allow: &dyn Fn(&O) -> bool) -> Rules<'_, O> {
-    Rules {
-        other_platform: Policy::Report,
-        unsupported: Policy::Report,
-        rejected: Policy::Error,
-        allow: Some(allow),
+fn log_report<O: fmt::Debug>(driver: &str, what: &str, report: &Report<O>) {
+    for a in &report.adjusted {
+        tracing::warn!(
+            option = ?a.option,
+            effective = ?a.effective,
+            reason = %a.reason,
+            "{driver} {what} option adjusted"
+        );
+    }
+    for s in &report.skipped {
+        tracing::warn!(option = ?s.option, reason = %s.reason, "{driver} {what} option skipped");
     }
 }
 
@@ -165,25 +172,115 @@ pub(crate) fn apply_thread(
     options: &[ThreadOption],
 ) -> io::Result<Report<ThreadOption>> {
     let allow = |o: &ThreadOption| thread_allowed(role, o);
-    let report = ThreadOption::apply_all(options, &rules(&allow))?;
-    for s in &report.skipped {
-        tracing::warn!(option = ?s.option, reason = %s.reason, "{driver} thread option skipped");
-    }
+    let report = ThreadOption::apply_all(options, &Rules::portable(&allow))?;
+    log_report(driver, "thread", &report);
     Ok(report)
 }
 
-pub(crate) fn apply_socket(
+/// Binds a UDP socket to `addr` with `options` applied before the bind.
+#[cfg(any(feature = "stmo", feature = "hspo"))]
+pub(crate) fn bind_udp(
     driver: &'static str,
     role: SocketRole,
-    socket: &impl AsSocketHandle,
+    addr: SocketAddr,
     options: &[SocketOption],
-) -> io::Result<Report<SocketOption>> {
+) -> io::Result<(std::net::UdpSocket, Report<SocketOption>)> {
     let allow = |o: &SocketOption| socket_allowed(role, o);
-    let report = SocketOption::apply_all(socket, options, &rules(&allow))?;
-    for s in &report.skipped {
-        tracing::warn!(option = ?s.option, reason = %s.reason, "{driver} socket option skipped");
+    let (socket, report) = sockets::bind_udp(addr, options, &Rules::portable(&allow))?;
+    log_report(driver, "socket", &report);
+    Ok((socket, report))
+}
+
+/// Connects a TCP stream to `addr` within `timeout`, with `options` applied
+/// before the handshake.
+#[cfg(any(feature = "rmi", feature = "hmi"))]
+pub(crate) fn connect_tcp(
+    driver: &'static str,
+    role: SocketRole,
+    addr: SocketAddr,
+    timeout: std::time::Duration,
+    options: &[SocketOption],
+) -> io::Result<(std::net::TcpStream, Report<SocketOption>)> {
+    let allow = |o: &SocketOption| socket_allowed(role, o);
+    let (stream, report) =
+        sockets::connect_tcp(addr, Some(timeout), options, &Rules::portable(&allow))?;
+    log_report(driver, "socket", &report);
+    Ok((stream, report))
+}
+
+/// What one list of options did: which were applied, which of those the
+/// platform changed (a buffer capped by `net.core.rmem_max`, a priority
+/// clamped), and which were skipped and why.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptionsReport<O> {
+    /// Options applied, in order.
+    pub applied: Vec<O>,
+    /// Applied options that took effect with a different value.
+    pub adjusted: Vec<Adjusted<O>>,
+    /// Options for another platform, or that this platform cannot do.
+    pub skipped: Vec<Skipped<O>>,
+}
+
+impl<O> Default for OptionsReport<O> {
+    fn default() -> Self {
+        Self {
+            applied: Vec::new(),
+            adjusted: Vec::new(),
+            skipped: Vec::new(),
+        }
     }
-    Ok(report)
+}
+
+impl<O: Clone> From<&Report<O>> for OptionsReport<O> {
+    fn from(r: &Report<O>) -> Self {
+        Self {
+            applied: r.applied.clone(),
+            adjusted: r.adjusted.clone(),
+            skipped: r.skipped.clone(),
+        }
+    }
+}
+
+/// What a connection's thread and socket options did, from the driver's
+/// `tuning_report`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TuningReport {
+    /// The I/O thread's options.
+    pub thread: OptionsReport<ThreadOption>,
+    /// The socket's options.
+    pub socket: OptionsReport<SocketOption>,
+}
+
+#[cfg(feature = "py")]
+mod py {
+    use super::{OptionsReport, TuningReport};
+    use fast_talker::options::Report;
+    use pyo3::{IntoPyObject, prelude::*, types::PyDict};
+
+    fn dict<'py, O: Clone>(py: Python<'py>, r: &OptionsReport<O>) -> PyResult<Bound<'py, PyDict>>
+    where
+        for<'a> &'a Report<O>:
+            IntoPyObject<'py, Target = PyDict, Output = Bound<'py, PyDict>, Error = PyErr>,
+    {
+        let mut report = Report::default();
+        report.applied = r.applied.clone();
+        report.adjusted = r.adjusted.clone();
+        report.skipped = r.skipped.clone();
+        (&report).into_pyobject(py)
+    }
+
+    impl<'py> IntoPyObject<'py> for &TuningReport {
+        type Target = PyDict;
+        type Output = Bound<'py, PyDict>;
+        type Error = PyErr;
+
+        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("thread", dict(py, &self.thread)?)?;
+            d.set_item("socket", dict(py, &self.socket)?)?;
+            Ok(d)
+        }
+    }
 }
 
 #[cfg(all(test, feature = "stmo", feature = "hspo", feature = "rmi"))]
@@ -247,15 +344,19 @@ mod tests {
             &SocketOption::RecvBuffer(1 << 20)
         ));
         for role in [SocketRole::UdpCyclic, SocketRole::UdpStreamRx] {
-            assert!(!socket_allowed(role, &SocketOption::WinCpuAffinity(0)));
+            assert!(socket_allowed(role, &SocketOption::WinCpuAffinity(0)));
         }
         assert!(socket_allowed(
             SocketRole::TcpControl,
             &SocketOption::Dscp(46)
         ));
-        assert!(!socket_allowed(
+        assert!(socket_allowed(
             SocketRole::TcpControl,
             &SocketOption::BindDevice("eth0".into())
+        ));
+        assert!(!socket_allowed(
+            SocketRole::TcpControl,
+            &SocketOption::WinCpuAffinity(0)
         ));
         assert!(!socket_allowed(
             SocketRole::TcpControl,
@@ -272,7 +373,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.driver, "rmi");
-        assert_eq!(err.option, "RtPriority(80)");
+        assert_eq!(err.option, "rt_priority (RtPriority(80))");
         assert!(check_socket("hspo", SocketRole::UdpStreamRx, &[]).is_ok());
     }
 

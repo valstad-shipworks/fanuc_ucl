@@ -25,11 +25,11 @@ use crate::hmi::proto::ports::{
     self, ReadableDataPort, UnsafelyWritableDataPort, WritableDataPort,
 };
 use crate::hmi::proto::wire::Message;
-use crate::hmi::runner::{HmiRunner, RunnerMessage};
+use crate::hmi::runner::{HmiRunner, RunnerMessage, StartedRunner};
 use crate::{
     ResponseNotFulfilled,
     thread_util::ThreadHandle,
-    tuning::{self, SocketRole, ThreadRole},
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
 use fast_talker::options::{SocketOption, ThreadOption};
 
@@ -205,6 +205,7 @@ struct HmiConnection {
     waker: Arc<mio::Waker>,
     to_runner: Sender<RunnerMessage>,
     err_flag: Arc<AtomicBool>,
+    tuning: TuningReport,
 }
 
 /// The main driver struct for interfacing with a FANUC robot via SNPX HMI.
@@ -260,14 +261,14 @@ impl HmiDriver {
     /// priority class and timer resolution) are the application's to make with
     /// [`ProcessOption::apply_all`](fast_talker::options::ProcessOption::apply_all).
     ///
-    /// `socket` is applied to the TCP connection once it is made, so it
-    /// accepts only `Dscp` and `LinuxPriority`. `BindDevice` would have to
-    /// precede the connect, buffer sizes would turn off TCP autotuning, and
-    /// busy polling, `DontFragment` and `WinCpuAffinity` do nothing useful for
-    /// this traffic.
+    /// `socket` is applied to the TCP connection before it connects. It
+    /// accepts `BindDevice`, `Dscp` and `LinuxPriority`: buffer sizes would
+    /// turn off TCP autotuning, and busy polling, `DontFragment` and
+    /// `WinCpuAffinity` do nothing useful for this traffic.
     ///
     /// Options for another platform, or that this platform cannot do, are
-    /// skipped with a warning.
+    /// skipped with a warning; [`tuning_report`](Self::tuning_report) lists
+    /// them.
     ///
     /// # Errors
     /// Returns an error if the timeout is zero, an option is not accepted
@@ -298,7 +299,12 @@ impl HmiDriver {
         let deadline = std::time::Instant::now() + timeout;
         let (to_runner, from_driver) = flume::unbounded();
         let mut handle = ThreadHandle::new();
-        let (join_handle, waker, err_flag) = HmiRunner::start(
+        let StartedRunner {
+            join: join_handle,
+            waker,
+            err_flag,
+            tuning,
+        } = HmiRunner::start(
             addr,
             timeout,
             handle.to_pass_in(),
@@ -314,6 +320,7 @@ impl HmiDriver {
             waker,
             to_runner,
             err_flag,
+            tuning,
         });
         let handshake =
             self.handshake(deadline.saturating_duration_since(std::time::Instant::now()));
@@ -373,6 +380,12 @@ impl HmiDriver {
             .as_ref()
             .map(|conn| conn.handle.is_alive())
             .unwrap_or(false)
+    }
+
+    /// What the current connection's thread and socket options did, or `None`
+    /// while disconnected.
+    pub fn tuning_report(&self) -> Option<TuningReport> {
+        self.connection.as_ref().map(|c| c.tuning.clone())
     }
 
     /// Returns true if the I/O thread has hit a fatal error, or false when not connected.

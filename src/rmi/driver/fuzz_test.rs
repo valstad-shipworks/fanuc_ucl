@@ -336,6 +336,7 @@ fn wired_driver(next_seq: u32) -> (RmiDriver, Receiver<RunnerMessage>) {
         handle: ThreadHandle::new(),
         to_runner,
         err_flag: Arc::new(AtomicBool::new(false)),
+        tuning: Default::default(),
     });
     driver.seq.store(next_seq, Ordering::Relaxed);
     (driver, from_driver)

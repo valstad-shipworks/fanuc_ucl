@@ -217,6 +217,12 @@ impl HmiDriver {
         HmiDriver::has_connection_errored(self)
     }
 
+    #[pyo3(name = "tuning_report")]
+    pub fn py_tuning_report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use pyo3::IntoPyObjectExt;
+        self.connection.as_ref().map(|c| &c.tuning).into_py_any(py)
+    }
+
     #[pyo3(name = "register_asg", signature = (*args, **kwargs))]
     pub fn register_asg_py<'py>(
         &mut self,

@@ -7,7 +7,6 @@ pub mod proto;
 pub(crate) mod stmo_handle;
 #[cfg(test)]
 mod test;
-mod tx_errqueue;
 mod types;
 
 pub use self::{

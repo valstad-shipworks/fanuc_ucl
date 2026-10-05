@@ -62,13 +62,15 @@ pub mod stmo;
 
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
 mod thread_util;
-#[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
+#[cfg(any(feature = "stmo", feature = "rmi", feature = "hmi"))]
 mod time_util;
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
 mod tuning;
 
 pub use fast_talker;
 pub use fast_talker::options::{SocketOption, ThreadOption};
+#[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
+pub use tuning::{OptionsReport, TuningReport};
 
 /// Observer for packets crossing a driver's socket. A sink is handed to a
 /// driver constructor and shared with the I/O thread of every connection the
@@ -210,6 +212,7 @@ pub mod py {
         m.add_class::<joints::JointType>()?;
         m.add_class::<LogLevel>()?;
         m.add_function(pyo3::wrap_pyfunction!(set_log_level, m)?)?;
+        fast_talker::py::register(m)?;
         Ok(())
     }
 }

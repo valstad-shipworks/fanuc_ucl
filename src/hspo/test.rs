@@ -135,6 +135,25 @@ fn test_stream_clock_index_gate() {
 }
 
 #[test]
+fn test_stream_clock_offset_prefers_kernel_stamps() {
+    let sc = StreamClock::default();
+    let sys = 1_787_083_917_000_000u64;
+    let at = |micros: u64| Some(SystemTime::UNIX_EPOCH + Duration::from_micros(micros));
+
+    // A user-space stamp anchors the stream until a kernel one arrives.
+    sc.accept_from(0, 1_000, sys + 300, Source::UserSpace);
+    assert_eq!(sc.system_time_of(0, 1_000), at(sys + 300));
+    sc.accept_from(1, 9_000, sys + 8_000, Source::Kernel);
+    assert_eq!(sc.system_time_of(1, 9_000), at(sys + 8_000));
+
+    // From then on a packet that sat in the socket buffer moves nothing.
+    sc.accept_from(2, 17_000, sys + 16_900, Source::UserSpace);
+    assert_eq!(sc.system_time_of(2, 17_000), at(sys + 16_000));
+    sc.accept_from(3, 25_000, sys + 24_010, Source::Kernel);
+    assert_eq!(sc.system_time_of(3, 25_000), at(sys + 24_010));
+}
+
+#[test]
 fn test_stream_clock_wrap() {
     let sc = StreamClock::default();
     let cycle = u32::MAX as u64 + 1;
