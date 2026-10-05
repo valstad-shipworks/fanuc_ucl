@@ -68,9 +68,9 @@ mod time_util;
 mod tuning;
 
 pub use fast_talker;
-pub use fast_talker::options::{SocketOption, ThreadOption};
+pub use fast_talker::options::{ReportSummary, SocketOption, ThreadOption};
 #[cfg(any(feature = "stmo", feature = "hspo", feature = "rmi", feature = "hmi"))]
-pub use tuning::{OptionsReport, TuningReport};
+pub use tuning::TuningReport;
 
 /// Observer for packets crossing a driver's socket. A sink is handed to a
 /// driver constructor and shared with the I/O thread of every connection the
@@ -212,7 +212,7 @@ pub mod py {
         m.add_class::<joints::JointType>()?;
         m.add_class::<LogLevel>()?;
         m.add_function(pyo3::wrap_pyfunction!(set_log_level, m)?)?;
-        fast_talker::py::register(m)?;
+        fast_talker::py::register_as(m, "fanuc_ucl")?;
         Ok(())
     }
 }

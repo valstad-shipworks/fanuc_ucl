@@ -1,4 +1,4 @@
-use fast_talker::options::{SocketOption, ThreadOption};
+use fast_talker::options::{ReportSummary, SocketOption, ThreadOption};
 use flume::{Receiver, Sender};
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
@@ -12,7 +12,7 @@ use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use crate::hmi::proto::wire::{Body, Header, Message};
 use crate::hmi::{BINCODE_CFG, DRIVER, DriverResult, HmiError, HmiTelemetry};
 use crate::thread_util::ThreadHandle;
-use crate::tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport};
+use crate::tuning::{self, SocketRole, ThreadRole, TuningReport};
 
 use super::hmi_handle::{HmiHandleGeneric, HmiResult};
 
@@ -123,7 +123,7 @@ impl HmiRunner {
         tracing::trace!("HMI runner started");
         let tuning = TuningReport {
             thread: thread_report,
-            socket: OptionsReport::from(&socket_report),
+            socket: socket_report.summary(),
         };
         Ok(StartedRunner {
             join: join_handle,
@@ -349,13 +349,13 @@ fn hmi_runner_runtime(
     poll: Poll,
     from_driver: Receiver<RunnerMessage>,
     thread: Vec<ThreadOption>,
-    started: Sender<std::io::Result<OptionsReport<ThreadOption>>>,
+    started: Sender<std::io::Result<ReportSummary<ThreadOption>>>,
     telemetry: Option<HmiTelemetry>,
     err_flag: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(OptionsReport::from(&report)));
+            let _ = started.send(Ok(report.summary()));
             report
         }
         Err(e) => {

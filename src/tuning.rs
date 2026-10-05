@@ -1,6 +1,6 @@
 use std::{fmt, io, net::SocketAddr};
 
-use fast_talker::options::{Adjusted, Report, Rules, Skipped, SocketOption, ThreadOption};
+use fast_talker::options::{Report, ReportSummary, Rules, SocketOption, ThreadOption};
 #[cfg(any(feature = "rmi", feature = "hmi"))]
 use fast_talker::rt::{Scheduler, ThreadPriority};
 use fast_talker::sockets;
@@ -208,66 +208,20 @@ pub(crate) fn connect_tcp(
     Ok((stream, report))
 }
 
-/// What one list of options did: which were applied, which of those the
-/// platform changed (a buffer capped by `net.core.rmem_max`, a priority
-/// clamped), and which were skipped and why.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OptionsReport<O> {
-    /// Options applied, in order.
-    pub applied: Vec<O>,
-    /// Applied options that took effect with a different value.
-    pub adjusted: Vec<Adjusted<O>>,
-    /// Options for another platform, or that this platform cannot do.
-    pub skipped: Vec<Skipped<O>>,
-}
-
-impl<O> Default for OptionsReport<O> {
-    fn default() -> Self {
-        Self {
-            applied: Vec::new(),
-            adjusted: Vec::new(),
-            skipped: Vec::new(),
-        }
-    }
-}
-
-impl<O: Clone> From<&Report<O>> for OptionsReport<O> {
-    fn from(r: &Report<O>) -> Self {
-        Self {
-            applied: r.applied.clone(),
-            adjusted: r.adjusted.clone(),
-            skipped: r.skipped.clone(),
-        }
-    }
-}
-
 /// What a connection's thread and socket options did, from the driver's
 /// `tuning_report`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TuningReport {
     /// The I/O thread's options.
-    pub thread: OptionsReport<ThreadOption>,
+    pub thread: ReportSummary<ThreadOption>,
     /// The socket's options.
-    pub socket: OptionsReport<SocketOption>,
+    pub socket: ReportSummary<SocketOption>,
 }
 
 #[cfg(feature = "py")]
 mod py {
-    use super::{OptionsReport, TuningReport};
-    use fast_talker::options::Report;
+    use super::TuningReport;
     use pyo3::{IntoPyObject, prelude::*, types::PyDict};
-
-    fn dict<'py, O: Clone>(py: Python<'py>, r: &OptionsReport<O>) -> PyResult<Bound<'py, PyDict>>
-    where
-        for<'a> &'a Report<O>:
-            IntoPyObject<'py, Target = PyDict, Output = Bound<'py, PyDict>, Error = PyErr>,
-    {
-        let mut report = Report::default();
-        report.applied = r.applied.clone();
-        report.adjusted = r.adjusted.clone();
-        report.skipped = r.skipped.clone();
-        (&report).into_pyobject(py)
-    }
 
     impl<'py> IntoPyObject<'py> for &TuningReport {
         type Target = PyDict;
@@ -276,8 +230,8 @@ mod py {
 
         fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             let d = PyDict::new(py);
-            d.set_item("thread", dict(py, &self.thread)?)?;
-            d.set_item("socket", dict(py, &self.socket)?)?;
+            d.set_item("thread", &self.thread)?;
+            d.set_item("socket", &self.socket)?;
             Ok(d)
         }
     }

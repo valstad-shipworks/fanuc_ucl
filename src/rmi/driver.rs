@@ -13,7 +13,7 @@ use std::{
 };
 
 use cfg_mixin::cfg_mixin;
-use fast_talker::options::{SocketOption, ThreadOption};
+use fast_talker::options::{ReportSummary, SocketOption, ThreadOption};
 use flume::{Receiver, Sender};
 use mio::{Events, Interest, Poll, Token, Waker, net::TcpStream};
 use serde::Deserialize;
@@ -35,7 +35,7 @@ use crate::{
         rmi_handle::*,
     },
     thread_util::ThreadHandle,
-    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
 
 const DRIVER: &str = "rmi";
@@ -269,7 +269,7 @@ impl RmiRunner {
         };
         let tuning = TuningReport {
             thread: thread_report,
-            socket: OptionsReport::from(&socket_report),
+            socket: socket_report.summary(),
         };
         Ok(StartedRunner {
             join: handle,
@@ -596,13 +596,13 @@ fn rmi_runner_runtime(
     from_driver: Receiver<RunnerMessage>,
     config: RmiDriverConfig,
     thread: Vec<ThreadOption>,
-    started: Sender<std::io::Result<OptionsReport<ThreadOption>>>,
+    started: Sender<std::io::Result<ReportSummary<ThreadOption>>>,
     telemetry: Option<RmiTelemetry>,
     err_flag: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Control, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(OptionsReport::from(&report)));
+            let _ = started.send(Ok(report.summary()));
             report
         }
         Err(e) => {

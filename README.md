@@ -532,8 +532,12 @@ From Python, the lists take any shape fast-talker accepts:
 import fanuc_ucl
 
 with fanuc_ucl.apply_process_options(["lock_memory", ("linux_cpu_dma_latency", 0)]):
-    driver.connect(thread=[("cpu_affinity", [3]), ("rt_priority", 80)], socket={"dscp": 46})
-    print(driver.tuning_report())  # {"thread": {"applied": [...], ...}, "socket": {...}}
+    driver.connect(
+        thread=[("cpu_affinity", [3]), ("rt_priority", 80)],
+        socket={"dscp": 46},
+    )
+    # {"thread": {"applied": [...], ...}, "socket": {...}}
+    print(driver.tuning_report())
 ```
 
 hspo stamps each datagram with the kernel's receive time where the platform

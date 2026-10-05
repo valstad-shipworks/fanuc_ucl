@@ -15,7 +15,7 @@ use cfg_mixin::cfg_mixin;
 use event_listener::{Event, Listener};
 use fast_talker::{
     SocketError,
-    options::{SocketOption, ThreadOption},
+    options::{ReportSummary, SocketOption, ThreadOption},
     sockets,
 };
 use flume::{Receiver, Sender};
@@ -39,7 +39,7 @@ use crate::{
     },
     thread_util::{GeneralThreadError, ThreadHandle},
     time_util::host_now,
-    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
 
 use mio::net::UdpSocket as MioUdpSocket;
@@ -923,7 +923,7 @@ fn stream_motion_runtime(
     thread_handle: ThreadHandle,
     io: StmoIo,
     thread: Vec<ThreadOption>,
-    started: flume::Sender<io::Result<OptionsReport<ThreadOption>>>,
+    started: flume::Sender<io::Result<ReportSummary<ThreadOption>>>,
     to_driver: Sender<RxPackets>,
     from_driver: Receiver<ToThreadMessage>,
     itl: Arc<(Event, AtomicBool)>,
@@ -935,7 +935,7 @@ fn stream_motion_runtime(
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Cyclic, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(OptionsReport::from(&report)));
+            let _ = started.send(Ok(report.summary()));
             report
         }
         Err(e) => {
@@ -1264,7 +1264,7 @@ impl StreamMotionDriver {
             itl,
             tuning: TuningReport {
                 thread: thread_report,
-                socket: OptionsReport::from(&socket_report),
+                socket: socket_report.summary(),
             },
         });
 

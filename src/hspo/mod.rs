@@ -6,7 +6,7 @@ mod test;
 use cfg_vis::{cfg_vis, cfg_vis_fields};
 use fast_talker::{
     Config, Received, Source, Timestamped,
-    options::{SocketOption, ThreadOption},
+    options::{ReportSummary, SocketOption, ThreadOption},
 };
 use parking_lot::Mutex;
 use std::{
@@ -24,7 +24,7 @@ use std::{
 use crate::{
     joints::{JointFormat, JointTemplate},
     thread_util::GeneralThreadError,
-    tuning::{self, OptionsReport, SocketRole, ThreadRole, TuningReport},
+    tuning::{self, SocketRole, ThreadRole, TuningReport},
 };
 use bincode::{Decode, Encode};
 use cfg_mixin::cfg_mixin;
@@ -1217,7 +1217,7 @@ struct HspoBroker {
 /// surfaces from [`initialize_broker`] and the waker exists before the thread.
 struct BrokerIo {
     socket: Timestamped<MioUdpSocket>,
-    tuning: OptionsReport<SocketOption>,
+    tuning: ReportSummary<SocketOption>,
     poll: Poll,
     waker: Arc<Waker>,
 }
@@ -1242,7 +1242,7 @@ impl BrokerIo {
         );
         Ok(Self {
             socket,
-            tuning: OptionsReport::from(&report),
+            tuning: report.summary(),
             poll,
             waker,
         })
@@ -1261,13 +1261,13 @@ impl From<GeneralThreadError> for HspoBrokerError {
 fn broker_runtime(
     io: BrokerIo,
     thread: Vec<ThreadOption>,
-    started: Sender<io::Result<OptionsReport<ThreadOption>>>,
+    started: Sender<io::Result<ReportSummary<ThreadOption>>>,
     robot_receiver: Receiver<RobotSender>,
     thread_kill_switch: Arc<AtomicBool>,
 ) {
     let _tuning = match tuning::apply_thread(DRIVER, ThreadRole::Stream, &thread) {
         Ok(report) => {
-            let _ = started.send(Ok(OptionsReport::from(&report)));
+            let _ = started.send(Ok(report.summary()));
             report
         }
         Err(e) => {
