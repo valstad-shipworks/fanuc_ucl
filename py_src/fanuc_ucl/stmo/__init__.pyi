@@ -4,7 +4,7 @@ from enum import IntEnum
 from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 from typing_extensions import Self
 
-from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike, TuningReportDict
 
 __all__ = [
     "AxisMotionConstraint",
@@ -212,18 +212,21 @@ class StreamMotionDriver:
         """Binds the local UDP socket and spawns the I/O thread.
 
         ``thread`` is applied by the I/O thread to itself and ``socket`` to the
-        UDP socket right after it is bound; ``None`` (the default) applies
-        nothing. The I/O thread answers every interpolation cycle, so every
-        thread and socket option is accepted except ``win_cpu_affinity``,
-        which Windows only takes before bind. Options for another platform,
-        or that this platform cannot do, are skipped with a warning; one that
-        is attempted and fails raises. Process-wide settings are the
-        application's to make.
+        UDP socket before it is bound; ``None`` (the default) applies nothing.
+        The I/O thread answers every interpolation cycle, so every thread and
+        socket option is accepted. Options for another platform, or that this
+        platform cannot do, are skipped with a warning; one that is attempted
+        and fails raises. ``tuning_report()`` lists what was applied, adjusted
+        and skipped. Process-wide settings are the application's to make with
+        ``fanuc_ucl.apply_process_options``.
         """
     def disconnect(self) -> None: ...
     def start(self, timeout_secs: float = 2.0): ...
     def stop(self) -> None: ...
     def is_connected(self) -> bool: ...
+    def tuning_report(self) -> TuningReportDict | None:
+        """What the connection's thread and socket options did, or ``None``
+        while disconnected."""
     def has_connection_errored(self) -> bool:
         """Returns ``True`` if the background runner thread failed during setup.
 

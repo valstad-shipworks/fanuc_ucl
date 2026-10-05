@@ -9,9 +9,11 @@ comes back is the refusal, not a conversion error.
 
 import dataclasses
 import enum
+import sys
 import time
 import types
 
+import fanuc_ucl
 import pytest
 from conftest import CLOSED, UNROUTABLE
 from fanuc_ucl import hmi, hspo, rmi, stmo
@@ -228,3 +230,47 @@ def test_none_and_empty_mean_no_options():
             driver.connect(thread, socket)
         finally:
             driver.disconnect()
+
+
+def test_apply_process_options_holds_and_releases():
+    foreign = (
+        "linux_cpu_dma_latency" if sys.platform != "linux" else "win_timer_resolution"
+    )
+    with fanuc_ucl.apply_process_options([(foreign, 1)]) as guard:
+        assert guard.active
+        assert guard.applied == []
+        assert [s["option"]["kind"] for s in guard.skipped] == [foreign]
+    assert not guard.active
+
+
+def test_stmo_reports_what_its_options_did():
+    driver = stmo.StreamMotionDriver(CLOSED, 5)
+    assert driver.tuning_report() is None
+    try:
+        driver.connect(("linux_nice", 0), ("win_cpu_affinity", 0))
+        report = driver.tuning_report()
+        assert set(report) == {"thread", "socket"}
+        for part in report.values():
+            assert set(part) == {"applied", "adjusted", "skipped"}
+        affinity = {"kind": "win_cpu_affinity", "value": 0}
+        if sys.platform == "win32":
+            assert report["socket"]["applied"] == [affinity]
+        else:
+            assert [s["option"] for s in report["socket"]["skipped"]] == [affinity]
+    finally:
+        driver.disconnect()
+    assert driver.tuning_report() is None
+
+
+def test_hspo_reports_what_its_options_did():
+    assert hspo.broker_tuning_report() is None
+    try:
+        hspo.initialize_broker("127.0.0.1:0", None, ("recv_buffer", 1 << 16))
+        report = hspo.broker_tuning_report()
+        assert report["socket"]["applied"] == [
+            {"kind": "recv_buffer", "value": 1 << 16}
+        ]
+        assert report["thread"] == {"applied": [], "adjusted": [], "skipped": []}
+    finally:
+        hspo.destroy_broker(True)
+    assert hspo.broker_tuning_report() is None

@@ -2,12 +2,15 @@ from enum import Enum
 
 from .....fanuc_ucl.py_src.fanuc_ucl import hspo, rmi, stmo
 from ._common import JointFormat, JointTemplate, JointType
+from ._options import ProcessGuard, apply_process_options
 
 __all__ = [
     "JointFormat",
     "JointTemplate",
     "JointType",
     "LogLevel",
+    "ProcessGuard",
+    "apply_process_options",
     "hspo",
     "rmi",
     "set_log_level",

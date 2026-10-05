@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, overload
 
-from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike, TuningReportDict
 
 from .asg import *
 
@@ -139,18 +139,22 @@ class HmiDriver:
         """Connects to the HMI and performs the necessary handshake to establish communication.
 
         ``thread`` is applied by the I/O thread to itself and ``socket`` to the
-        TCP connection once made; ``None`` (the default) applies nothing.
-        Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
+        TCP connection before it connects; ``None`` (the default) applies
+        nothing. Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
         ``linux_nice``, ``unix_scheduler`` (``other``/``batch``/``idle``),
         ``win_priority`` below ``time_critical``,
         ``win_disable_power_throttling`` and ``macos_qos``; real-time classes
-        are refused. Socket options accepted: ``dscp`` and ``linux_priority``.
-        A refused option raises ``ValueError``.
+        are refused. Socket options accepted: ``bind_device``, ``dscp`` and
+        ``linux_priority``. A refused option raises ``ValueError``.
+        ``tuning_report()`` lists what was applied, adjusted and skipped.
         """
     def disconnect(self) -> None:
         """Disconnects from the HMI, shutting down the runner thread and cleaning up resources."""
     def is_connected(self) -> bool:
         """Returns ``True`` if the driver is currently connected to the HMI."""
+    def tuning_report(self) -> TuningReportDict | None:
+        """What the connection's thread and socket options did, or ``None``
+        while disconnected."""
     def has_connection_errored(self) -> bool:
         """Returns ``True`` if the background runner thread failed during setup.
 

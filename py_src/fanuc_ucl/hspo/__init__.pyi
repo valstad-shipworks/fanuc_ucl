@@ -3,7 +3,7 @@ from typing import Generic, TypeVar
 
 from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 
-from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike, TuningReportDict
 
 _T = TypeVar("_T")
 
@@ -13,6 +13,7 @@ __all__ = [
     "JointAnglesPacket",
     "TcpCartesianPositionPacket",
     "VariablesPacket",
+    "broker_tuning_report",
     "destroy_broker",
     "initialize_broker",
 ]
@@ -83,14 +84,19 @@ def initialize_broker(
     This must be called before creating any ``HspoReceiver``. Calling it again after initialization is a no-op.
 
     ``thread`` is applied by the broker thread to itself and ``socket`` to the
-    receive socket right after it is bound; ``None`` (the default) applies
+    receive socket before it is bound; ``None`` (the default) applies
     nothing. Every thread option is accepted except ``macos_time_constraint``.
     Socket options accepted: ``recv_buffer``, ``bind_device``,
-    ``linux_busy_poll``, ``linux_prefer_busy_poll`` and
-    ``linux_busy_poll_budget``. Windows only takes ``win_cpu_affinity`` before
-    bind, and the rest only shape outgoing traffic, which this socket has none
-    of. A refused option raises ``ValueError``.
+    ``linux_busy_poll``, ``linux_prefer_busy_poll``,
+    ``linux_busy_poll_budget`` and ``win_cpu_affinity``; the rest only shape
+    outgoing traffic, which this socket has none of. A refused option raises
+    ``ValueError``. ``broker_tuning_report()`` lists what was applied,
+    adjusted and skipped.
     """
+
+def broker_tuning_report() -> TuningReportDict | None:
+    """What the running broker's thread and socket options did, or ``None``
+    when no broker is running."""
 
 def destroy_broker(wait_for_thread: bool = True) -> None:
     """Shuts down the global HSPO broker.

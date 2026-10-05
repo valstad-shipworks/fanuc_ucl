@@ -1,5 +1,6 @@
-"""Types for the real-time thread and socket options the drivers accept,
-as defined by fast-talker.
+"""Types for the real-time thread, socket and process options the drivers
+and `apply_process_options` accept, as defined by fast-talker, and the
+reports they return.
 
 Names are listed in their canonical snake_case form. At runtime any case
 and separators work (`"RtPriority"`, `"RT_PRIORITY"`, `"rt-priority"`),
@@ -10,14 +11,18 @@ read like the matching mapping. No class from any module is required.
 
 from collections.abc import Iterable, Mapping
 from enum import Enum
+from types import TracebackType
 from typing import (
     Any,
+    Generic,
     Literal,
     NotRequired,
     Protocol,
     SupportsIndex,
     TypeAlias,
     TypedDict,
+    TypeVar,
+    final,
     type_check_only,
 )
 
@@ -37,6 +42,9 @@ ThreadPriorityName: TypeAlias = Literal[
     "highest",
     "time_critical",
 ]
+ProcessPriorityName: TypeAlias = Literal[
+    "idle", "below_normal", "normal", "above_normal", "high", "realtime"
+]
 QosClassName: TypeAlias = Literal[
     "user_interactive", "user_initiated", "default", "utility", "background"
 ]
@@ -52,6 +60,15 @@ ThreadOptionName: TypeAlias = Literal[
     "win_mmcss",
     "macos_qos",
     "macos_time_constraint",
+]
+ProcessOptionName: TypeAlias = Literal[
+    "lock_memory",
+    "linux_cpu_dma_latency",
+    "win_priority",
+    "win_timer_resolution",
+    "win_disable_power_throttling",
+    "win_process_cpus",
+    "win_reserve_working_set",
 ]
 SocketOptionName: TypeAlias = Literal[
     "recv_buffer",
@@ -95,6 +112,7 @@ class KindOnly(Protocol):
 AnyTagged: TypeAlias = Tagged | TaggedByType | KindOnly | Enum
 
 ThreadPriorityLike: TypeAlias = ThreadPriorityName | str | Enum
+ProcessPriorityLike: TypeAlias = ProcessPriorityName | str | Enum
 QosClassLike: TypeAlias = QosClassName | str | Enum
 
 class SchedulerDict(TypedDict):
@@ -120,6 +138,10 @@ class TimeConstraintFields(TypedDict):
     period_us: int
     computation_us: int
     constraint_us: int
+
+class WorkingSetFields(TypedDict):
+    min_bytes: int
+    max_bytes: int
 
 class CpuAffinityDict(TypedDict):
     kind: Literal["cpu_affinity"]
@@ -204,8 +226,8 @@ member named after the option (its value is the option's value)."""
 @type_check_only
 class ThreadConfigLike(Protocol):
     """The older per-crate `ThreadConfig`: `priority < 1` means normal
-    scheduling at nice -8, otherwise SCHED_FIFO at that priority; and an
-    optional CPU to pin to."""
+    scheduling (SCHED_OTHER), otherwise SCHED_FIFO at that priority (1-99);
+    and an optional CPU to pin to."""
 
     @property
     def priority(self) -> int: ...
@@ -227,6 +249,61 @@ ThreadOptionsLike: TypeAlias = (
 """`None` for no options, one option, a list (or any iterable) of options,
 a `{name: value, ...}` mapping of several, or a ThreadConfig-like object or
 mapping."""
+
+class LockMemoryDict(TypedDict):
+    kind: Literal["lock_memory"]
+
+class LinuxCpuDmaLatencyDict(TypedDict):
+    kind: Literal["linux_cpu_dma_latency"]
+    value: int
+
+class WinProcessPriorityDict(TypedDict):
+    kind: Literal["win_priority"]
+    value: ProcessPriorityName
+
+class WinTimerResolutionDict(TypedDict):
+    kind: Literal["win_timer_resolution"]
+    value: int
+
+class WinProcessCpusDict(TypedDict):
+    kind: Literal["win_process_cpus"]
+    value: list[int]
+
+class WinReserveWorkingSetDict(TypedDict):
+    kind: Literal["win_reserve_working_set"]
+    min_bytes: int
+    max_bytes: int
+
+ProcessOptionDict: TypeAlias = (
+    LockMemoryDict
+    | LinuxCpuDmaLatencyDict
+    | WinProcessPriorityDict
+    | WinTimerResolutionDict
+    | WinDisablePowerThrottlingDict
+    | WinProcessCpusDict
+    | WinReserveWorkingSetDict
+)
+"""Canonical form of a process option."""
+
+ProcessOptionPair: TypeAlias = (
+    tuple[Literal["linux_cpu_dma_latency", "win_timer_resolution"], Int]
+    | tuple[Literal["win_priority"], ProcessPriorityLike]
+    | tuple[Literal["win_process_cpus"], Cpus]
+    | tuple[Literal["win_reserve_working_set"], WorkingSetFields | tuple[int, int]]
+    | tuple[Literal["lock_memory", "win_disable_power_throttling"]]
+)
+
+ProcessOptionLike: TypeAlias = (
+    Literal["lock_memory", "win_disable_power_throttling"]
+    | ProcessOptionPair
+    | ProcessOptionDict
+    | Mapping[str, Any]
+    | AnyTagged
+)
+
+ProcessOptionsLike: TypeAlias = (
+    None | ProcessOptionLike | Iterable[ProcessOptionLike] | Mapping[str, Any]
+)
 
 class SocketIntDict(TypedDict):
     kind: Literal[
@@ -275,3 +352,68 @@ SocketOptionLike: TypeAlias = (
 SocketOptionsLike: TypeAlias = (
     None | SocketOptionLike | Iterable[SocketOptionLike] | Mapping[str, Any]
 )
+
+_OptionDict = TypeVar(
+    "_OptionDict", ThreadOptionDict, ProcessOptionDict, SocketOptionDict
+)
+
+class SkippedDict(TypedDict, Generic[_OptionDict]):
+    """An option that was not applied, and why."""
+
+    option: _OptionDict
+    reason: str
+
+class AdjustedDict(TypedDict, Generic[_OptionDict]):
+    """An applied option the platform changed: a buffer capped by the
+    kernel, a priority clamped to the platform's range."""
+
+    option: _OptionDict
+    effective: _OptionDict
+    reason: str
+
+class ReportDict(TypedDict, Generic[_OptionDict]):
+    """What applying a list of options did, as extension modules return it."""
+
+    applied: list[_OptionDict]
+    adjusted: list[AdjustedDict[_OptionDict]]
+    skipped: list[SkippedDict[_OptionDict]]
+
+@final
+class ProcessGuard:
+    """Process-wide settings from `apply_process_options`, held until
+    released, the end of a `with` block, or garbage collection. Settings
+    that last only while held (`linux_cpu_dma_latency`,
+    `win_timer_resolution`) are undone then; the rest stay."""
+
+    @property
+    def applied(self) -> list[ProcessOptionDict]: ...
+    @property
+    def adjusted(self) -> list[AdjustedDict[ProcessOptionDict]]: ...
+    @property
+    def skipped(self) -> list[SkippedDict[ProcessOptionDict]]: ...
+    @property
+    def active(self) -> bool: ...
+    def release(self) -> None: ...
+    def __enter__(self) -> ProcessGuard: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool: ...
+
+def apply_process_options(
+    options: ProcessOptionsLike = None, *, strict: bool = False
+) -> ProcessGuard:
+    """Applies process-wide options. Options for other platforms are
+    skipped and listed in `ProcessGuard.skipped`, as are ones this platform
+    can't do unless `strict`, when they raise. A failing option raises
+    OSError (PermissionError for missing privileges) and undoes the ones
+    before it. Names and shapes are as for `ProcessOptionsLike`."""
+
+class TuningReportDict(TypedDict):
+    """What a connection's thread and socket options did, from a driver's
+    `tuning_report()`."""
+
+    thread: ReportDict[ThreadOptionDict]
+    socket: ReportDict[SocketOptionDict]

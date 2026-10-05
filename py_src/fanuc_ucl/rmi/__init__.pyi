@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Generic, TypeVar, overload
 
-from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
+from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike, TuningReportDict
 
 # Explicit imports (no wildcard) to avoid the per-symbol provenance hops
 # that pyright/pylance pays on every overload type-check. Cuts re-resolution
@@ -250,13 +250,14 @@ class RmiDriver:
         """Performs the FRC_Connect handshake and spawns the I/O thread.
 
         ``thread`` is applied by the I/O thread to itself and ``socket`` to both
-        TCP connections once made; ``None`` (the default) applies nothing.
-        Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
+        TCP connections before they connect; ``None`` (the default) applies
+        nothing. Thread options accepted: ``cpu_affinity``, ``prefault_stack``,
         ``linux_nice``, ``unix_scheduler`` (``other``/``batch``/``idle``),
         ``win_priority`` below ``time_critical``,
         ``win_disable_power_throttling`` and ``macos_qos``; real-time classes
-        are refused. Socket options accepted: ``dscp`` and ``linux_priority``.
-        A refused option raises ``ValueError``.
+        are refused. Socket options accepted: ``bind_device``, ``dscp`` and
+        ``linux_priority``. A refused option raises ``ValueError``.
+        ``tuning_report()`` lists what was applied, adjusted and skipped.
         """
     def disconnect(self) -> RmiHandle[FrcDisconnectResponse]: ...
     def is_connected(self) -> bool: ...
@@ -267,6 +268,9 @@ class RmiDriver:
         be disconnected and re-established.
         """
     def version(self) -> tuple[int, int] | None: ...
+    def tuning_report(self) -> TuningReportDict | None:
+        """What the session connection's thread and socket options did, or
+        ``None`` while disconnected."""
     def send_full_reset(self) -> RmiHandle[FrcResetResponse]: ...
 
     # ---- send() — full per-packet overload tower ----
