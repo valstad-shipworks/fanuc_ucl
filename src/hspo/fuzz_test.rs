@@ -626,3 +626,115 @@ fn stream_clock_survives_corrupted_index_and_clock_jumps() {
     }
     send(200, 1);
 }
+
+/// Feeds the whole stream with `victim`'s clock XORed by `flip`, then resolves
+/// every other packet and returns the worst error in µs.
+fn worst_error_around_a_corrupted_clock(s: &Stream, victim: usize, flip: u32) -> u64 {
+    let sent = s.packets();
+    let sc = StreamClock::default();
+    for (k, p) in sent.iter().enumerate() {
+        let clock = if k == victim { p.clock ^ flip } else { p.clock };
+        sc.accept(p.index, clock, EPOCH_2026 + p.time);
+    }
+    sent.iter()
+        .enumerate()
+        .filter(|&(k, _)| k != victim)
+        .map(|(_, p)| {
+            let at = micros_of(sc.system_time_of(p.index, p.clock).unwrap());
+            at.abs_diff(EPOCH_2026 + p.time)
+        })
+        .max()
+        .unwrap()
+}
+
+fn r30ib_stream(period: u64, before_wrap: u64, gaps: Vec<u32>) -> Stream {
+    Stream {
+        modulus: 128_850_307,
+        period,
+        start: 128_850_307 - before_wrap,
+        first_index: 0,
+        gaps,
+    }
+}
+
+/// The packet that lands exactly on the wrap carries a clock 256 µs late. Read
+/// on its own it measures the new base 256 µs short, which the packets after
+/// it, measured against the ones before the wrap, outvote.
+#[test]
+fn a_corrupted_clock_on_the_wrapping_packet_does_not_set_the_base() {
+    let s = r30ib_stream(250, 1_000, vec![4, 1]);
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 1, 1 << 8), 0);
+}
+
+/// With the index moving, the wrapping packet's clock 32768 µs early puts every
+/// later packet outside the index tolerance of the base it measured. They are
+/// measured against the packets from before the wrap instead, and stay on the
+/// new cycle.
+#[test]
+fn packets_after_a_corrupted_wrapping_clock_stay_on_the_new_cycle() {
+    let s = Stream {
+        modulus: 1_747_702_590,
+        period: 15_724,
+        start: 1_747_655_190,
+        first_index: 0,
+        gaps: vec![1, 2, 3, 2, 1, 3],
+    };
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 3, 1 << 15), 0);
+}
+
+/// A clock of exactly 2^20 with that bit cleared reads 0: a plausible wrap of
+/// the shortest cycle taken seriously. The next packet still fits the old
+/// base, so the wrap is undone rather than left to strand the packets after it.
+#[test]
+fn a_clock_corrupted_to_zero_is_not_taken_as_a_wrap() {
+    let mut gaps = vec![
+        3, 3, 3, 2, 2, 3, 2, 4, 3, 2, 1, 3, 3, 3, 2, 1, 2, 3, 1, 1, 1, 3, 2, 1, 3, 4, 3, 4, 4, 2, 2,
+    ];
+    gaps.extend([1; 22]);
+    let s = Stream {
+        modulus: 128_850_307,
+        period: 2_978,
+        start: 822_248,
+        first_index: 0,
+        gaps,
+    };
+    assert_eq!(s.packets()[31].clock, 1 << 20);
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 31, 1 << 20), 0);
+}
+
+/// The second packet of the stream is 2048 µs late, so the only period the
+/// stream has when it wraps two packets later is its step, 9x too long. Used
+/// as a floor on the receive times it would put the wrap 8192 µs late.
+#[test]
+fn a_lone_corrupted_period_does_not_stretch_an_early_wrap() {
+    let s = r30ib_stream(250, 1_000, vec![1, 3]);
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 1, 1 << 11), 0);
+}
+
+/// Just after a wrap, a clock 131072 µs late makes a step of over 0.13 s for
+/// one index. As a floor on the receive times that period would read the last
+/// packet as a wrap of a 2^19 µs cycle, which the receive times alone do not
+/// see.
+#[test]
+fn a_corrupted_period_does_not_make_a_wrap() {
+    let s = r30ib_stream(250, 500, vec![2, 1, 2, 1]);
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 2, 1 << 17), 0);
+}
+
+/// The second packet's clock is 16384 µs late and the stream wraps right after,
+/// so the wrap is first measured too late. The base settles back over the
+/// next packets rather than being held up by the absolute clocks already
+/// returned for them.
+#[test]
+fn a_settling_base_is_not_held_up_by_the_clocks_already_returned() {
+    let s = Stream {
+        modulus: 2_691_968_398,
+        period: 2_948,
+        start: 2_691_964_964,
+        first_index: 0,
+        gaps: vec![
+            1, 2, 3, 1, 1, 2, 3, 4, 2, 2, 3, 4, 3, 2, 1, 3, 1, 1, 3, 3, 1,
+        ],
+    };
+    assert_eq!(worst_error_around_a_corrupted_clock(&s, 1, 1 << 14), 0);
+}

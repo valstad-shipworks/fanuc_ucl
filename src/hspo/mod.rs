@@ -377,7 +377,7 @@ struct ClockReference {
     residual: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct StreamClockState {
     last_index: Option<u32>,
     last_clock: u32,
@@ -390,8 +390,8 @@ struct StreamClockState {
     /// The newest accepted packets, oldest first.
     references: VecDeque<ClockReference>,
     /// Clock micros per packet index, in 1/2^PERIOD_FRACTION_BITS µs, from recent
-    /// steps that did not wrap.
-    periods: VecDeque<u64>,
+    /// steps that did not wrap, with the index each step ended on.
+    periods: VecDeque<(u32, u64)>,
     /// Packets rejected in a row for carrying a stale index.
     stale_run: u32,
     /// Packets in a row whose clock disagreed with the stream.
@@ -402,6 +402,28 @@ struct StreamClockState {
     offset_micros: Option<i128>,
     /// Where `offset_micros` was stamped.
     offset_source: Option<Source>,
+    /// The latest absolute clock returned for a packet the stream learned from.
+    returned: u64,
+    /// The newest wrap, while its base is still being measured.
+    recent_wrap: Option<RecentWrap>,
+}
+
+/// A wrap whose base is still being measured from the packets that follow it.
+#[derive(Debug, Clone)]
+struct RecentWrap {
+    previous_base: u64,
+    previous_cycle: Option<u64>,
+    /// What the wrap was predicted from, and the tolerance it was taken with.
+    basis: Basis,
+    tolerance: u64,
+    /// The absolute time the wrapping packet was predicted at, which does not
+    /// depend on its clock.
+    wrapped_at: u64,
+    /// The references from before the wrap, which every later packet on the
+    /// new base is measured against.
+    anchors: VecDeque<ClockReference>,
+    /// The base each packet on the new base puts it at, oldest first.
+    bases: Vec<u64>,
 }
 
 impl StreamClock {
@@ -421,6 +443,9 @@ impl StreamClock {
     const REFERENCES: usize = 8;
     const PERIOD_SAMPLES: usize = 9;
     const PERIOD_FRACTION_BITS: u32 = 8;
+    /// Packets a new base is measured from before it is final. A wrap is read
+    /// off one packet's clock, which may be the corrupted one.
+    const SETTLE_SAMPLES: usize = 5;
     /// The shortest clock cycle taken seriously. A µs counter that wraps more
     /// than once a second is not a controller clock, and anything shorter would
     /// be indistinguishable from the tolerances below.
@@ -438,7 +463,9 @@ impl StreamClock {
     ///
     /// Returns `None` when `index` is behind the newest already seen on this
     /// stream — a reordered or stale datagram the caller must disregard. Otherwise
-    /// returns the absolute cumulative clock `base + clock`.
+    /// returns the absolute cumulative clock `base + clock`, which for a packet
+    /// the stream learns from is never behind one returned before: a base still
+    /// settling after a wrap may move back.
     ///
     /// Each packet's absolute time is first *predicted* from the newest packets
     /// accepted since the last wrap: from the index distance times the measured
@@ -459,6 +486,13 @@ impl StreamClock {
     /// passed, and the measured advance is a whole number of the cycles seen so
     /// far (or a shorter cycle, which means the earlier one spanned several).
     ///
+    /// The wrapping packet's clock alone fixes neither the new base nor whether
+    /// there was a wrap at all, as it may be the corrupted one. Until
+    /// [`SETTLE_SAMPLES`](Self::SETTLE_SAMPLES) packets have landed on the new
+    /// base, each is also measured against the packets from before the wrap
+    /// and the base is the median of those measurements. A wrap that the next
+    /// packet contradicts by fitting the old base is undone.
+    ///
     /// A packet whose clock fits none of that is still delivered, but nothing is
     /// learned from it: one corrupted clock must not move the stream. A run of
     /// [`SUSPECT_RUN_LIMIT`](Self::SUSPECT_RUN_LIMIT) of them means the stream
@@ -476,11 +510,15 @@ impl StreamClock {
     fn accept_from(&self, index: u32, clock: u32, sys_micros: u64, source: Source) -> Option<u64> {
         let mut state = self.state.lock();
         let (absolute, committed) = Self::fold_in(&mut state, index, clock, sys_micros)?;
-        if committed && (source >= Source::Kernel || state.offset_source < Some(Source::Kernel)) {
+        if !committed {
+            return Some(absolute);
+        }
+        if source >= Source::Kernel || state.offset_source < Some(Source::Kernel) {
             state.offset_micros = Some(sys_micros as i128 - absolute as i128);
             state.offset_source = Some(source);
         }
-        Some(absolute)
+        state.returned = state.returned.max(absolute);
+        Some(state.returned)
     }
 
     /// [`accept_from`](Self::accept_from) with a kernel receive stamp.
@@ -516,15 +554,27 @@ impl StreamClock {
         }
         state.stale_run = 0;
 
-        let fold = match state.period().filter(|_| distance > 0) {
-            Some(period) => state.fold(index, clock, sys_micros, Basis::Index(period)),
-            // A period not yet agreed on keeps a drained backlog's shared receive
-            // stamp from collapsing the spacing, unless it is the period that
-            // makes the packet fit nowhere.
-            None => state
-                .fold(index, clock, sys_micros, Basis::Time(state.any_period()))
-                .or_else(|| state.fold(index, clock, sys_micros, Basis::Time(None))),
-        };
+        let fold = state
+            .fold_any(index, clock, sys_micros, distance)
+            .or_else(|| {
+                let (undone, confirmed) = state.before_recent_wrap()?;
+                let fold = undone.fold_any(index, clock, sys_micros, distance)?;
+                if fold.wrapped {
+                    // The packets from before the wrap see it too, so the wrap
+                    // stands and only its base is off: settling measures it.
+                    return Some(ClockFold {
+                        base: state.base,
+                        cycle: state.cycle,
+                        wrapped: false,
+                        ..fold
+                    });
+                }
+                if confirmed {
+                    return None;
+                }
+                *state = undone;
+                Some(fold)
+            });
         if let Some(fold) = fold {
             state.suspect_run = 0;
             return Some((state.apply(index, clock, sys_micros, fold), true));
@@ -606,25 +656,37 @@ struct ClockFold {
     cycle: Option<u64>,
     residual: u64,
     wrapped: bool,
+    basis: Basis,
+    tolerance: u64,
 }
 
 impl StreamClockState {
     /// The per-index period, once two recent steps agree on it. A single
     /// sample could be a corrupted clock and is not enough to steer by.
     fn period(&self) -> Option<u64> {
-        let median = Self::median_of(self.periods.iter().copied())?;
+        let median = Self::median_of(self.periods.iter().map(|&(_, p)| p))?;
         let tolerance = (median / 64).max(1 << StreamClock::PERIOD_FRACTION_BITS);
         let agreeing = self
             .periods
             .iter()
-            .filter(|&&p| p.abs_diff(median) <= tolerance)
+            .filter(|&&(_, p)| p.abs_diff(median) <= tolerance)
             .count();
         (agreeing >= 2).then_some(median)
     }
 
-    /// Any period seen at all, agreed on or not.
+    /// The period over the recent steps, agreed on or not.
     fn any_period(&self) -> Option<u64> {
-        Self::median_of(self.periods.iter().copied())
+        Self::floor_period(self.periods.iter().map(|&(_, p)| p))
+    }
+
+    /// The median of `periods`, once there are two: a lone one may be a
+    /// corrupted clock's.
+    fn floor_period(periods: impl Iterator<Item = u64>) -> Option<u64> {
+        let periods: Vec<u64> = periods.collect();
+        if periods.len() < 2 {
+            return None;
+        }
+        Self::median_of(periods.into_iter())
     }
 
     fn median_of(values: impl Iterator<Item = u64>) -> Option<u64> {
@@ -654,11 +716,34 @@ impl StreamClockState {
                 .saturating_add(StreamClock::MIN_CYCLE)
     }
 
-    /// Where the references put a packet with this index and receive time, and
-    /// how far from that its clock may sit.
+    /// Where the references put a packet with this index and receive time, no
+    /// earlier than the two newest of them, and how far from that its clock may
+    /// sit. The newest alone may carry a corrupted clock.
     fn predict(&self, index: u32, sys_micros: u64, basis: Basis) -> Option<(u64, u64)> {
-        let mut predictions: Vec<(u64, u64)> = self
-            .references
+        let newest = self.references.back()?.absolute;
+        let earliest = match self.references.len() {
+            0 | 1 => newest,
+            n => newest.min(self.references[n - 2].absolute),
+        };
+        let prediction = Self::median_prediction(&self.references, index, sys_micros, basis)?;
+        let prediction = prediction.max(earliest);
+        let advance = prediction.saturating_sub(newest);
+        let tolerance = match basis {
+            Basis::Index(_) => StreamClock::INDEX_TOLERANCE.saturating_add(advance / 64),
+            Basis::Time(_) => StreamClock::SYSTEM_TOLERANCE,
+        };
+        Some((prediction, tolerance))
+    }
+
+    /// The median of where each of `references` puts a packet with this index
+    /// and receive time.
+    fn median_prediction(
+        references: &VecDeque<ClockReference>,
+        index: u32,
+        sys_micros: u64,
+        basis: Basis,
+    ) -> Option<u64> {
+        let mut predictions: Vec<(u64, u64)> = references
             .iter()
             .map(|r| {
                 let distance = index.wrapping_sub(r.index);
@@ -672,14 +757,33 @@ impl StreamClockState {
                 (r.absolute.saturating_add(advance), r.residual)
             })
             .collect();
-        let newest = self.references.back()?.absolute;
-        let prediction = Self::robust_median(&mut predictions)?.max(newest);
-        let advance = prediction - newest;
-        let tolerance = match basis {
-            Basis::Index(_) => StreamClock::INDEX_TOLERANCE.saturating_add(advance / 64),
-            Basis::Time(_) => StreamClock::SYSTEM_TOLERANCE,
-        };
-        Some((prediction, tolerance))
+        Self::robust_median(&mut predictions)
+    }
+
+    /// [`fold`](Self::fold) on the index distance times the period once one is
+    /// agreed on, on the receive time otherwise.
+    fn fold_any(
+        &self,
+        index: u32,
+        clock: u32,
+        sys_micros: u64,
+        distance: u32,
+    ) -> Option<ClockFold> {
+        match self.period().filter(|_| distance > 0) {
+            Some(period) => self.fold(index, clock, sys_micros, Basis::Index(period)),
+            // A period not yet agreed on keeps a drained backlog's shared receive
+            // stamp from collapsing the spacing, unless it is the period that
+            // makes the packet fit nowhere. It may also be a corrupted clock's,
+            // so it can refine a wrap the receive times see but not make one.
+            None => {
+                let plain = || self.fold(index, clock, sys_micros, Basis::Time(None));
+                match self.fold(index, clock, sys_micros, Basis::Time(self.any_period())) {
+                    Some(fold) if fold.wrapped && !plain().is_some_and(|p| p.wrapped) => plain(),
+                    Some(fold) => Some(fold),
+                    None => plain(),
+                }
+            }
+        }
     }
 
     /// Reads `clock` against the prediction: the same base, or a measured wrap
@@ -693,6 +797,8 @@ impl StreamClockState {
                 cycle: self.cycle,
                 residual: here.abs_diff(prediction),
                 wrapped: false,
+                basis,
+                tolerance,
             });
         }
         if here > prediction {
@@ -705,32 +811,124 @@ impl StreamClockState {
         {
             return None;
         }
-        let (cycle, residual) = match self.cycle {
-            None => (advance, 0),
-            Some(cycle) => {
-                let cycles = advance.saturating_add(cycle / 2) / cycle;
-                let whole = cycles.saturating_mul(cycle);
-                if cycles >= 1 && advance.abs_diff(whole) <= tolerance.max(cycle / 16) {
-                    let cycle = if cycles == 1 {
-                        cycle.min(advance)
-                    } else {
-                        cycle
-                    };
-                    (cycle, advance.abs_diff(whole))
-                } else if advance < cycle {
-                    // The cycle measured before spanned several boundaries.
-                    (advance, 0)
-                } else {
-                    return None;
-                }
-            }
-        };
+        let (cycle, residual) = Self::measure_cycle(self.cycle, advance, tolerance)?;
         Some(ClockFold {
             base: self.base.checked_add(advance)?,
             cycle: Some(cycle),
             residual,
             wrapped: true,
+            basis,
+            tolerance,
         })
+    }
+
+    /// The cycle after a wrap that advanced the base by `advance`, and how far
+    /// the advance is from a whole number of the cycles seen before. `None`
+    /// when the advance is inconsistent with them.
+    fn measure_cycle(previous: Option<u64>, advance: u64, tolerance: u64) -> Option<(u64, u64)> {
+        if advance.saturating_add(tolerance) < StreamClock::MIN_CYCLE {
+            return None;
+        }
+        let Some(cycle) = previous else {
+            return Some((advance, 0));
+        };
+        let cycles = advance.saturating_add(cycle / 2) / cycle;
+        let whole = cycles.saturating_mul(cycle);
+        if cycles >= 1 && advance.abs_diff(whole) <= tolerance.max(cycle / 16) {
+            let cycle = if cycles == 1 {
+                cycle.min(advance)
+            } else {
+                cycle
+            };
+            Some((cycle, advance.abs_diff(whole)))
+        } else if advance < cycle {
+            // The cycle measured before spanned several boundaries.
+            Some((advance, 0))
+        } else {
+            None
+        }
+    }
+
+    /// The state from before the newest wrap while it is settling, and
+    /// whether any packet besides the one that wrapped has landed on it.
+    fn before_recent_wrap(&self) -> Option<(Self, bool)> {
+        let wrap = self.recent_wrap.as_ref()?;
+        let confirmed = wrap.bases.len() > 1;
+        let mut undone = self.clone();
+        undone.base = wrap.previous_base;
+        undone.cycle = wrap.previous_cycle;
+        undone.references = wrap.anchors.clone();
+        undone.wrap_points.pop_back();
+        undone.recent_wrap = None;
+        Some((undone, confirmed))
+    }
+
+    /// Measures the newest wrap's base once more, from a packet that landed
+    /// on it, against the packets from before the wrap, and moves the base to
+    /// the median of the measurements so far. An even count is split towards
+    /// the newer measurement.
+    ///
+    /// The packets on the base, and the lowest clock it is recorded to start
+    /// at, move with it: the wrapping packet's own clock may be the corrupted
+    /// one, so the wrap is taken to start no later than where it was predicted.
+    fn settle(&mut self, index: u32, clock: u32, sys_micros: u64, basis: Basis) {
+        let step = self.references.back().and_then(|newest| {
+            let distance = Some(index.wrapping_sub(newest.index)).filter(|&d| d > 0)?;
+            let micros = self
+                .base
+                .checked_add(clock as u64)?
+                .checked_sub(newest.absolute)?;
+            let period = ((micros as u128) << StreamClock::PERIOD_FRACTION_BITS) / distance as u128;
+            Some(u64::try_from(period).unwrap_or(u64::MAX))
+        });
+        let now = Self::floor_period(self.periods.iter().map(|&(_, p)| p).chain(step));
+        let Some(wrap) = self.recent_wrap.as_mut() else {
+            return;
+        };
+        // The period the wrap was floored with, or the current one counting
+        // the step into this packet, may come from the corrupted clock, which
+        // can only make it longer. A floor that is too short leaves the
+        // receive time to decide.
+        let basis = match (basis, wrap.basis) {
+            (Basis::Index(period), _) | (Basis::Time(_), Basis::Index(period)) => {
+                Basis::Index(period)
+            }
+            (Basis::Time(_), Basis::Time(then)) => {
+                Basis::Time(now.map(|now| then.map_or(now, |then| now.min(then))))
+            }
+        };
+        if let Some(prediction) = Self::median_prediction(&wrap.anchors, index, sys_micros, basis) {
+            wrap.bases.push(prediction.saturating_sub(clock as u64));
+        }
+        let count = wrap.bases.len();
+        let mut bases: Vec<(u64, u64)> = wrap
+            .bases
+            .iter()
+            .enumerate()
+            .map(|(k, &base)| (base, (count - k) as u64))
+            .collect();
+        let base = Self::robust_median(&mut bases)
+            .filter(|&base| base > wrap.previous_base)
+            .unwrap_or(self.base);
+        if let Some((cycle, _)) = Self::measure_cycle(
+            wrap.previous_cycle,
+            base - wrap.previous_base,
+            wrap.tolerance,
+        ) {
+            self.cycle = Some(cycle);
+        }
+        let first_clock = u32::try_from(wrap.wrapped_at.saturating_sub(base)).unwrap_or(u32::MAX);
+        if count >= StreamClock::SETTLE_SAMPLES {
+            self.recent_wrap = None;
+        }
+        for reference in &mut self.references {
+            reference.absolute = base.saturating_add(reference.absolute.saturating_sub(self.base));
+        }
+        if let Some(point) = self.wrap_points.back_mut().filter(|p| p.2 == self.base) {
+            point.1 = point.1.min(first_clock);
+            point.2 = base;
+        }
+        self.base = base;
     }
 
     /// Where the stream resumes when nothing it carries can be trusted: the
@@ -745,8 +943,9 @@ impl StreamClockState {
         resumed.saturating_sub(clock as u64)
     }
 
-    /// The median, with an even count's middle pair split by which value came
-    /// from the reference the stream agreed with more closely when it arrived.
+    /// The median, with an even count's middle pair split towards the smaller
+    /// key: for references, how far the stream was from agreeing with them
+    /// when they arrived.
     fn robust_median<T: Ord + Copy>(values: &mut [(T, u64)]) -> Option<T> {
         values.sort_unstable();
         let n = values.len();
@@ -763,18 +962,29 @@ impl StreamClockState {
     fn forget_stream(&mut self) {
         self.references.clear();
         self.periods.clear();
+        self.recent_wrap = None;
     }
 
     fn apply(&mut self, index: u32, clock: u32, sys_micros: u64, fold: ClockFold) -> u64 {
+        if fold.wrapped {
+            self.recent_wrap = Some(RecentWrap {
+                previous_base: self.base,
+                previous_cycle: self.cycle,
+                basis: fold.basis,
+                tolerance: fold.tolerance,
+                wrapped_at: fold.base.saturating_add(clock as u64),
+                anchors: self.references.clone(),
+                bases: vec![fold.base],
+            });
+        }
         self.cycle = fold.cycle;
-        self.commit(
-            index,
-            clock,
-            sys_micros,
-            fold.base,
-            fold.residual,
-            fold.wrapped,
-        )
+        let base = if fold.wrapped {
+            fold.base
+        } else {
+            self.settle(index, clock, sys_micros, fold.basis);
+            self.base
+        };
+        self.commit(index, clock, sys_micros, base, fold.residual, fold.wrapped)
     }
 
     fn commit(
@@ -793,9 +1003,17 @@ impl StreamClockState {
                 let micros = (absolute - newest.absolute) as u128;
                 let period = (micros << StreamClock::PERIOD_FRACTION_BITS) / distance as u128;
                 self.periods
-                    .push_back(u64::try_from(period).unwrap_or(u64::MAX));
+                    .push_back((index, u64::try_from(period).unwrap_or(u64::MAX)));
                 if self.periods.len() > StreamClock::PERIOD_SAMPLES {
                     self.periods.pop_front();
+                }
+            } else if !wrapped && distance > 0 {
+                // The clock ran backwards on one base: this packet's clock or
+                // the newest one's is corrupted, so the step into the newest
+                // says nothing about the period.
+                let newest = newest.index;
+                if self.periods.back().is_some_and(|&(end, _)| end == newest) {
+                    self.periods.pop_back();
                 }
             }
         }
