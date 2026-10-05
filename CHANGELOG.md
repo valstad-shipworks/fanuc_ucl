@@ -64,6 +64,27 @@ is not background, helper or driver-class. On hardware none of it runs.
 - `TelemetrySink` documents that hooks run on the reactive I/O thread and must
   be O(1) and non-blocking.
 
+### Real-time tuning on fast-talker 0.3
+
+- Socket options are applied before the socket is bound (stmo, hspo) or
+  connected (rmi, hmi). stmo and hspo now accept `WinCpuAffinity`, and rmi
+  and hmi accept `BindDevice`.
+- An option the platform applied with a different value (a buffer capped by
+  `net.core.rmem_max`, say) is logged like a skipped one.
+- `tuning_report()` on `StreamMotionDriver`, `RmiDriver` and `HmiDriver`, and
+  `hspo::broker_tuning_report()`, return what the connection's options did:
+  `TuningReport` in Rust, `{"thread": ..., "socket": ...}` dicts in Python.
+- A refused option's error names it as Python spells it:
+  `rmi does not accept option rt_priority (RtPriority(80))`.
+- Python: `fanuc_ucl.apply_process_options(options, *, strict=False)` and the
+  `ProcessGuard` it returns, for process-wide settings.
+- hspo receives through fast-talker's `Timestamped` with kernel stamps only.
+  A packet's user-space stamp no longer sets the controller-to-system clock
+  offset once a kernel-stamped packet has arrived, and on Linux a datagram
+  the socket dropped for lack of buffer is logged.
+- stmo reads transmit errors with fast-talker's `sockets::socket_errors`.
+- The `hspo` feature no longer pulls in `libc`.
+
 ### New STMO API
 
 - `StreamMotionDriver::next_status()`: a future for the first status received

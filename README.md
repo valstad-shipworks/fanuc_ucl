@@ -486,18 +486,20 @@ Every driver's `connect` (and `hspo::initialize_broker`) takes two lists of
 [fast-talker](https://docs.rs/fast-talker) options, re-exported as
 `fanuc_ucl::ThreadOption` and `fanuc_ucl::SocketOption`: `thread` is applied
 by the driver's I/O thread to itself before it starts, and `socket` to the
-driver's socket. Both default to empty, meaning no tuning. An option a driver
-does not accept fails `connect` before anything is spawned, and one that is
-attempted and fails (`RtPriority` without `CAP_SYS_NICE`, say) fails `connect`
-too. Options for another platform, or that this platform cannot do, are
-skipped with a warning, so one configuration works on Linux, macOS and
-Windows.
+driver's socket before it is bound or connected. Both default to empty,
+meaning no tuning. An option a driver does not accept fails `connect` before
+anything is spawned, and one that is attempted and fails (`RtPriority`
+without `CAP_SYS_NICE`, say) fails `connect` too. Options for another
+platform, or that this platform cannot do, are skipped with a warning, so one
+configuration works on Linux, macOS and Windows. So is an option the platform
+applied with a different value, such as a `RecvBuffer` capped by
+`net.core.rmem_max`.
 
 | Driver | Thread options | Socket options |
 |---|---|---|
-| stmo | all | all except `WinCpuAffinity` (UDP, sent and received every cycle; applied right after bind) |
-| hspo | all except `MacOsTimeConstraint` | `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`, `LinuxBusyPollBudget` (applied right after bind) |
-| rmi | `CpuAffinity`, `PrefaultStack`, `LinuxNice`, `UnixScheduler` (`Other`/`Batch`/`Idle`), `WinPriority` (not `TimeCritical`), `WinDisablePowerThrottling`, `MacOsQos` | `Dscp`, `LinuxPriority` (applied after connect) |
+| stmo | all | all (UDP, sent and received every cycle) |
+| hspo | all except `MacOsTimeConstraint` | `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`, `LinuxBusyPollBudget`, `WinCpuAffinity` |
+| rmi | `CpuAffinity`, `PrefaultStack`, `LinuxNice`, `UnixScheduler` (`Other`/`Batch`/`Idle`), `WinPriority` (not `TimeCritical`), `WinDisablePowerThrottling`, `MacOsQos` | `BindDevice`, `Dscp`, `LinuxPriority` |
 | hmi | same as rmi | same as rmi |
 
 Why the rest are refused:
@@ -506,26 +508,38 @@ Why the rest are refused:
   loop has a period.
 - hspo's socket only receives, so `SendBuffer`, `DontFragment`, `Dscp` and
   `LinuxPriority`, which shape outgoing traffic, do nothing for it.
-- Windows only accepts `WinCpuAffinity` on a socket that is not yet bound,
-  and stmo and hspo tune theirs right after bind.
 - rmi and hmi threads block on TCP round-trips: a real-time class
   (`RtPriority`, `UnixScheduler` `Fifo`/`RoundRobin`, `WinPriority(TimeCritical)`,
   `WinMmcss`, `MacOsTimeConstraint`) there only risks starving the rest of the
   system.
-- Their TCP sockets are tuned after `connect`, too late for `BindDevice`;
-  setting buffer sizes would turn off TCP autotuning; busy polling burns a
-  core on a slow loop; `DontFragment` and `WinCpuAffinity` do nothing useful
-  for this traffic.
+- On their TCP sockets, setting buffer sizes would turn off TCP autotuning;
+  busy polling burns a core on a slow loop; `DontFragment` and
+  `WinCpuAffinity` do nothing useful for this traffic.
+
+What the options did is kept for the life of the connection:
+`tuning_report()` on each driver and `hspo::broker_tuning_report()` return
+the options applied, those the platform adjusted, and those skipped with the
+reason.
 
 Process-wide settings (memory locking, `cpu_dma_latency`, the Windows
 priority class, timer resolution and working set) belong to the application,
-which applies them once with `fast_talker::options::ProcessOption::apply_all`.
+which applies them once with `fast_talker::options::ProcessOption::apply_all`,
+or from Python with `fanuc_ucl.apply_process_options`.
 
 From Python, the lists take any shape fast-talker accepts:
 
 ```python
-driver.connect(thread=[("cpu_affinity", [3]), ("rt_priority", 80)], socket={"dscp": 46})
+import fanuc_ucl
+
+with fanuc_ucl.apply_process_options(["lock_memory", ("linux_cpu_dma_latency", 0)]):
+    driver.connect(thread=[("cpu_affinity", [3]), ("rt_priority", 80)], socket={"dscp": 46})
+    print(driver.tuning_report())  # {"thread": {"applied": [...], ...}, "socket": {...}}
 ```
+
+hspo stamps each datagram with the kernel's receive time where the platform
+has one (fast-talker's `Timestamped`, never touching the NIC's hardware
+timestamping), and on Linux logs a warning when the socket drops datagrams
+for lack of receive buffer.
 
 ## Roadmap
 - Pydocs and Rustdocs for all public APIs
