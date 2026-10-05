@@ -1,104 +1,96 @@
 # Changelog
 
-## Unreleased
+## 2.0.0 — 2026-10-05
 
-Depends on snare 1.5.0, which is not on crates.io yet; the manifest takes it
-by path. Publish snare 1.5.0 first, then replace the path with the version
-before releasing this crate.
+Real-time tuning moves to fast-talker 0.3 option lists, and fixes found by
+new decoder fuzzing, simulated-controller and pytest suites. Requires
+`fast-talker` 0.3; `snare` is no longer a runtime dependency.
 
-### Running under a snare driver
+### Breaking changes
 
-Everything in this section only takes effect when
-`snare::sched::is_driven()` is true on the thread involved: snare's `shim`
-feature is on, an accounting driver owns the thread's clock, and the thread
-is not background, helper or driver-class. On hardware none of it runs.
+- `ThreadConfig` is removed (Rust and Python). Every `connect` and
+  `hspo::initialize_broker` takes `thread: &[ThreadOption]` and
+  `socket: &[SocketOption]` (re-exported from fast-talker) instead of
+  `Option<ThreadConfig>`; in Python `thread=` / `socket=` keywords taking any
+  shape fast-talker accepts (`[("rt_priority", 80)]`, `{"dscp": 46}`, ...).
+  An empty list applies nothing; `ThreadConfig`'s priority below 1 used to
+  set `SCHED_OTHER` with nice -8.
+- Each driver accepts only the options that suit its role (stmo: all; hspo:
+  all thread options but `MacOsTimeConstraint`, receive-side socket options;
+  rmi/hmi: no real-time thread classes, socket `BindDevice`/`Dscp`/
+  `LinuxPriority`). A refused option fails `connect` with the new
+  `InvalidOption` variant on `StreamMotionError`, `RmiError` and `HmiError`
+  (`ValueError` in Python): `rmi does not accept option rt_priority (RtPriority(80))`.
+  An option that is attempted and fails now fails `connect` instead of being
+  logged.
+- `hspo::initialize_broker` returns `HspoBrokerError` (`InvalidOption`,
+  `Io`) instead of `HspoBrokerNotInitializedError`.
+- `StmoStats` gains `mid_stream_fillers` and `idle_holds`, and is cumulative
+  across reconnects of the same driver; `stats()` no longer resets to zero
+  while disconnected.
+- Python exception types: RMI `Timeout` raises `TimeoutError`; I/O errors
+  from RMI and HMI raise the matching `OSError` subclass; HMI `NotConnected`
+  raises `ConnectionError` and index errors `IndexError`.
+- The `async` feature is an empty alias: `HspoChannel::recv_async` and
+  `RmiQueueGeneric::wait_all_async` are always available.
 
-- Every wait on a caller thread is snare-visible (`block_on`,
-  `block_on_until`, `block_on_timeout`) with its deadline on the virtual
-  clock: `ResponseHandle::wait`/`wait_timeout` on every handle,
-  `RmiQueue` waits, `StreamMotionDriver::start`, `fetch_movement_limits`,
-  `wait_for_command_position`, `StmoControlLoop::wait_for_status`,
-  `HspoChannel::wait_for`, and the HMI connect handshake.
-- The RMI, HMI and HSPO runner threads poll without a timeout.
-  `HspoReceiver::is_connected` is computed from the last packet's time
-  instead of a periodic sweep.
-- STMO send retries sleep with `snare::thread::sleep` on the virtual clock.
-- STMO binds its local socket to port 0.
-- Disconnecting any driver, and `hspo::destroy_broker(true)`, waits for the
-  runner thread's exit in a way snare sees (bounded at 5 s virtual) before
-  joining it.
-- STMO answer changes are stamped with the instant the caller made them and
-  apply only to statuses received strictly after that instant: motion
-  batches, `stop`, `set_hold_read_io` and entering or leaving a control loop.
-  A change made while reacting to status `k` therefore always takes effect at
-  status `k + 1`, whatever the thread interleaving. A stamped `stop` goes out
-  in place of the reply to the first status after it.
+### Added
 
-### Changes that also apply on hardware
+- `tuning_report()` on `StreamMotionDriver`, `RmiDriver` and `HmiDriver`,
+  and `hspo::broker_tuning_report()`: what the connection's options did, as
+  `TuningReport` (`ReportSummary` lists) or a `{"thread", "socket"}` dict in
+  Python. Options the platform skipped or adjusted are logged.
+- Python `fanuc_ucl.apply_process_options(options, *, strict=False)` and
+  `ProcessGuard` for process-wide settings.
+- STMO: `next_status()`, `recv_status_timeout()`, `set_hold_read_io()`,
+  `command_motion_with(motions, more_follows)`, `stats_handle()` /
+  `StmoStatsHandle`.
+- Python: `packet_name` on RMI `SendPacket`/`ResponsePacket`,
+  `AlarmSeverity.None_`, `rmi.PalletizingMode` registered; stubs cover
+  `TimeData`, `ApplicationType`, `StmoHandle`, `StmoStats`,
+  `has_broker_errored`.
 
-- `StmoHandle`, `RmiHandle`/`RmiHandleGeneric` and `HmiHandle`/
-  `HmiHandleGeneric` wake every task awaiting any clone of the handle
-  (`snare::sched::WakerSet`), not only the last one to poll. Blocking waits
-  register before checking, which closes a lost-wakeup window in the STMO
-  and HMI handles.
-- The runner threads receive their `mio` poller from the caller instead of
-  handing a waker back over a channel. Socket and poller setup failures now
-  surface from `connect`/`initialize_broker`.
-- Received statuses carry the instant the I/O thread read them.
-- The STMO I/O thread applies queued caller messages before answering a
-  status, so a batch queued just before a status arrives is used for it.
-- RMI: the runner exits once told to die, after a final attempt to flush the
-  queue (the `FRC_Disconnect` included); pending handles fail with
-  `Disconnected` when it exits; `is_connected` turns false and
-  `has_connection_errored` true when it stops on an error.
-- HMI: pending and queued requests fail with `NotConnected` whenever the
-  runner exits, including on an I/O error; `has_connection_errored` is set
-  then.
-- `hspo::destroy_broker` wakes the broker so it exits without waiting for a
-  poll timeout.
-- `flume`'s `async` feature is always on. The crate's `async` feature is kept
-  as an empty alias, and `HspoChannel::recv_async` and
-  `RmiQueueGeneric::wait_all_async` no longer need it. The `hmi` feature pulls
-  in `event-listener`, which it always used. `atomic-waker` is no longer a
-  dependency.
-- `TelemetrySink` documents that hooks run on the reactive I/O thread and must
-  be O(1) and non-blocking.
+### Fixed
 
-### Real-time tuning on fast-talker 0.3
+- RMI: replies are framed on `
+` across reads and matched out of order
+  (instructions by SequenceID, commands by name and echoed fields) instead
+  of strictly FIFO; `FRC_Terminate` resolves every pending request;
+  `FRC_Disconnect` is sent even when every slot is held and its reply is
+  awaited for up to 500 ms; queued and pending requests fail with
+  `Disconnected` when the runner exits; the SequenceID wraps to 1 instead of
+  overflowing; the connect handshake honours the configured timeout end to
+  end, including the TCP connect.
+- HMI: requests never reuse a sequence number still awaiting a reply; pending
+  and queued requests fail with `NotConnected` whenever the runner exits;
+  `connect` reconnects after a dropped connection and tears down a failed
+  handshake; reads near the top of the address space and short or malformed
+  replies return errors instead of overflowing or panicking; joint-position
+  ASG size corrected to 38 bytes.
+- STMO: duplicate or overtaken statuses are not answered (counted as
+  `stale_statuses`); a sequence restart needs a run of forward-stepping
+  statuses; datagrams whose length does not match their type are dropped;
+  queued caller messages are applied before a status is answered;
+  `fetch_movement_limits` returns as soon as every axis is filled.
+- HSPO: one corrupted clock no longer shifts the stream: wraps are settled
+  against the packets before them and a contradicted wrap is undone; a
+  user-space receive stamp no longer moves the clock offset once a
+  kernel-stamped packet has arrived; `destroy_broker` wakes the broker.
+- Handles wake every task awaiting any clone, not only the last to poll; a
+  lost-wakeup window in STMO and HMI blocking waits is closed.
+- Socket, poller and thread-option failures surface from `connect` /
+  `initialize_broker` instead of only in the I/O thread's log.
+- Python: blocking calls release the GIL; `__version__` reads the
+  `fanuc_ucl` distribution; `fanuc_ucl.hmi` etc. resolve as attributes.
 
-- Socket options are applied before the socket is bound (stmo, hspo) or
-  connected (rmi, hmi). stmo and hspo now accept `WinCpuAffinity`, and rmi
-  and hmi accept `BindDevice`.
-- An option the platform applied with a different value (a buffer capped by
-  `net.core.rmem_max`, say) is logged like a skipped one.
-- `tuning_report()` on `StreamMotionDriver`, `RmiDriver` and `HmiDriver`, and
-  `hspo::broker_tuning_report()`, return what the connection's options did:
-  `TuningReport` in Rust, `{"thread": ..., "socket": ...}` dicts in Python.
-- A refused option's error names it as Python spells it:
-  `rmi does not accept option rt_priority (RtPriority(80))`.
-- Python: `fanuc_ucl.apply_process_options(options, *, strict=False)` and the
-  `ProcessGuard` it returns, for process-wide settings.
-- hspo receives through fast-talker's `Timestamped` with kernel stamps only.
-  A packet's user-space stamp no longer sets the controller-to-system clock
-  offset once a kernel-stamped packet has arrived, and on Linux a datagram
-  the socket dropped for lack of buffer is logged.
-- stmo reads transmit errors with fast-talker's `sockets::socket_errors`.
-- The `hspo` feature no longer pulls in `libc`.
+### Changed
 
-### New STMO API
-
-- `StreamMotionDriver::next_status()`: a future for the first status received
-  strictly after the call. Statuses already received are discarded and never
-  returned. On hardware "already received" is everything buffered at the
-  call.
-- `StreamMotionDriver::recv_status_timeout(timeout)`: the blocking form.
-- `StreamMotionDriver::set_hold_read_io(Some((io_type, index, mask)))`: a
-  sticky `read_io` request on every hold filler, until cleared with `None`.
-- `StreamMotionDriver::command_motion_with(motions, more_follows)`.
-  `command_motion(m)` is `command_motion_with(m, false)`.
-- `StmoStats::mid_stream_fillers` (hold fillers sent while the last finished
-  batch said more follows, with a `fanuc_ucl::stmo` warning once per run of
-  them) and `StmoStats::idle_holds`.
-- `StreamMotionDriver::stats_handle()` returns a shareable `StmoStatsHandle`.
-  Stats are now cumulative across reconnects of the same driver, and
-  `stats()` no longer resets to zero while disconnected.
+- Sockets are created with fast-talker's `bind_udp` / `connect_tcp`, so
+  options apply before bind/connect. hspo receives through `Timestamped`
+  with kernel stamps only and logs datagrams the socket dropped; stmo reads
+  transmit errors with `sockets::socket_errors`.
+- STMO answer changes (motion batches, `stop`, `set_hold_read_io`, entering
+  or leaving a control loop) apply only to statuses received after the call:
+  a change made while reacting to status `k` takes effect at `k + 1`.
+- `snare` and `atomic-waker` are no longer dependencies; `libc` is only
+  pulled in by `stmo`; `hmi` enables `event-listener`.
