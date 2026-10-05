@@ -1,9 +1,9 @@
 from collections.abc import Sequence
 from enum import IntEnum
 
+from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 from typing_extensions import Self
 
-from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
 from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
 
 __all__ = [

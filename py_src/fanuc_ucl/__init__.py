@@ -9,7 +9,6 @@ except PackageNotFoundError:
 
 from importlib import import_module
 
-
 _SUBPACKAGES = {"hmi", "hspo", "rmi", "stmo"}
 
 

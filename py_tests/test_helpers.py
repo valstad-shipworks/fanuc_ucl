@@ -6,10 +6,14 @@ import math
 import random
 
 import pytest
-
 from fanuc_ucl import JointFormat, JointTemplate, JointType, rmi, stmo
 
-FORMATS = [JointFormat.AbsRad, JointFormat.FanucRad, JointFormat.AbsDeg, JointFormat.FanucDeg]
+FORMATS = [
+    JointFormat.AbsRad,
+    JointFormat.FanucRad,
+    JointFormat.AbsDeg,
+    JointFormat.FanucDeg,
+]
 TEMPLATES = {
     "SIX": (JointTemplate.SIX, 6),
     "SIX_LINEAR_TRACK": (JointTemplate.SIX_LINEAR_TRACK, 7),
@@ -36,19 +40,27 @@ def test_conversions_roundtrip(name, src, dst):
 
 def test_fanuc_j3_is_relative_to_j2():
     absolute = [10.0, 20.0, 50.0, 1.0, 2.0, 3.0]
-    fanuc = JointFormat.FanucDeg.convert_from(JointFormat.AbsDeg, JointTemplate.SIX, absolute)
+    fanuc = JointFormat.FanucDeg.convert_from(
+        JointFormat.AbsDeg, JointTemplate.SIX, absolute
+    )
     assert fanuc[:6] == [10.0, 20.0, 30.0, 1.0, 2.0, 3.0]
 
 
 def test_degrees_to_radians_skips_linear_axes():
     deg = [180.0, 90.0, 45.0, 0.0, -90.0, 360.0, 1500.0]
-    rad = JointFormat.AbsRad.convert_from(JointFormat.AbsDeg, JointTemplate.SIX_LINEAR_TRACK, deg)
-    assert rad[:6] == pytest.approx([math.pi, math.pi / 2, math.pi / 4, 0.0, -math.pi / 2, 2 * math.pi])
+    rad = JointFormat.AbsRad.convert_from(
+        JointFormat.AbsDeg, JointTemplate.SIX_LINEAR_TRACK, deg
+    )
+    assert rad[:6] == pytest.approx(
+        [math.pi, math.pi / 2, math.pi / 4, 0.0, -math.pi / 2, 2 * math.pi]
+    )
     assert rad[6] == 1500.0
 
 
 def test_a_custom_template_converts_by_axis_type():
-    template = JointTemplate([JointType.Rotary] * 6 + [JointType.Linear, JointType.Rotary])
+    template = JointTemplate(
+        [JointType.Rotary] * 6 + [JointType.Linear, JointType.Rotary]
+    )
     deg = [90.0] * 8
     rad = JointFormat.AbsRad.convert_from(JointFormat.AbsDeg, template, deg)
     assert rad[6] == 90.0
@@ -57,7 +69,9 @@ def test_a_custom_template_converts_by_axis_type():
 
 def test_too_few_joints_is_a_value_error():
     with pytest.raises(ValueError, match="at least 6"):
-        JointFormat.FanucDeg.convert_from(JointFormat.AbsDeg, JointTemplate.SIX, [1.0, 2.0])
+        JointFormat.FanucDeg.convert_from(
+            JointFormat.AbsDeg, JointTemplate.SIX, [1.0, 2.0]
+        )
 
 
 @pytest.mark.parametrize("fmt", FORMATS)
@@ -68,12 +82,21 @@ def test_rmi_joint_angles_store_fanuc_degrees(fmt):
         ja = rmi.JointAngles(fmt, JointTemplate.SIX, *given)
         want = JointFormat.FanucDeg.convert_from(fmt, JointTemplate.SIX, given)
         assert ja.as_array()[:6] == pytest.approx(want[:6], rel=1e-6, abs=1e-4)
-        assert [ja.j1, ja.j2, ja.j3, ja.j4, ja.j5, ja.j6] == pytest.approx(want[:6], rel=1e-6, abs=1e-4)
+        assert [ja.j1, ja.j2, ja.j3, ja.j4, ja.j5, ja.j6] == pytest.approx(
+            want[:6], rel=1e-6, abs=1e-4
+        )
 
 
 def test_pose_data_keeps_its_fields():
     pose = stmo.PoseData(1.5, -2.5, 3.25, 10.0, 20.0, 30.0, e1=7.0)
-    assert (pose.x, pose.y, pose.z, pose.w, pose.p, pose.r) == (1.5, -2.5, 3.25, 10.0, 20.0, 30.0)
+    assert (pose.x, pose.y, pose.z, pose.w, pose.p, pose.r) == (
+        1.5,
+        -2.5,
+        3.25,
+        10.0,
+        20.0,
+        30.0,
+    )
     assert (pose.e1, pose.e2, pose.e3) == (7.0, 0.0, 0.0)
     pose.e3 = 4.0
     assert pose.e3 == 4.0
@@ -92,11 +115,13 @@ def test_motion_command_packets_build_from_joints_and_poses():
 def limits(rng: random.Random) -> stmo.JointMovementLimits:
     def axis():
         return stmo.AxisMotionConstraint(
-            [rng.uniform(0, 100) for _ in range(20)], [rng.uniform(0, 100) for _ in range(20)]
+            [rng.uniform(0, 100) for _ in range(20)],
+            [rng.uniform(0, 100) for _ in range(20)],
         )
 
     return stmo.JointMovementLimits(
-        rng.randrange(1, 4000), [stmo.JointMovementLimit(axis(), axis(), axis()) for _ in range(6)]
+        rng.randrange(1, 4000),
+        [stmo.JointMovementLimit(axis(), axis(), axis()) for _ in range(6)],
     )
 
 

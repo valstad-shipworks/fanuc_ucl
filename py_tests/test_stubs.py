@@ -5,10 +5,8 @@ the same parameters defaulted."""
 import ast
 import importlib
 import inspect
-import pathlib
 
 import pytest
-
 from conftest import STUB_ROOT, run_isolated
 
 MODULES = {
@@ -61,11 +59,15 @@ def _is_typing_only(node: ast.ClassDef) -> bool:
 def _params(fn: ast.FunctionDef, method: bool) -> list[tuple[str, bool]]:
     args = fn.args
     positional = args.posonlyargs + args.args
-    defaults = [False] * (len(positional) - len(args.defaults)) + [True] * len(args.defaults)
+    defaults = [False] * (len(positional) - len(args.defaults)) + [True] * len(
+        args.defaults
+    )
     params = list(zip([a.arg for a in positional], defaults))
     if method and "staticmethod" not in _decorators(fn) and params:
         params = params[1:]
-    params += [(a.arg, d is not None) for a, d in zip(args.kwonlyargs, args.kw_defaults)]
+    params += [
+        (a.arg, d is not None) for a, d in zip(args.kwonlyargs, args.kw_defaults)
+    ]
     return params
 
 
@@ -79,7 +81,9 @@ def _runtime_params(obj, method: bool) -> list[tuple[str, bool]] | None:
         for p in sig.parameters.values()
         if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
     ]
-    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values()):
+    if any(
+        p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values()
+    ):
         return None
     if method and params and params[0].name in ("self", "cls", "$self", "$cls"):
         params = params[1:]
@@ -107,7 +111,9 @@ def _mismatches(stub_file: str) -> list[str]:
         if "property" in decorators:
             return
         if inspect.isdatadescriptor(target) and fn.name != "__init__":
-            problems.append(f"{where}.{fn.name} is a method in the stub but an attribute at runtime")
+            problems.append(
+                f"{where}.{fn.name} is a method in the stub but an attribute at runtime"
+            )
             return
         got = _runtime_params(target, method and fn.name != "__init__")
         want = _params(fn, method)
@@ -132,7 +138,9 @@ def _mismatches(stub_file: str) -> list[str]:
                 elif is_enum and isinstance(item, ast.Assign):
                     for t in item.targets:
                         if isinstance(t, ast.Name) and not hasattr(cls, t.id):
-                            problems.append(f"{where}.{t.id} enum member missing at runtime")
+                            problems.append(
+                                f"{where}.{t.id} enum member missing at runtime"
+                            )
     return problems
 
 
@@ -142,7 +150,9 @@ KNOWN: dict[str, str] = {}
 @pytest.mark.parametrize(
     "stub_file",
     [
-        pytest.param(f, marks=pytest.mark.xfail(strict=True, reason=KNOWN[f])) if f in KNOWN else f
+        pytest.param(f, marks=pytest.mark.xfail(strict=True, reason=KNOWN[f]))
+        if f in KNOWN
+        else f
         for f in MODULES
     ],
 )
@@ -165,8 +175,13 @@ def test_stub_imports_stay_inside_the_package():
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom):
                 target = node.module or ""
-                if node.level > path.relative_to(STUB_ROOT).parts.__len__() or "py_src" in target:
-                    bad.append(f"{path.relative_to(STUB_ROOT)}: from {'.' * node.level}{target}")
+                if (
+                    node.level > path.relative_to(STUB_ROOT).parts.__len__()
+                    or "py_src" in target
+                ):
+                    bad.append(
+                        f"{path.relative_to(STUB_ROOT)}: from {'.' * node.level}{target}"
+                    )
     assert bad == []
 
 

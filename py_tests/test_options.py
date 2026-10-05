@@ -13,7 +13,6 @@ import time
 import types
 
 import pytest
-
 from conftest import CLOSED, UNROUTABLE
 from fanuc_ucl import hmi, hspo, rmi, stmo
 
@@ -34,8 +33,20 @@ def hspo_connect(thread, socket):
 
 
 REFUSING = {
-    "hmi": (hmi_connect, ("rt_priority", 80), ("recv_buffer", 1 << 20), "RtPriority(80)", "RecvBuffer(1048576)"),
-    "rmi": (rmi_connect, ("rt_priority", 80), ("recv_buffer", 1 << 20), "RtPriority(80)", "RecvBuffer(1048576)"),
+    "hmi": (
+        hmi_connect,
+        ("rt_priority", 80),
+        ("recv_buffer", 1 << 20),
+        "RtPriority(80)",
+        "RecvBuffer(1048576)",
+    ),
+    "rmi": (
+        rmi_connect,
+        ("rt_priority", 80),
+        ("recv_buffer", 1 << 20),
+        "RtPriority(80)",
+        "RecvBuffer(1048576)",
+    ),
     "hspo": (
         hspo_connect,
         ("macos_time_constraint", (1000, 500, 800)),
@@ -101,7 +112,9 @@ def expect_refusal(call, thread, socket, refused: str):
     start = time.monotonic()
     with pytest.raises(ValueError) as err:
         call(thread, socket)
-    assert "does not accept option" in str(err.value) and refused in str(err.value), err.value
+    assert "does not accept option" in str(err.value) and refused in str(err.value), (
+        err.value
+    )
     assert time.monotonic() - start < 0.1, "a refused option reached the network"
 
 
@@ -109,20 +122,26 @@ def expect_refusal(call, thread, socket, refused: str):
 @pytest.mark.parametrize("spelling", THREAD_SPELLINGS)
 def test_thread_option_spellings_convert(driver, spelling):
     call, refused_thread, _, refused_name, _ = REFUSING[driver]
-    expect_refusal(call, [THREAD_SPELLINGS[spelling], refused_thread], None, refused_name)
+    expect_refusal(
+        call, [THREAD_SPELLINGS[spelling], refused_thread], None, refused_name
+    )
 
 
 @pytest.mark.parametrize("driver", ["hmi", "rmi"])
 @pytest.mark.parametrize("spelling", SOCKET_SPELLINGS)
 def test_socket_option_spellings_convert(driver, spelling):
     call, _, refused_socket, _, refused_name = REFUSING[driver]
-    expect_refusal(call, None, [SOCKET_SPELLINGS[spelling], refused_socket], refused_name)
+    expect_refusal(
+        call, None, [SOCKET_SPELLINGS[spelling], refused_socket], refused_name
+    )
 
 
 @pytest.mark.parametrize("driver", ["hmi", "rmi"])
 def test_a_bool_socket_option_converts(driver):
     call = REFUSING[driver][0]
-    expect_refusal(call, None, ("linux_prefer_busy_poll", True), "LinuxPreferBusyPoll(true)")
+    expect_refusal(
+        call, None, ("linux_prefer_busy_poll", True), "LinuxPreferBusyPoll(true)"
+    )
     expect_refusal(call, None, {"dont_fragment": False}, "DontFragment(false)")
 
 
@@ -131,13 +150,17 @@ def test_a_lone_refused_option_raises(driver):
     call, refused_thread, refused_socket, thread_name, socket_name = REFUSING[driver]
     expect_refusal(call, refused_thread, None, thread_name)
     expect_refusal(call, None, refused_socket, socket_name)
-    expect_refusal(call, {"linux_nice": 0, refused_thread[0]: refused_thread[1]}, None, thread_name)
+    expect_refusal(
+        call, {"linux_nice": 0, refused_thread[0]: refused_thread[1]}, None, thread_name
+    )
 
 
 @pytest.mark.parametrize("driver", ["hmi", "rmi"])
 def test_a_thread_config_object_converts(driver):
     call, _, _, refused_name, _ = REFUSING[driver]
-    expect_refusal(call, types.SimpleNamespace(priority=80, cpu_affinity=None), None, refused_name)
+    expect_refusal(
+        call, types.SimpleNamespace(priority=80, cpu_affinity=None), None, refused_name
+    )
     expect_refusal(call, {"priority": 80, "cpu_affinity": 0}, None, refused_name)
 
 
@@ -155,7 +178,9 @@ def test_a_thread_config_object_converts(driver):
         ({"kind": 7, "value": 0}, TypeError, "int"),
     ],
 )
-def test_invalid_thread_options_raise_naming_the_problem(driver, thread, error, mentions):
+def test_invalid_thread_options_raise_naming_the_problem(
+    driver, thread, error, mentions
+):
     call = REFUSING[driver][0]
     start = time.monotonic()
     with pytest.raises(error) as err:

@@ -2,6 +2,7 @@ from ipaddress import IPv4Address, IPv6Address
 from typing import Generic, TypeVar
 
 from _communication.fanuc_ucl.py_src.fanuc_ucl._common import JointFormat, JointTemplate
+
 from fanuc_ucl._options import SocketOptionsLike, ThreadOptionsLike
 
 _T = TypeVar("_T")

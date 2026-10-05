@@ -3,7 +3,6 @@
 import time
 
 import pytest
-
 from conftest import CLOSED, UNROUTABLE, run_isolated
 from fanuc_ucl import JointFormat, JointTemplate, hmi, hspo, rmi, stmo
 
@@ -35,7 +34,7 @@ def test_hmi_read_before_connect_fails():
 def test_hmi_connect_to_a_closed_port_fails_at_once():
     driver = hmi.HmiDriver(CLOSED)
     start = time.monotonic()
-    with pytest.raises(Exception):
+    with pytest.raises(OSError):
         driver.connect(1.0)
     assert time.monotonic() - start < 0.5
     assert not driver.is_connected()
@@ -139,7 +138,9 @@ def test_stmo_start_without_a_controller_times_out():
         (lambda: hmi.HmiDriver(CLOSED).read(hmi.Register, 0), Exception),
         (lambda: hmi.HmiDriver(CLOSED).read(hmi.Register, 70_000), Exception),
         (
-            lambda: stmo.MotionCommandPacket.try_from_joints(JointFormat.FanucDeg, JointTemplate.SIX, [1.0, 2.0]),
+            lambda: stmo.MotionCommandPacket.try_from_joints(
+                JointFormat.FanucDeg, JointTemplate.SIX, [1.0, 2.0]
+            ),
             Exception,
         ),
     ],
@@ -158,4 +159,6 @@ def test_an_out_of_range_hmi_index_is_rejected_as_an_index_error():
         "    print(type(e).__name__, e)\n"
     )
     out = result.stdout.strip()
-    assert out and "Panic" not in out and "Not connected" not in out, out + result.stderr
+    assert out and "Panic" not in out and "Not connected" not in out, (
+        out + result.stderr
+    )

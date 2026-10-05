@@ -26,6 +26,7 @@ def run_isolated(code: str, timeout: float = 20.0) -> subprocess.CompletedProces
         capture_output=True,
         text=True,
         timeout=timeout,
+        check=False,
     )
 
 

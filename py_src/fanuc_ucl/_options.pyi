@@ -27,13 +27,21 @@ Int: TypeAlias = int | SupportsIndex
 Cpus: TypeAlias = Int | Iterable[Int]
 """One CPU index or several."""
 
-SchedulerName = Literal["other", "batch", "idle", "fifo", "round_robin"]
-ThreadPriorityName = Literal[
-    "idle", "lowest", "below_normal", "normal", "above_normal", "highest", "time_critical"
+SchedulerName: TypeAlias = Literal["other", "batch", "idle", "fifo", "round_robin"]
+ThreadPriorityName: TypeAlias = Literal[
+    "idle",
+    "lowest",
+    "below_normal",
+    "normal",
+    "above_normal",
+    "highest",
+    "time_critical",
 ]
-QosClassName = Literal["user_interactive", "user_initiated", "default", "utility", "background"]
+QosClassName: TypeAlias = Literal[
+    "user_interactive", "user_initiated", "default", "utility", "background"
+]
 
-ThreadOptionName = Literal[
+ThreadOptionName: TypeAlias = Literal[
     "cpu_affinity",
     "rt_priority",
     "prefault_stack",
@@ -45,7 +53,7 @@ ThreadOptionName = Literal[
     "macos_qos",
     "macos_time_constraint",
 ]
-SocketOptionName = Literal[
+SocketOptionName: TypeAlias = Literal[
     "recv_buffer",
     "send_buffer",
     "bind_device",
@@ -175,7 +183,9 @@ ThreadOptionPair: TypeAlias = (
     | tuple[Literal["win_priority"], ThreadPriorityLike]
     | tuple[Literal["win_mmcss"], str]
     | tuple[Literal["macos_qos"], QosClassLike]
-    | tuple[Literal["macos_time_constraint"], TimeConstraintFields | tuple[int, int, int]]
+    | tuple[
+        Literal["macos_time_constraint"], TimeConstraintFields | tuple[int, int, int]
+    ]
     | tuple[Literal["win_disable_power_throttling"]]
 )
 
@@ -258,6 +268,10 @@ SocketOptionPair: TypeAlias = (
     | tuple[Literal["bind_device"], str]
 )
 
-SocketOptionLike: TypeAlias = SocketOptionPair | SocketOptionDict | Mapping[str, Any] | AnyTagged
+SocketOptionLike: TypeAlias = (
+    SocketOptionPair | SocketOptionDict | Mapping[str, Any] | AnyTagged
+)
 
-SocketOptionsLike: TypeAlias = None | SocketOptionLike | Iterable[SocketOptionLike] | Mapping[str, Any]
+SocketOptionsLike: TypeAlias = (
+    None | SocketOptionLike | Iterable[SocketOptionLike] | Mapping[str, Any]
+)
