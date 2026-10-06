@@ -4,7 +4,7 @@ pub mod errors;
 pub mod proto;
 pub mod rmi_handle;
 
-#[cfg(test)]
+#[cfg(all(test, snare))]
 mod test;
 
 use serde::{Deserialize, Serialize};

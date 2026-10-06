@@ -7,17 +7,14 @@
 //! once the robot is moving, no sequence number may arrive twice, and every
 //! announced cycle must be answered. Anything the driver does that would trip
 //! an e-stop shows up here as a recorded fault.
-#![cfg(all(
-    unix,
-    any(
-        all(
-            target_os = "linux",
-            target_env = "gnu",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        target_os = "macos",
-        windows
-    )
+#![cfg(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    windows
 ))]
 
 use std::collections::{HashSet, VecDeque};
@@ -26,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use snare::Sim;
+use snare::prelude::*;
 
 use crate::joints::{JointFormat, JointTemplate};
 use crate::stmo::buffer::CAPACITY;
@@ -808,6 +805,13 @@ fn a_controller_that_goes_silent_holds_the_stream_until_it_returns() {
     assert_eq!(stats.underruns, 0, "{stats}");
 }
 
+/// The error an ICMP port unreachable leaves on a connected UDP socket.
+#[cfg(unix)]
+const PORT_UNREACHABLE: i32 = libc::ECONNREFUSED;
+/// `WSAECONNRESET`.
+#[cfg(windows)]
+const PORT_UNREACHABLE: i32 = 10054;
+
 #[test]
 fn an_icmp_port_unreachable_mid_stream_is_survived() {
     let (report, (landed, cleared, stats, errored, seen)) = run_stmo_test(
@@ -831,7 +835,7 @@ fn an_icmp_port_unreachable_mid_stream_is_survived() {
 
     assert_eq!(
         landed,
-        Some(libc::ECONNREFUSED),
+        Some(PORT_UNREACHABLE),
         "the ICMP error never reached the socket"
     );
     assert_eq!(cleared, None, "the driver never consumed the error");

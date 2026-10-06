@@ -2,7 +2,7 @@
 //! orderings and cycle counts the controller protocol depends on, checked
 //! against fake controllers and servers running beside the driver threads.
 #![cfg(all(
-    unix,
+    snare,
     any(
         all(
             target_os = "linux",

@@ -1,17 +1,14 @@
-#![cfg(all(
-    unix,
-    any(
-        all(
-            target_os = "linux",
-            target_env = "gnu",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        target_os = "macos",
-        windows
-    )
+#![cfg(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    windows
 ))]
 
-use snare::{Packet, Sim, TesterAction, connect_tester, run_testers};
+use snare::prelude::*;
 
 use super::*;
 use proto::ports::*;
@@ -1016,6 +1013,7 @@ fn sequence_numbers_wrap_without_losing_a_reply() {
     assert!(seqs.windows(2).all(|w| w[1] == w[0].wrapping_add(1)));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_refused_connect_fails_at_once() {
     sim().run(|| {

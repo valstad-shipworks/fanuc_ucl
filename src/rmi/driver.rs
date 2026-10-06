@@ -195,6 +195,8 @@ struct RmiRunner {
     /// Set once FRC_Disconnect is on the wire: how long the runner keeps
     /// reading for its reply and any still in flight.
     disconnect_deadline: Option<Instant>,
+    /// The last write stopped on a full send buffer.
+    write_blocked: bool,
 }
 
 /// A runner thread that applied its options and is serving the connection.
@@ -430,6 +432,7 @@ impl RmiRunner {
     }
 
     fn write_from_queue(&mut self, q: &mut VecDeque<PendingWrite>) -> bool {
+        self.write_blocked = false;
         if !q.is_empty() {
             tracing::trace!("Writing to RMI tcp stream");
         }
@@ -465,6 +468,7 @@ impl RmiRunner {
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        self.write_blocked = true;
                         return false; // wait for next WRITABLE
                     }
                     Err(e) => {
@@ -507,6 +511,7 @@ impl RmiRunner {
         let mut read_buf = vec![0u8; 8192];
         let mut connection_established = false;
         let mut exit_by: Option<Instant> = None;
+        let mut interest = Interest::READABLE.add(Interest::WRITABLE);
 
         loop {
             let timeout = match self.disconnect_deadline {
@@ -584,6 +589,21 @@ impl RmiRunner {
                 tracing::info!("RMI Runner thread terminating");
                 return Ok(());
             }
+
+            // Writability is level-triggered under IOCP: mio re-arms every
+            // interest after each read that would block, so a permanent
+            // WRITABLE wakes an idle runner on every pass.
+            let wanted = if connection_established && !self.write_blocked {
+                Interest::READABLE
+            } else {
+                Interest::READABLE.add(Interest::WRITABLE)
+            };
+            if wanted != interest {
+                poll.registry()
+                    .reregister(&mut self.tcp_stream, RmiRunner::TOK_SOCKET, wanted)
+                    .map_err(RmiError::CommunicationError)?;
+                interest = wanted;
+            }
         }
     }
 }
@@ -622,6 +642,7 @@ fn rmi_runner_runtime(
         telemetry,
         rx_buf: Vec::new(),
         disconnect_deadline: None,
+        write_blocked: false,
     };
     if let Err(e) = runner.run(poll) {
         tracing::error!(error = %e, "RMI runner terminated with error");

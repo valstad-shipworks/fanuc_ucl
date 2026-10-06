@@ -1,17 +1,14 @@
-#![cfg(all(
-    unix,
-    any(
-        all(
-            target_os = "linux",
-            target_env = "gnu",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        target_os = "macos",
-        windows
-    )
+#![cfg(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    windows
 ))]
 
-use snare::{Bytes, Sim, TesterAction, run_testers, udp_tester};
+use snare::prelude::*;
 
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -971,6 +968,45 @@ fn malformed_and_foreign_datagrams_are_ignored() {
         let got = receiver.joint.recv_all();
         assert_eq!(got.len(), 1, "the broker stopped after junk");
         assert_eq!(got[0].index, 3);
+        assert!(!has_broker_errored());
+        destroy_broker(true);
+    });
+}
+
+#[test]
+fn a_port_unreachable_on_the_broker_socket_is_survived() {
+    let _turn = BrokerTurn::take();
+    hspo_sim().run(|| {
+        initialize_broker(BROKER_ADDR, &[], &[]).unwrap();
+        let robot = SocketAddr::from(([10, 0, 0, 26], 60000));
+        let receiver = HspoReceiver::try_new(robot.ip(), 256, Duration::from_millis(100)).unwrap();
+        let socket = std::net::UdpSocket::bind(robot).unwrap();
+        for i in 0..10 {
+            socket
+                .send_to(&joint_datagram(i, i * 2000), BROKER_ADDR)
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        snare::inject_icmp_port_unreachable(BROKER_ADDR, robot);
+        let broker_socket = snare::sockets_bound(BROKER_ADDR)[0].id;
+        let landed = snare::socket_entry(broker_socket).unwrap().pending_error;
+        if cfg!(windows) {
+            assert!(landed.is_some(), "the unreachable never reached the broker");
+        }
+        for i in 10..30 {
+            socket
+                .send_to(&joint_datagram(i, i * 2000), BROKER_ADDR)
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            snare::socket_entry(broker_socket).unwrap().pending_error,
+            None,
+            "the broker never consumed the error"
+        );
+        let indices: Vec<u32> = receiver.joint.recv_all().iter().map(|p| p.index).collect();
+        assert_eq!(indices, (0..30).collect::<Vec<_>>());
+        assert!(receiver.is_connected());
         assert!(!has_broker_errored());
         destroy_broker(true);
     });

@@ -49,6 +49,7 @@ fn runner() -> (HmiRunner, std::net::TcpStream) {
         held: VecDeque::new(),
         read_buffer: Vec::new(),
         shutting_down: false,
+        write_blocked: false,
         telemetry: None,
     };
     (runner, far)

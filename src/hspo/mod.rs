@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod fuzz_test;
-#[cfg(test)]
+#[cfg(all(test, snare))]
 mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};
@@ -1682,6 +1682,20 @@ fn broker_runtime(
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         // No more datagrams right now.
                         break;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    // A port unreachable reported on this receive. The socket
+                    // stays usable, and readiness only re-arms once a receive
+                    // would block (mio on IOCP, edge-triggered epoll).
+                    Err(ref e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionRefused
+                        ) =>
+                    {
+                        tracing::debug!(error = %e, "HSPO broker receive reported a port unreachable");
+                        continue;
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "HSPO broker socket recv error");

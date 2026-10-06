@@ -5,7 +5,7 @@ mod driver;
 mod fuzz_test;
 pub mod proto;
 pub(crate) mod stmo_handle;
-#[cfg(test)]
+#[cfg(all(test, snare))]
 mod test;
 mod types;
 
