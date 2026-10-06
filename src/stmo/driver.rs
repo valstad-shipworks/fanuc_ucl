@@ -486,10 +486,22 @@ impl StreamMotionContext {
                 }
                 Ok(_) => {
                     tracing::warn!("Received empty packet");
-                    break;
+                    continue;
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                // A port unreachable an earlier send drew, reported on this
+                // receive. The socket stays usable, and readiness only re-arms
+                // once a receive would block (mio on IOCP, edge-triggered epoll).
+                Err(ref e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    tracing::debug!(error = %e, "STMO receive reported a port unreachable");
+                    continue;
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "Error receiving packet");
                     break;

@@ -3,7 +3,6 @@
 //! against fake controllers and servers running beside the driver threads.
 #![cfg(all(
     snare,
-    unix,
     any(
         all(
             target_os = "linux",

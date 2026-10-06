@@ -46,6 +46,8 @@ pub(super) struct HmiRunner {
     held: VecDeque<PendingWrite>,
     read_buffer: Vec<u8>,
     shutting_down: bool,
+    /// The last write stopped on a full send buffer.
+    write_blocked: bool,
     telemetry: Option<HmiTelemetry>,
 }
 
@@ -137,6 +139,7 @@ impl HmiRunner {
         let mut events = Events::with_capacity(64);
         let mut scratch = [0u8; 2048];
         let mut connection_established = false;
+        let mut interest = Interest::READABLE.add(Interest::WRITABLE);
         let timeout = Some(Duration::from_millis(96));
 
         loop {
@@ -191,6 +194,21 @@ impl HmiRunner {
             {
                 break;
             }
+
+            // Writability is level-triggered under IOCP: mio re-arms every
+            // interest after each read that would block, so a permanent
+            // WRITABLE wakes an idle runner on every pass.
+            let wanted = if connection_established && !self.write_blocked {
+                Interest::READABLE
+            } else {
+                Interest::READABLE.add(Interest::WRITABLE)
+            };
+            if wanted != interest {
+                poll.registry()
+                    .reregister(&mut self.tcp_stream, HmiRunner::TOK_SOCKET, wanted)
+                    .map_err(HmiError::from)?;
+                interest = wanted;
+            }
         }
         Ok(())
     }
@@ -223,6 +241,7 @@ impl HmiRunner {
 
     fn write_from_queue(&mut self, queue: &mut VecDeque<PendingWrite>) -> HmiResult<()> {
         tracing::trace!("Writing to HMI tcp stream");
+        self.write_blocked = false;
         while let Some(write) = self.held.pop_back() {
             queue.push_front(write);
         }
@@ -261,7 +280,10 @@ impl HmiRunner {
                         queue.pop_front();
                     }
                 }
-                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    self.write_blocked = true;
+                    break;
+                }
                 Err(e) => {
                     let handle = front.handle.clone();
                     queue.pop_front();
@@ -374,6 +396,7 @@ fn hmi_runner_runtime(
         held: VecDeque::new(),
         read_buffer: Vec::with_capacity(2048),
         shutting_down: false,
+        write_blocked: false,
         telemetry,
     };
     let mut queue = VecDeque::new();

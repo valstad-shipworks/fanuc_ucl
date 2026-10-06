@@ -50,6 +50,7 @@ fn runner() -> RmiRunner {
         telemetry: None,
         rx_buf: Vec::new(),
         disconnect_deadline: None,
+        write_blocked: false,
     }
 }
 

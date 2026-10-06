@@ -4,7 +4,6 @@
 //! thread option the OS will not apply fails the connect instead of being lost.
 #![cfg(all(
     snare,
-    unix,
     any(
         all(
             target_os = "linux",
@@ -51,22 +50,26 @@ fn nic_sim() -> Sim {
         .build()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn unprivileged_sim() -> Sim {
     builder().privileges(snare::Privileges::none()).build()
 }
 
 /// A thread option every driver role accepts that an unprivileged process
-/// cannot apply: Linux refuses lowering the nice value. macOS applies, clamps
-/// or reports every option the roles accept, so it has none.
-#[cfg(not(target_os = "macos"))]
+/// cannot apply: Linux refuses lowering the nice value. macOS and Windows
+/// apply, clamp or report every option the roles accept, so they have none.
+#[cfg(target_os = "linux")]
 fn unappliable() -> Vec<ThreadOption> {
     vec![ThreadOption::LinuxNice(-10)]
 }
 
-/// Accepted by every role, but written for Windows.
+/// Accepted by every role, but written for another platform.
 fn foreign_thread() -> ThreadOption {
-    ThreadOption::WinDisablePowerThrottling
+    if cfg!(windows) {
+        ThreadOption::LinuxNice(5)
+    } else {
+        ThreadOption::WinDisablePowerThrottling
+    }
 }
 
 /// Accepted by the UDP roles, but written for Linux. Those roles accept no
@@ -77,6 +80,16 @@ fn foreign_udp_socket() -> Vec<SocketOption> {
     } else {
         vec![SocketOption::LinuxBusyPoll(50)]
     }
+}
+
+/// The options of `requested` this platform applies: Windows ignores a DSCP
+/// the application sets, so it is never applied there.
+fn applied_here(requested: &[SocketOption]) -> Vec<SocketOption> {
+    requested
+        .iter()
+        .filter(|o| !(cfg!(windows) && matches!(o, SocketOption::Dscp(_))))
+        .cloned()
+        .collect()
 }
 
 /// `SO_RCVBUF`/`SO_SNDBUF` as getsockopt reports a requested size: Linux
@@ -116,7 +129,7 @@ fn stmo_socket() -> Vec<SocketEntry> {
 }
 
 /// Lets threads that already failed finish dropping what they own.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn settle() {
     std::thread::sleep(Duration::from_millis(1));
 }
@@ -172,7 +185,7 @@ fn stmo_socket_options_land_on_its_socket() {
         driver.connect(&[], &options).unwrap();
         assert_eq!(
             driver.tuning_report().unwrap().socket.applied.len(),
-            options.len()
+            applied_here(&options).len()
         );
         let sockets = stmo_socket();
         assert_eq!(sockets.len(), 1, "{sockets:?}");
@@ -205,7 +218,7 @@ fn stmo_unknown_interface_fails_cleanly() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn stmo_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {
@@ -334,7 +347,7 @@ fn hspo_unknown_interface_fails_cleanly() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn hspo_thread_option_failure_fails_initialize() {
     let _turn = BrokerTurn::take();
@@ -410,7 +423,10 @@ fn rmi_socket_options_apply_to_both_connections() {
             }
             let mut driver = RmiDriver::new(rmi_config());
             driver.connect(&[], &options).unwrap();
-            assert_eq!(driver.tuning_report().unwrap().socket.applied, options);
+            assert_eq!(
+                driver.tuning_report().unwrap().socket.applied,
+                applied_here(&options)
+            );
             let handshake: Vec<_> = snare::closed_sockets()
                 .into_iter()
                 .filter(|s| s.peer == Some(SocketAddr::new(ROBOT, 16001)))
@@ -430,7 +446,7 @@ fn rmi_socket_options_apply_to_both_connections() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn rmi_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {
@@ -487,7 +503,7 @@ fn hmi_accepts_its_options_and_skips_another_platforms() {
                 .connect(Some(Duration::from_secs(1)), &[foreign_thread()], &socket)
                 .unwrap();
             let report = driver.tuning_report().unwrap();
-            assert_eq!(report.socket.applied, socket);
+            assert_eq!(report.socket.applied, applied_here(&socket));
             assert_eq!(report.thread.skipped.len(), 1);
             let session = open_sockets(SocketKind::TcpStream, SocketAddr::new(ROBOT, 60008));
             assert_eq!(session.len(), 1, "{session:?}");
@@ -498,7 +514,7 @@ fn hmi_accepts_its_options_and_skips_another_platforms() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn hmi_thread_option_failure_fails_connect() {
     unprivileged_sim().run(|| {
