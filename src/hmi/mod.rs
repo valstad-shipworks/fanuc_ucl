@@ -5,7 +5,7 @@ mod proto;
 mod runner;
 pub mod server;
 
-#[cfg(test)]
+#[cfg(all(test, snare))]
 mod test;
 
 #[cfg(feature = "py")]

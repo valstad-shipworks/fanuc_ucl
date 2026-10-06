@@ -11,7 +11,7 @@
     )
 ))]
 
-use snare::{Bytes, Sim, TesterAction, run_testers, udp_tester};
+use snare::prelude::*;
 
 use super::*;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

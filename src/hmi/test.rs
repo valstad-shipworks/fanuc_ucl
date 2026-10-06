@@ -11,7 +11,7 @@
     )
 ))]
 
-use snare::{Packet, Sim, TesterAction, connect_tester, run_testers};
+use snare::prelude::*;
 
 use super::*;
 use proto::ports::*;

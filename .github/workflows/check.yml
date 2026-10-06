@@ -56,3 +56,13 @@ jobs:
 
       - name: Tests
         run: cargo test --target ${{ matrix.platform.target }}
+
+      # snare only builds with `--cfg snare`; `cargo snare` sets it and routes the raw-syscall
+      # crates through libc, so the plain `cargo test` above leaves the sim tests out.
+      - name: Install cargo-snare
+        if: ${{ !contains(matrix.platform.target, 'windows') && !endsWith(matrix.platform.target, 'musl') }}
+        run: cargo install cargo-snare --locked
+
+      - name: Snare tests
+        if: ${{ !contains(matrix.platform.target, 'windows') && !endsWith(matrix.platform.target, 'musl') }}
+        run: cargo snare test --target ${{ matrix.platform.target }}

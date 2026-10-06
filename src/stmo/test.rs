@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use snare::Sim;
+use snare::prelude::*;
 
 use crate::joints::{JointFormat, JointTemplate};
 use crate::stmo::buffer::CAPACITY;

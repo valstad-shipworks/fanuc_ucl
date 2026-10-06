@@ -11,7 +11,8 @@
     )
 ))]
 
-use snare::{CrLf, Delimited, Sim, TesterAction, connect_tester, run_testers};
+use snare::CrLf;
+use snare::prelude::*;
 
 use super::*;
 use errors::{RmiError, RmiProtocolError};

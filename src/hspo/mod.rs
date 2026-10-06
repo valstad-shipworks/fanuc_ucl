@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod fuzz_test;
-#[cfg(test)]
+#[cfg(all(test, snare))]
 mod test;
 
 use cfg_vis::{cfg_vis, cfg_vis_fields};

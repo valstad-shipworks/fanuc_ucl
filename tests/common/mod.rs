@@ -1,3 +1,4 @@
+#![cfg(snare)]
 #![allow(dead_code)]
 
 use std::io::{Read, Write};
@@ -7,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use fanuc_ucl::hmi::server::{HmiRequest, ack_resp, init_ack, parse_request};
-use snare::{Sim, SimBuilder};
+use snare::prelude::*;
 
 /// One thread at a time, switching only at waits, on a virtual clock that
 /// moves only when every thread is blocked. A wait the drivers hide from the

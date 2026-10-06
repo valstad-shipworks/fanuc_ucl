@@ -3,6 +3,7 @@
 //! skipped, accepted socket options land on the driver's own socket, and a
 //! thread option the OS will not apply fails the connect instead of being lost.
 #![cfg(all(
+    snare,
     unix,
     any(
         all(
@@ -31,9 +32,8 @@ use fanuc_ucl::rmi::{RmiDriver, RmiDriverConfig};
 use fanuc_ucl::stmo::{StreamMotionDriver, StreamMotionError};
 use fanuc_ucl::{SocketOption, ThreadOption};
 use fast_talker::rt::Scheduler;
-use snare::{
-    IpNet, NicSpec, Sim, SocketEntry, SocketKind, UnmodelledOption, socket_table, sockets_bound,
-};
+use snare::prelude::*;
+use snare::{SocketEntry, UnmodelledOption, socket_table, sockets_bound};
 
 use common::{builder, hmi_server, rmi_server, run, sim};
 
