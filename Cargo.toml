@@ -1,6 +1,6 @@
 [package]
 name = "fanuc_ucl"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
@@ -50,8 +50,8 @@ fast-talker = { version = "0.3", default-features = false, features = ["mio", "o
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
 
-[target.'cfg(all(snare, any(all(target_os = "linux", target_env = "gnu", any(target_arch = "x86_64", target_arch = "aarch64")), target_os = "macos", windows)))'.dev-dependencies]
-snare = "3"
+[target.'cfg(snare)'.dev-dependencies]
+snare = "^3"
 
 
 [features]
