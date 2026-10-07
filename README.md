@@ -3,10 +3,10 @@
 # Unofficial Control Library for FANUC Robots
 
 A library implementing a variety of FANUC robot proprietary protocols such as:
-- Stream Motion (stmo)
-- High Speed Position Output (hspo)
-- Remote Motion Interface (rmi)
-- SNPX based "HMI" (hmi)
+- Stream Motion (stmo), UDP to controller port 60015
+- High Speed Position Output (hspo), UDP received on a caller-chosen address
+- Remote Motion Interface (rmi), TCP handshake on port 16001, then the controller-assigned session port
+- SNPX based "HMI" (hmi), TCP port 60008
 
 The library is implemented in rust with the ability to be used as a crate in rust or a python module via pyo3.
 Has been tested with Linux(x86_64 and arm64), Windows(x86_64) and MacOS(arm64) although it likely works on all architectures that windows and macos support.
@@ -20,6 +20,9 @@ Add the following to your Cargo.toml:
 fanuc_ucl = "2"
 ```
 or run `cargo add fanuc_ucl` in your project directory.
+
+Each protocol is a cargo feature (`stmo`, `rmi`, `hspo`, `hmi`), all enabled by default; use `default-features = false` to pick a subset.
+The `py` feature builds the Python bindings and changes some Rust signatures (for example `hspo::initialize_broker` takes a `String` address, and `RmiDriverConfig::default_with_ip` is not available), so Rust consumers should leave it off.
 
 ### Python
 The library is available on PyPI as `fanuc_ucl`, so you can install it using pip:
@@ -547,7 +550,7 @@ for lack of receive buffer.
 
 ## Roadmap
 - Pydocs and Rustdocs for all public APIs
-- ~~Switch python terminal logging to pylog instead of tracing~~
+- Switch python terminal logging to pylog instead of tracing (currently tracing to stderr, filtered by `RUST_LOG` and `fanuc_ucl.set_log_level`)
 - ~~Implement an "In The Loop" interface for the `StreamMotionDriver` to make using feedback from sensors easier.~~
 - Implement a unit-safe api for working with Cartesian poses.
 - ~~Update docs to show the usage of stream motion and in-the-loop examples~~
@@ -557,3 +560,11 @@ for lack of receive buffer.
 - ~~Removing all possible panic locations and have graceful error handling for all failure modes.~~
 - ~~Extensive unit testing, I wrote a special network testing library for this I just need to write the actual tests using it~~
 - A C api for the library, to allow usage from other languages like c#. The main issue is the extensive usage of rust style enums and traits in the API, so this will require some careful design to make a clean and safe C api. This is a long term goal and will likely be a separate crate that depends on this one.
+
+## Testing
+
+`cargo test` runs the unit and property tests. The simulated-controller tests run on [snare](https://docs.rs/snare) and need [cargo-snare](https://crates.io/crates/cargo-snare): `cargo install cargo-snare --locked`, then `cargo snare test` (Linux gnu, macOS and Windows).
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
