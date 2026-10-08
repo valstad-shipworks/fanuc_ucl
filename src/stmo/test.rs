@@ -7,15 +7,6 @@
 //! once the robot is moving, no sequence number may arrive twice, and every
 //! announced cycle must be answered. Anything the driver does that would trip
 //! an e-stop shows up here as a recorded fault.
-#![cfg(any(
-    all(
-        target_os = "linux",
-        target_env = "gnu",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ),
-    target_os = "macos",
-    windows
-))]
 
 use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
