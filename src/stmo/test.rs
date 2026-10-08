@@ -7,15 +7,6 @@
 //! once the robot is moving, no sequence number may arrive twice, and every
 //! announced cycle must be answered. Anything the driver does that would trip
 //! an e-stop shows up here as a recorded fault.
-#![cfg(any(
-    all(
-        target_os = "linux",
-        target_env = "gnu",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ),
-    target_os = "macos",
-    windows
-))]
 
 use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
@@ -251,9 +242,7 @@ fn run_controller(
     }
 }
 
-/// Runs `client` beside the emulator in a deterministic sim: under snare
-/// 2.0.0-alpha.1 a plain sim can skip a sleeper's deadline while other sims in
-/// the process are polling, which here would show up as a skipped cycle.
+/// Runs `client` beside the emulator in a deterministic sim.
 fn run_stmo_test<F, R>(ip: Ipv4Addr, cfg: ControllerCfg, client: F) -> (Report, R)
 where
     F: FnOnce(IpAddr, &Arc<Mutex<Report>>) -> R,

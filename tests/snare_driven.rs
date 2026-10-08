@@ -1,18 +1,7 @@
 //! The drivers under a deterministic sim with exact virtual durations: the
 //! orderings and cycle counts the controller protocol depends on, checked
 //! against fake controllers and servers running beside the driver threads.
-#![cfg(all(
-    snare,
-    any(
-        all(
-            target_os = "linux",
-            target_env = "gnu",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        target_os = "macos",
-        windows
-    )
-))]
+#![cfg(snare)]
 
 mod common;
 

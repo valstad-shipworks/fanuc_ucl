@@ -1,13 +1,3 @@
-#![cfg(any(
-    all(
-        target_os = "linux",
-        target_env = "gnu",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ),
-    target_os = "macos",
-    windows
-))]
-
 use snare::prelude::*;
 
 use super::*;
@@ -266,21 +256,23 @@ fn test_channel_recv_async() {
         }
     }
 
-    let (tx, rx) = bounded::<VariablesPacket>(4);
-    let channel = HspoChannel::new(rx, Arc::new(StreamClock::default()));
+    hspo_sim().run(|| {
+        let (tx, rx) = bounded::<VariablesPacket>(4);
+        let channel = HspoChannel::new(rx, Arc::new(StreamClock::default()));
 
-    let sender = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
-        tx.send(make_variables_packet(42)).unwrap();
-        // tx drops here, disconnecting the channel
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            tx.send(make_variables_packet(42)).unwrap();
+            // tx drops here, disconnecting the channel
+        });
+
+        assert_eq!(
+            block_on(channel.recv_async()),
+            Some(make_variables_packet(42))
+        );
+        assert_eq!(block_on(channel.recv_async()), None);
+        sender.join().unwrap();
     });
-
-    assert_eq!(
-        block_on(channel.recv_async()),
-        Some(make_variables_packet(42))
-    );
-    assert_eq!(block_on(channel.recv_async()), None);
-    sender.join().unwrap();
 }
 
 #[test]
@@ -551,9 +543,6 @@ fn settle() {
     std::thread::sleep(Duration::from_millis(1));
 }
 
-/// Deterministic: under snare 2.0.0-alpha.1 a plain sim can wake a joining
-/// thread late, at the broker's next poll timeout, which would push the
-/// connection checks past the timeout they measure.
 #[test]
 fn test_all() {
     let _turn = BrokerTurn::take();
