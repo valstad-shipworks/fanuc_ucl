@@ -2,18 +2,7 @@
 //! role refuses fails before any socket exists, another platform's option is
 //! skipped, accepted socket options land on the driver's own socket, and a
 //! thread option the OS will not apply fails the connect instead of being lost.
-#![cfg(all(
-    snare,
-    any(
-        all(
-            target_os = "linux",
-            target_env = "gnu",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        target_os = "macos",
-        windows
-    )
-))]
+#![cfg(snare)]
 
 mod common;
 
