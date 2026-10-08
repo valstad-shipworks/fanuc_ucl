@@ -30,8 +30,6 @@ impl Packet for SnpxPacket {
     }
 }
 
-/// Deterministic: under snare 2.0.0-alpha.1 a plain sim can skip a sleeper's
-/// deadline while other sims in the process are polling.
 fn sim() -> Sim {
     Sim::builder()
         .deterministic()
@@ -691,13 +689,13 @@ fn async_await_wakes_on_late_notify() {
     sim().run(|| {
         let handle = HmiHandleGeneric::new();
         let fulfiller = handle.clone();
-        std::thread::spawn(move || {
+        let fulfil = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             let _ = fulfiller.set_error(HmiError::Timeout);
         });
 
         let waiter = std::thread::current();
-        std::thread::spawn(move || {
+        let watchdog = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(3));
             waiter.unpark();
         });
@@ -705,6 +703,8 @@ fn async_await_wakes_on_late_notify() {
         let start = Instant::now();
         let result = block_on(handle);
         let elapsed = start.elapsed();
+        fulfil.join().unwrap();
+        watchdog.join().unwrap();
         assert!(result.is_err());
         assert!(
             elapsed >= Duration::from_millis(50) && elapsed < Duration::from_millis(51),

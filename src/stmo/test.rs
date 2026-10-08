@@ -242,9 +242,7 @@ fn run_controller(
     }
 }
 
-/// Runs `client` beside the emulator in a deterministic sim: under snare
-/// 2.0.0-alpha.1 a plain sim can skip a sleeper's deadline while other sims in
-/// the process are polling, which here would show up as a skipped cycle.
+/// Runs `client` beside the emulator in a deterministic sim.
 fn run_stmo_test<F, R>(ip: Ipv4Addr, cfg: ControllerCfg, client: F) -> (Report, R)
 where
     F: FnOnce(IpAddr, &Arc<Mutex<Report>>) -> R,

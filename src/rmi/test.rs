@@ -18,8 +18,6 @@ fn frame(json: serde_json::Value) -> RmiPacket {
     Delimited::new(json.to_string())
 }
 
-/// Deterministic: under snare 2.0.0-alpha.1 a plain sim can skip a sleeper's
-/// deadline while other sims in the process are polling.
 fn sim() -> Sim {
     Sim::builder()
         .deterministic()
@@ -1281,9 +1279,9 @@ fn test_disconnect_handle_resolves_with_the_reply() {
     });
 }
 
-/// The runner parks in `poll` between messages; with the controller gone
-/// silent nothing on the socket wakes it, so `disconnect` returning promptly
-/// shows the driver wakes the runner itself.
+/// With the controller gone silent nothing on the socket wakes the runner, so
+/// `disconnect` giving up exactly one reply wait after it was called, rather
+/// than at the runner's next poll timeout, shows the driver wakes it itself.
 #[test]
 fn test_disconnect_runs_when_peer_silent() {
     let mut step = 0u8;
@@ -1314,7 +1312,7 @@ fn test_disconnect_runs_when_peer_silent() {
         driver.disconnect().expect("disconnect call");
         let elapsed = start.elapsed();
         assert!(
-            elapsed < Duration::from_secs(1),
+            elapsed >= Duration::from_millis(500) && elapsed < Duration::from_millis(501),
             "disconnect() took {elapsed:?}: the runner was not woken explicitly"
         );
     });
@@ -2130,6 +2128,6 @@ fn a_connect_reply_split_across_segments_still_connects() {
             std::panic::resume_unwind(panic);
         }
         handshake.join().unwrap();
-        let _ = server.join();
+        server.join().unwrap();
     });
 }
