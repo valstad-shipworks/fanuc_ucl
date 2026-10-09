@@ -51,7 +51,7 @@ fast-talker = { version = "0.3", default-features = false, features = ["mio", "o
 pyo3 = { version = "0.29", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
 
 [target.'cfg(snare)'.dev-dependencies]
-snare = "^3"
+snare = "3.1.1"
 
 
 [features]
