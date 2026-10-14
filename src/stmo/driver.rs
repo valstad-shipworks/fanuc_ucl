@@ -900,7 +900,10 @@ struct StmoIo {
 }
 
 impl StmoIo {
-    fn new(socket: std::net::UdpSocket) -> Result<Self, GeneralThreadError> {
+    fn new(
+        socket: std::net::UdpSocket,
+        options: &[SocketOption],
+    ) -> Result<Self, GeneralThreadError> {
         let report_tx_errors = match sockets::report_errors(&socket, true) {
             Ok(()) => true,
             Err(e) if e.kind() == io::ErrorKind::Unsupported => false,
@@ -914,6 +917,7 @@ impl StmoIo {
         };
         let mut socket = MioUdpSocket::from_std(socket);
         let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
+        tuning::apply_epoll_busy_poll(DRIVER, &poll, options).map_err(GeneralThreadError::Io)?;
         poll.registry()
             .register(&mut socket, TOK_SOCKET, Interest::READABLE)
             .map_err(|_| GeneralThreadError::FailedSocketRegistry)?;
@@ -1178,6 +1182,11 @@ impl StreamMotionDriver {
     ///
     /// `socket` is applied to the UDP socket before it is bound. It both
     /// sends and receives every cycle, so every [`SocketOption`] is accepted.
+    /// On Linux 6.9+ `LinuxBusyPoll`, `LinuxPreferBusyPoll` and
+    /// `LinuxBusyPollBudget` also set the busy polling of the poll the I/O
+    /// thread waits in, so it spins for the next status instead of sleeping
+    /// until the interrupt; an older kernel keeps the socket's own busy
+    /// polling and logs a warning.
     ///
     /// Options for another platform, or that this platform cannot do, are
     /// skipped with a warning, as are options the platform applied with a
@@ -1212,7 +1221,7 @@ impl StreamMotionDriver {
             .map_err(StreamMotionError::from)?;
         udp.set_nonblocking(true).map_err(StreamMotionError::from)?;
 
-        let io = StmoIo::new(udp).map_err(|e| StreamMotionError::Other(e.to_string()))?;
+        let io = StmoIo::new(udp, socket).map_err(|e| StreamMotionError::Other(e.to_string()))?;
 
         let (to_thread, from_driver) = flume::unbounded();
         let (to_driver, from_thread) = flume::unbounded();

@@ -1445,6 +1445,7 @@ impl BrokerIo {
         let poll = Poll::new().map_err(|_| GeneralThreadError::FailedToCreatePoll)?;
         let (socket, report) =
             tuning::bind_udp(DRIVER, SocketRole::UdpStreamRx, listen_on, options)?;
+        tuning::apply_epoll_busy_poll(DRIVER, &poll, options)?;
         socket.set_nonblocking(true)?;
         let mut socket =
             Timestamped::with_config(MioUdpSocket::from_std(socket), Config::kernel_only());
@@ -1852,7 +1853,10 @@ impl HspoBroker {
 /// `RecvBuffer`, `BindDevice`, `LinuxBusyPoll`, `LinuxPreferBusyPoll`,
 /// `LinuxBusyPollBudget`, `WinCpuAffinity`. `SendBuffer`, `DontFragment`,
 /// `Dscp` and `LinuxPriority` are refused: they only shape traffic, and this
-/// socket sends none.
+/// socket sends none. On Linux 6.9+ the busy-poll options also set the busy
+/// polling of the poll the broker thread waits in, so it spins for the next
+/// datagram instead of sleeping until the interrupt; an older kernel keeps
+/// the socket's own busy polling and logs a warning.
 ///
 /// Options for another platform, or that this platform cannot do, are
 /// skipped with a warning, as are options the platform applied with a
