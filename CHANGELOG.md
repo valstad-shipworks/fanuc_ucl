@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.2 — 2026-10-14
+
+### Changed
+
+- The Stream Motion runner and the HSPO broker carry `LinuxBusyPoll`,
+  `LinuxPreferBusyPoll` and `LinuxBusyPollBudget` over to the epoll they wait
+  in (`EPIOCSPARAMS`, Linux 6.9+, via fast-talker 0.3.2), so the thread spins
+  for the next datagram instead of sleeping until the NIC's interrupt. The
+  socket options alone only governed a blocking receive, which these runners
+  never do. A kernel without the ioctl logs a warning and keeps the socket's
+  own busy polling; a budget above 64 without `CAP_NET_ADMIN` (`EPERM`)
+  fails the connect like any other refused socket option. The accepted-option tables are unchanged.
+- Needs fast-talker 0.3.2.
+
+### Tests
+
+- The snare suites move to snare 3.1, which builds only under `--cfg snare`:
+  they run with `cargo snare test`, and snare is a dev-dependency only under
+  `cfg(snare)`, so plain `cargo test` no longer builds it.
+
 ## 2.0.1 — 2026-10-06
 
 Fixes for receive loops and idle runners that misbehaved on Windows, and the
