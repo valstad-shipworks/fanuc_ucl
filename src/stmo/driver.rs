@@ -191,6 +191,14 @@ struct StreamMotionContext {
     /// `more_follows` of the last batch the queue finished.
     stream_open: bool,
     stop_sent: bool,
+    /// A stop was asked for since the last start: statuses are answered with
+    /// the stop, never with motion.
+    stopping: bool,
+    /// Consecutive stale statuses, and consecutive cycles withheld on a full
+    /// controller buffer: each episode is logged once, at its start, so a
+    /// bad link does not log on every cycle of the hard loop.
+    stale_streak: u32,
+    withheld_streak: u32,
     itl: Arc<(Event, AtomicBool)>,
     telemetry: Option<StmoTelemetry>,
     counters: Arc<StmoCounters>,
@@ -264,6 +272,9 @@ impl StreamMotionContext {
             control_loop: false,
             stream_open: false,
             stop_sent: false,
+            stopping: false,
+            stale_streak: 0,
+            withheld_streak: 0,
             itl,
             send_last_command,
             telemetry,
@@ -552,11 +563,13 @@ impl StreamMotionContext {
                     let received_at = Instant::now();
                     if let RxPackets::RobotStatus(state) = &rx {
                         statuses += 1;
+                        self.counters
+                            .statuses_received
+                            .fetch_add(1, Ordering::Relaxed);
                         if self.buffer.saw_status(state.seq, received_at) {
                             self.pending_status = Some((received_at, *state));
                         } else {
-                            self.counters.stale_statuses.fetch_add(1, Ordering::Relaxed);
-                            tracing::debug!(seq = state.seq, "Stale STMO status, not commanding");
+                            self.note_stale(state.seq);
                         }
                         // Cycle-driven consumers wait on this; notifying as
                         // soon as the packet lands keeps them in step even when
@@ -663,6 +676,14 @@ impl StreamMotionContext {
                 more_follows,
             }),
             AnswerChange::Stop(pkt) => {
+                // Nothing queued is sent after a stop: its handles resolve now,
+                // so no caller waits on motion that will never go out.
+                for queued in self.motion_command_queue.drain(..) {
+                    if let Some(h) = queued.handle {
+                        h.set();
+                    }
+                }
+                self.stopping = true;
                 self.stop_sent |= self.send_retrying(
                     "stop",
                     TxPackets::Stop(pkt),
@@ -690,10 +711,31 @@ impl StreamMotionContext {
         if self.apply_held_before(received_at, io) {
             // The stop went out in this status's place.
             self.buffer.settled(state.seq);
+        } else if self.stopping {
+            // A controller still sending statuses after a stop did not take
+            // it (one lost datagram is enough): every status is answered with
+            // the stop again, never with motion, until a new start.
+            self.counters.repeated_stops.fetch_add(1, Ordering::Relaxed);
+            self.send_retrying(
+                "stop",
+                TxPackets::Stop(StopPacket {}),
+                io,
+                Duration::ZERO,
+                None,
+            );
+            self.buffer.settled(state.seq);
         } else {
             self.respond_inner(state, io, prev);
         }
         self.publish_gauges();
+    }
+
+    fn note_stale(&mut self, seq: u32) {
+        self.counters.stale_statuses.fetch_add(1, Ordering::Relaxed);
+        if self.stale_streak == 0 {
+            tracing::debug!(seq, "Stale STMO status, not commanding");
+        }
+        self.stale_streak += 1;
     }
 
     fn respond_inner(
@@ -709,11 +751,14 @@ impl StreamMotionContext {
                 0
             }
             SeqVerdict::Stale => {
-                self.counters.stale_statuses.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!(seq = state.seq, "Stale STMO status, not commanding");
+                self.note_stale(state.seq);
                 return;
             }
         };
+        if self.stale_streak > 0 {
+            tracing::debug!(statuses = self.stale_streak, "STMO statuses current again");
+            self.stale_streak = 0;
+        }
 
         if !state.status_bits().ready_for_commands() {
             // Nothing is owed for a cycle the controller was not taking
@@ -769,9 +814,19 @@ impl StreamMotionContext {
             // One more would overflow the controller and fault it. It drains a
             // command this cycle, so the slot reopens on the next.
             self.counters.overflow_skips.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(seq = state.seq, "STMO controller buffer full, withholding");
+            if self.withheld_streak == 0 {
+                tracing::warn!(seq = state.seq, "STMO controller buffer full, withholding");
+            }
+            self.withheld_streak += 1;
             self.buffer.settled(state.seq);
             return;
+        }
+        if self.withheld_streak > 0 {
+            tracing::debug!(
+                cycles = self.withheld_streak,
+                "STMO controller buffer open again"
+            );
+            self.withheld_streak = 0;
         }
 
         if let Some((mut cmd, handle)) = self.next_motion_command() {
@@ -851,6 +906,7 @@ impl StreamMotionContext {
             match tx {
                 ToThreadMessage::Start(pkt) => {
                     self.stop_sent = false;
+                    self.stopping = false;
                     self.send_retrying(
                         "start",
                         TxPackets::Start(pkt),
@@ -1089,6 +1145,7 @@ fn stream_motion_runtime(
 struct StreamMotionConnection {
     thread_handle: ThreadHandle,
     to_thread: CommandSender<ToThreadMessage>,
+    waker: Arc<Waker>,
     from_thread: Receiver<RxPackets>,
     is_started: bool,
     err_flag: Arc<AtomicBool>,
@@ -1115,6 +1172,33 @@ pub struct StreamMotionDriver {
 
 /// Commands the controller queues before it faults on overflow.
 pub const BUFFER_CAPACITY: u8 = crate::stmo::buffer::CAPACITY;
+
+/// Stops a [`StreamMotionDriver`]'s stream from any thread; see
+/// [`StreamMotionDriver::stopper`]. The stop answers the next status, every
+/// queued command is dropped with its handle resolved, and each later status
+/// is answered with the stop again until the next start.
+#[derive(Clone)]
+pub struct StmoStopper {
+    to_thread: CommandSender<ToThreadMessage>,
+    waker: Arc<Waker>,
+}
+
+impl std::fmt::Debug for StmoStopper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StmoStopper").finish_non_exhaustive()
+    }
+}
+
+impl StmoStopper {
+    /// Queues the stop and wakes the I/O thread. Never blocks.
+    pub fn stop(&self) {
+        let _ = self.to_thread.send(ToThreadMessage::Answer(
+            Instant::now(),
+            AnswerChange::Stop(StopPacket {}),
+        ));
+        let _ = self.waker.wake();
+    }
+}
 
 impl StreamMotionDriver {
     #[inline]
@@ -1321,6 +1405,7 @@ impl StreamMotionDriver {
         udp.set_nonblocking(true).map_err(StreamMotionError::from)?;
 
         let io = StmoIo::new(udp, socket).map_err(|e| StreamMotionError::Other(e.to_string()))?;
+        let waker = io.waker.clone();
 
         // Commands reach the I/O thread through a lock-free queue, so taking
         // one never waits on a lock a lower-priority sender holds.
@@ -1382,6 +1467,7 @@ impl StreamMotionDriver {
         self.connection = Some(StreamMotionConnection {
             thread_handle,
             to_thread,
+            waker,
             from_thread,
             is_started: false,
             err_flag: local_err_flag,
@@ -1395,6 +1481,18 @@ impl StreamMotionDriver {
         tracing::info!(addr = %self.remote_addr, "StreamMotionDriver connected");
 
         Ok(())
+    }
+
+    /// A handle that stops this connection's stream from any thread, as
+    /// [`stop`](Self::stop) does: for an estop raised elsewhere, which must not
+    /// wait for the thread that owns the driver. `None` while disconnected; a
+    /// stopper outlives a reconnect but stops nothing after it.
+    pub fn stopper(&self) -> Option<StmoStopper> {
+        let conn = self.connection.as_ref()?;
+        Some(StmoStopper {
+            to_thread: conn.to_thread.clone(),
+            waker: conn.waker.clone(),
+        })
     }
 
     /// A handle on this driver's cumulative [`StmoStats`], shareable across

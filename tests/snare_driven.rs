@@ -45,6 +45,8 @@ struct CtlLog {
     first_commanded: Option<u32>,
     /// Per stop packet, the highest sequence commanded since the last start.
     stopped_after: Vec<Option<u32>>,
+    /// Motion commands that arrived after a stop and before the next start.
+    commanded_after_stop: u32,
 }
 
 #[derive(Clone)]
@@ -52,6 +54,8 @@ struct Ctl {
     log: Arc<Mutex<CtlLog>>,
     stop: Arc<AtomicBool>,
     mute: Arc<AtomicBool>,
+    /// Keeps streaming statuses after a stop, as a controller that missed it.
+    deaf_to_stop: Arc<AtomicBool>,
 }
 
 impl Ctl {
@@ -60,6 +64,7 @@ impl Ctl {
             log: Arc::default(),
             stop: Arc::default(),
             mute: Arc::default(),
+            deaf_to_stop: Arc::default(),
         }
     }
 
@@ -76,6 +81,7 @@ fn fake_controller(socket: UdpSocket, ctl: Ctl, phase: Duration) {
     socket.set_nonblocking(true).unwrap();
     let mut peer = None;
     let mut started = false;
+    let mut halted = false;
     let mut seq: u32 = 0;
     let mut buf = [0u8; 2048];
     let mut next = Instant::now() + CYCLE + phase;
@@ -95,13 +101,15 @@ fn fake_controller(socket: UdpSocket, ctl: Ctl, phase: Duration) {
                     match TxPackets::decode_from(&buf[..n]) {
                         Some(TxPackets::Start(_)) => {
                             started = true;
+                            halted = false;
                             seq = 0;
                             let mut log = ctl.log();
                             log.commands.clear();
                             log.first_commanded = None;
                         }
                         Some(TxPackets::Stop(_)) => {
-                            started = false;
+                            started &= ctl.deaf_to_stop.load(Ordering::SeqCst);
+                            halted = true;
                             let mut log = ctl.log();
                             let last = log.commands.keys().last().copied();
                             log.stopped_after.push(last);
@@ -109,6 +117,9 @@ fn fake_controller(socket: UdpSocket, ctl: Ctl, phase: Duration) {
                         Some(TxPackets::VersionNumberRequest(_)) => version_requested = true,
                         Some(TxPackets::MotionCommand(m)) => {
                             let mut log = ctl.log();
+                            if halted {
+                                log.commanded_after_stop += 1;
+                            }
                             log.first_commanded.get_or_insert(m.seq());
                             log.commands.entry(m.seq()).or_default().push(Seen {
                                 j1: m.commanded_position()[0],
@@ -138,6 +149,7 @@ fn fake_controller(socket: UdpSocket, ctl: Ctl, phase: Duration) {
             let mut log = ctl.log();
             if let Some(first) = log.first_commanded
                 && seq >= first
+                && !halted
             {
                 let got = log.commands.get(&seq).map_or(0, Vec::len);
                 if got != 1 {
@@ -686,5 +698,77 @@ fn a_stop_made_while_reacting_to_a_status_replaces_the_next_command() {
                 log.stopped_after[i]
             );
         }
+    });
+}
+
+#[test]
+fn a_stopper_on_another_thread_drops_the_queued_motion_and_halts_the_stream() {
+    sim().run(|| {
+        let ip = stmo_ip(13);
+        let ctl = Ctl::new();
+        let stop = ctl.stop.clone();
+        let seen = ctl.clone();
+        let (stats, stops) = run(vec![controller_participant(ip, &ctl)], move || {
+            let mut driver = connected(ip);
+            let stopper = driver.stopper().unwrap();
+            let rows: Vec<_> = (0..500).map(|i| point(i as f64 * 0.01)).collect();
+            let handle = driver.command_motion(rows).unwrap();
+            std::thread::sleep(CYCLE * 10);
+            std::thread::spawn(move || stopper.stop()).join().unwrap();
+            handle.wait_timeout(CYCLE * 3).unwrap();
+            std::thread::sleep(CYCLE * 5);
+            let stats = driver.stats();
+            let stops = seen.log().stopped_after.len();
+            driver.disconnect();
+            stop.store(true, Ordering::SeqCst);
+            (stats, stops)
+        });
+        let log = ctl.log();
+        assert!(log.faults.is_empty(), "controller faults: {:?}", log.faults);
+        assert_eq!(stops, 1, "{:?}", log.stopped_after);
+        assert_eq!(log.commanded_after_stop, 0);
+        let commanded = log.commands.len();
+        assert!(
+            commanded < 20,
+            "{commanded} of 500 rows reached the controller"
+        );
+        assert_eq!(stats.repeated_stops, 0);
+        assert!(stats.statuses_received >= 10, "{stats}");
+    });
+}
+
+#[test]
+fn a_controller_that_keeps_streaming_after_a_stop_is_stopped_again() {
+    sim().run(|| {
+        let ip = stmo_ip(14);
+        let ctl = Ctl::new();
+        ctl.deaf_to_stop.store(true, Ordering::SeqCst);
+        let stop = ctl.stop.clone();
+        let seen = ctl.clone();
+        let (stats, stops) = run(vec![controller_participant(ip, &ctl)], move || {
+            let mut driver = connected(ip);
+            driver
+                .command_motion(vec![point(1.0)])
+                .unwrap()
+                .wait_timeout(Duration::from_secs(1))
+                .unwrap();
+            std::thread::sleep(CYCLE * 2);
+            driver.stop();
+            std::thread::sleep(CYCLE * 8);
+            let stats = driver.stats();
+            let stops = seen.log().stopped_after.len() as u64;
+            driver.disconnect();
+            stop.store(true, Ordering::SeqCst);
+            (stats, stops)
+        });
+        let log = ctl.log();
+        assert!(log.faults.is_empty(), "controller faults: {:?}", log.faults);
+        assert_eq!(log.commanded_after_stop, 0);
+        assert!(stops >= 5, "{stops} stops in 8 cycles");
+        // The last repeat may still be in flight when the stats are read.
+        assert!(
+            (stops - 1..=stops).contains(&stats.repeated_stops),
+            "{stops} stops seen, {stats}"
+        );
     });
 }
