@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.2.0 — 2026-11-06
+
+Lets a Stream Motion stream be stopped from any thread, and makes a stop
+stick.
+
+### Added
+
+- `StreamMotionDriver::stopper` returns a `StmoStopper`, a cloneable handle
+  whose `stop` queues a stop and wakes the runner without blocking or needing
+  the driver: for an estop raised on another thread.
+- `StmoStats::statuses_received` counts status packets from the controller.
+  A caller can watch it to tell a controller that stopped answering.
+- `StmoStats::repeated_stops` counts statuses answered with a repeated stop.
+
+### Fixes
+
+- A stop drops every queued motion command and resolves its handle, so
+  nothing queued before the stop is sent after a later start.
+- After a stop the runner answers every later status with the stop again
+  until the next start, so a controller that missed the stop packet is still
+  stopped.
+- A run of stale statuses, or of cycles withheld on a full controller
+  buffer, is logged once at its start and once at its end instead of on every
+  cycle, so a bad link no longer makes the runner log each cycle.
+
 ## 2.1.0 — 2026-11-06
 
 Keeps the Stream Motion runner from holding its CPU or waiting on a lock a

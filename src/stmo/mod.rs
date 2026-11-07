@@ -10,7 +10,7 @@ mod test;
 mod types;
 
 pub use self::{
-    driver::{StmoControlLoop, StreamMotionDriver},
+    driver::{StmoControlLoop, StmoStopper, StreamMotionDriver},
     stmo_handle::StmoHandle,
     types::{
         AxisMotionConstraint, JointMovementLimit, JointMovementLimits, StmoStats, StmoStatsHandle,
