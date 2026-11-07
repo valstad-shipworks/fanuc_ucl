@@ -99,6 +99,7 @@ impl IoBufs {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 enum Readiness {
     Readable,
     TimedOut,
