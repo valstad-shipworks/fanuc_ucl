@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.1.0 — 2026-11-06
+
+Keeps the Stream Motion runner from holding its CPU or waiting on a lock a
+lower-priority thread holds.
+
+### Fixes
+
+- A blocked Stream Motion send no longer spins. The retry used a
+  `SpinSleeper` with 1 ms accuracy for a 250 µs gap, so it never slept and
+  only called `sched_yield`, which does nothing for the highest-priority
+  thread on its CPU: a transmit stall held that CPU for up to 250 ms per
+  packet. Between attempts the runner now sleeps in `poll(2)` for 1 ms,
+  waking early to pump each status that arrives. A connection already
+  declared errored gets one attempt per packet instead of a retry.
+- Commands reach the runner through a lock-free queue (crossbeam-channel)
+  instead of a flume channel, whose lock the runner took on every cycle and
+  the sending thread held at a lower priority. Received packets still reach
+  the driver through a flume channel, whose lock the runner takes for each.
+- The runner's queue of received packets is bounded at 1024 and drops the
+  oldest when full, so a consumer that stops reading no longer grows it
+  inside the runner. `StmoStats::dropped_to_driver` counts the drops.
+- The status packet rate is logged when it changes rather than on every
+  status.
+
+### Changed
+
+- `spin_sleep` is no longer a dependency.
+
 ## 2.0.2 — 2026-10-14
 
 ### Changed

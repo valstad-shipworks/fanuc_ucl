@@ -12,13 +12,14 @@ use std::{
 };
 
 use cfg_mixin::cfg_mixin;
+use crossbeam_channel::{Receiver as CommandReceiver, Sender as CommandSender};
 use event_listener::{Event, Listener};
 use fast_talker::{
     SocketError,
     options::{ReportSummary, SocketOption, ThreadOption},
     sockets,
 };
-use flume::{Receiver, Sender};
+use flume::{Receiver, Sender, TrySendError};
 
 use crate::{
     TelemetrySink,
@@ -47,6 +48,10 @@ use mio::{Events, Interest, Poll, Token, Waker};
 
 #[cfg(feature = "py")]
 use pyo3::prelude::*;
+
+/// Packets the I/O thread queues for the driver before it drops the oldest:
+/// about 8 s of statuses at 125 Hz. The driver keeps far fewer.
+const TO_DRIVER_CAPACITY: usize = 1024;
 
 const TOK_SOCKET: Token = Token(0);
 const TOK_WAKER: Token = Token(1);
@@ -94,6 +99,39 @@ impl IoBufs {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
+enum Readiness {
+    Readable,
+    TimedOut,
+    /// Nothing can tell; the caller sleeps instead.
+    Unknown,
+}
+
+/// Waits up to `timeout` for `socket` to have something to read or an error
+/// queued. `poll(2)` rather than `ppoll(2)`, at millisecond resolution, so a
+/// simulated host can serve it.
+#[cfg(unix)]
+fn wait_readable(socket: &MioUdpSocket, timeout: Duration) -> Readiness {
+    use std::os::fd::AsRawFd;
+    let mut fd = libc::pollfd {
+        fd: socket.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ms = timeout.as_micros().div_ceil(1000).min(i32::MAX as u128) as libc::c_int;
+    // SAFETY: one valid pollfd, and the count says so.
+    match unsafe { libc::poll(&mut fd, 1, ms) } {
+        0 => Readiness::TimedOut,
+        n if n > 0 && fd.revents & libc::POLLNVAL == 0 => Readiness::Readable,
+        _ => Readiness::Unknown,
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_readable(_socket: &MioUdpSocket, _timeout: Duration) -> Readiness {
+    Readiness::Unknown
+}
+
 #[derive(Debug, Clone)]
 enum MaybeMany<T: Clone> {
     One(T),
@@ -138,8 +176,11 @@ struct QueuedMotion {
 #[derive(Debug)]
 struct StreamMotionContext {
     socket: MioUdpSocket,
-    from_driver: Receiver<ToThreadMessage>,
+    from_driver: CommandReceiver<ToThreadMessage>,
     to_driver: Sender<RxPackets>,
+    /// The receiving end of `to_driver`, held to drop the oldest packet when a
+    /// consumer stops reading, so the queue never grows inside this thread.
+    to_driver_overflow: Receiver<RxPackets>,
     protocol_version: u32,
     send_last_command: bool,
     last_command_position_request_time: Instant,
@@ -170,15 +211,20 @@ struct StreamMotionContext {
     /// Model counters already added to the shared, cumulative ones.
     published_underruns: u64,
     published_lost: u64,
+    /// The status packet-rate bits last logged, so only a change is.
+    reported_packet_rate: u32,
 }
 
 impl StreamMotionContext {
     const COMMAND_POSITION_RATE: Duration = Duration::from_millis(128);
     /// Failed sends in a row before the connection is declared errored.
     const SEND_FAILURE_LIMIT: u32 = 4;
-    /// Gap between attempts while a send is blocked. Short enough to land
-    /// several attempts and several receive pumps inside one cycle.
-    const RETRY_INTERVAL: Duration = Duration::from_micros(250);
+    /// Gap between attempts while a send is blocked, slept rather than spun:
+    /// this thread outranks everything else on its CPU, so a spin would hold
+    /// the CPU for the whole retry. Short enough to land several attempts
+    /// inside one cycle; statuses that arrive meanwhile wake the wait early
+    /// and are pumped.
+    const RETRY_INTERVAL: Duration = Duration::from_millis(1);
     /// Absolute ceiling on one retry, in case the controller model is wrong
     /// about how much runway is left.
     const MAX_RETRY: Duration = Duration::from_millis(250);
@@ -191,8 +237,9 @@ impl StreamMotionContext {
 
     #[allow(clippy::too_many_arguments)]
     fn new(
-        from_driver: Receiver<ToThreadMessage>,
+        from_driver: CommandReceiver<ToThreadMessage>,
         to_driver: Sender<RxPackets>,
+        to_driver_overflow: Receiver<RxPackets>,
         socket: MioUdpSocket,
         itl: Arc<(Event, AtomicBool)>,
         send_last_command: bool,
@@ -205,6 +252,7 @@ impl StreamMotionContext {
         Self {
             from_driver,
             to_driver,
+            to_driver_overflow,
             socket,
             protocol_version: 0,
             // Backdated so the first request fires immediately.
@@ -230,6 +278,7 @@ impl StreamMotionContext {
             retrying: false,
             published_underruns: 0,
             published_lost: 0,
+            reported_packet_rate: 0,
         }
     }
 
@@ -287,7 +336,13 @@ impl StreamMotionContext {
         };
 
         let start = Instant::now();
-        let sleeper = spin_sleep::SpinSleeper::new(1_000_000);
+        // A connection already declared errored gets one attempt per packet:
+        // retrying only delays the consumer seeing it.
+        let budget = if self.err_flag.load(Ordering::Relaxed) {
+            Duration::ZERO
+        } else {
+            budget.min(Self::MAX_RETRY)
+        };
         let mut attempts: u32 = 0;
 
         let failure = loop {
@@ -307,7 +362,8 @@ impl StreamMotionContext {
                     return true;
                 }
                 Err(StreamMotionError::Io(ref e)) if is_transient_send_error(e) => {
-                    if start.elapsed() >= budget.min(Self::MAX_RETRY) {
+                    let elapsed = start.elapsed();
+                    if elapsed >= budget {
                         break io::Error::from(e.kind()).to_string();
                     }
                     // Pumping keeps consumers fed and drains the runway as
@@ -315,8 +371,9 @@ impl StreamMotionContext {
                     // sooner than a fresh one.
                     self.retrying = true;
                     self.pump_rx(io);
+                    let wait = Self::RETRY_INTERVAL.min(budget - elapsed);
+                    self.wait_for_retry(io, Instant::now() + wait);
                     self.retrying = false;
-                    sleeper.sleep(Self::RETRY_INTERVAL);
                 }
                 Err(e) => {
                     tracing::error!(packet = what, error = %e, "STMO UDP send error");
@@ -327,6 +384,32 @@ impl StreamMotionContext {
 
         self.fail_send(what, &failure);
         false
+    }
+
+    /// Sleeps until `until`, pumping every status that arrives meanwhile. A
+    /// wake that brings nothing to read (an error the queue cannot clear, a
+    /// spurious return) sleeps out the rest, so this never spins.
+    fn wait_for_retry(&mut self, io: &mut IoBufs, until: Instant) {
+        loop {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            match wait_readable(&self.socket, left) {
+                Readiness::Readable => {
+                    self.drain_tx_errors();
+                    if self.pump_rx(io) == 0 {
+                        std::thread::sleep(until.saturating_duration_since(Instant::now()));
+                        return;
+                    }
+                }
+                Readiness::TimedOut => return,
+                Readiness::Unknown => {
+                    std::thread::sleep(left);
+                    return;
+                }
+            }
+        }
     }
 
     fn fail_send(&mut self, what: &'static str, detail: &str) {
@@ -482,7 +565,7 @@ impl StreamMotionContext {
                             self.itl.0.notify(1);
                         }
                     }
-                    let _ = self.to_driver.send(rx);
+                    self.forward(rx);
                 }
                 Ok(_) => {
                     tracing::warn!("Received empty packet");
@@ -517,6 +600,21 @@ impl StreamMotionContext {
             }
         }
         statuses
+    }
+
+    /// Hands `rx` to the driver, dropping the oldest queued packet when the
+    /// consumer has stopped reading.
+    fn forward(&mut self, rx: RxPackets) {
+        match self.to_driver.try_send(rx) {
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Full(rx)) => {
+                let _ = self.to_driver_overflow.try_recv();
+                self.counters
+                    .dropped_to_driver
+                    .fetch_add(1, Ordering::Relaxed);
+                let _ = self.to_driver.try_send(rx);
+            }
+        }
     }
 
     /// Mirrors the controller model into the counters consumers read.
@@ -623,12 +721,11 @@ impl StreamMotionContext {
             self.buffer.settled(state.seq);
             return;
         }
-        if state.status_bits().packet_rate() as u32 != 0 {
-            tracing::debug!(
-                rate = state.status_bits().packet_rate(),
-                "Robot status packet rate"
-            );
+        let rate = state.status_bits().packet_rate() as u32;
+        if rate != 0 && rate != self.reported_packet_rate {
+            tracing::debug!(rate, "Robot status packet rate");
         }
+        self.reported_packet_rate = rate;
 
         if outstanding > 0 {
             self.counters
@@ -941,7 +1038,8 @@ fn stream_motion_runtime(
     thread: Vec<ThreadOption>,
     started: flume::Sender<io::Result<ReportSummary<ThreadOption>>>,
     to_driver: Sender<RxPackets>,
-    from_driver: Receiver<ToThreadMessage>,
+    to_driver_overflow: Receiver<RxPackets>,
+    from_driver: CommandReceiver<ToThreadMessage>,
     itl: Arc<(Event, AtomicBool)>,
     send_last_command: bool,
     telemetry: Option<StmoTelemetry>,
@@ -974,6 +1072,7 @@ fn stream_motion_runtime(
     let context = StreamMotionContext::new(
         from_driver,
         to_driver,
+        to_driver_overflow,
         socket,
         itl,
         send_last_command,
@@ -989,7 +1088,7 @@ fn stream_motion_runtime(
 #[derive(Debug)]
 struct StreamMotionConnection {
     thread_handle: ThreadHandle,
-    to_thread: Sender<ToThreadMessage>,
+    to_thread: CommandSender<ToThreadMessage>,
     from_thread: Receiver<RxPackets>,
     is_started: bool,
     err_flag: Arc<AtomicBool>,
@@ -1223,8 +1322,11 @@ impl StreamMotionDriver {
 
         let io = StmoIo::new(udp, socket).map_err(|e| StreamMotionError::Other(e.to_string()))?;
 
-        let (to_thread, from_driver) = flume::unbounded();
-        let (to_driver, from_thread) = flume::unbounded();
+        // Commands reach the I/O thread through a lock-free queue, so taking
+        // one never waits on a lock a lower-priority sender holds.
+        let (to_thread, from_driver) = crossbeam_channel::unbounded();
+        let (to_driver, from_thread) = flume::bounded(TO_DRIVER_CAPACITY);
+        let to_driver_overflow = from_thread.clone();
         let (started_tx, started_rx) = flume::bounded(1);
 
         let mut thread_handle = ThreadHandle::new();
@@ -1253,6 +1355,7 @@ impl StreamMotionDriver {
                     thread_options,
                     started_tx,
                     to_driver,
+                    to_driver_overflow,
                     from_driver,
                     thread_itl,
                     send_last_command,

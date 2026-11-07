@@ -1,6 +1,6 @@
 [package]
 name = "fanuc_ucl"
-version = "2.0.2"
+version = "2.1.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
@@ -27,7 +27,6 @@ cfg_mixin = { version = "0.1.0" }
 int-enum = { version = "1.1.2", optional = true }
 bitflags = { version = "2.9.4", optional = true }
 libc = { version = "0.2", optional = true }
-spin_sleep = { version = "1.3.3", optional = true }
 monostate = { version = "1.0.1", optional = true }
 inventory = { version = "0.3.21", optional = true }
 serde_repr = { version = "0.1.20", optional = true }
@@ -46,6 +45,7 @@ valuable = { version = "0.1.1", features = ["derive"], optional = true }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", optional = true }
 fast-talker = { version = "0.3.2", default-features = false, features = ["mio", "options", "serde"] }
+crossbeam-channel = { version = "0.5.17", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["extension-module", "auto-initialize", "multiple-pymethods", "generate-import-lib"] }
@@ -57,7 +57,7 @@ snare = "3.1.1"
 [features]
 default = ["stmo", "rmi", "hspo", "hmi"]
 async = []
-stmo = ["joint_conv", "bincode", "spin_sleep", "libc", "bitflags", "openport", "event-listener"]
+stmo = ["joint_conv", "bincode", "dep:crossbeam-channel", "libc", "bitflags", "openport", "event-listener"]
 rmi = [
     "joint_conv",
     "serde_json",

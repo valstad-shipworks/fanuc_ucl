@@ -364,6 +364,10 @@ pub struct StmoStats {
     pub buffer_depth: u8,
     /// Measured interpolation period in microseconds. A live gauge.
     pub cycle_us: u64,
+    /// Received packets the I/O thread dropped, oldest first, because the
+    /// driver's queue was full: nothing had read it for seconds.
+    #[serde(default)]
+    pub dropped_to_driver: u64,
 }
 
 impl std::fmt::Display for StmoStats {
@@ -372,7 +376,7 @@ impl std::fmt::Display for StmoStats {
         let closing = if cfg!(feature = "py") { ")" } else { "}" };
         write!(
             f,
-            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, lost_statuses: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, mid_stream_fillers: {}, idle_holds: {}, buffer_depth: {}, cycle_us: {}{}",
+            "StmoStats{}send_failures: {}, short_sends: {}, send_retries: {}, stale_statuses: {}, tx_errors: {}, lost_statuses: {}, missed_status_cycles: {}, catchup_commands: {}, overflow_skips: {}, underruns: {}, statuses_during_retry: {}, mid_stream_fillers: {}, idle_holds: {}, buffer_depth: {}, cycle_us: {}, dropped_to_driver: {}{}",
             opening,
             self.send_failures,
             self.short_sends,
@@ -389,6 +393,7 @@ impl std::fmt::Display for StmoStats {
             self.idle_holds,
             self.buffer_depth,
             self.cycle_us,
+            self.dropped_to_driver,
             closing
         )
     }
@@ -411,6 +416,7 @@ pub(crate) struct StmoCounters {
     pub idle_holds: AtomicU64,
     pub buffer_depth: AtomicU64,
     pub cycle_us: AtomicU64,
+    pub dropped_to_driver: AtomicU64,
 }
 
 impl StmoCounters {
@@ -431,6 +437,7 @@ impl StmoCounters {
             idle_holds: self.idle_holds.load(Ordering::Relaxed),
             buffer_depth: self.buffer_depth.load(Ordering::Relaxed) as u8,
             cycle_us: self.cycle_us.load(Ordering::Relaxed),
+            dropped_to_driver: self.dropped_to_driver.load(Ordering::Relaxed),
         }
     }
 }
